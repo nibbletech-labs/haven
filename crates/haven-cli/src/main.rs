@@ -9,8 +9,9 @@ use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand};
 use haven_core::{
-    ArtifactKind, ArtifactRole, HavenError, Include, ItemFilter, ItemUpdate, LineageDirection,
-    NewArtifact, NewItem, NodeType, OwnerKind, Result, Status, WaitState, WaitUpdate,
+    ArtifactKind, ArtifactRole, CompleteInput, HandoffInput, HavenError, Include, ItemFilter,
+    ItemUpdate, LineageDirection, NewArtifact, NewItem, NodeType, OwnerKind, Result, Status,
+    WaitState, WaitUpdate,
 };
 
 use output::Output;
@@ -37,6 +38,15 @@ enum Command {
         /// Skip installing the Claude skill (headless / non-Claude installs).
         #[arg(long)]
         no_skill: bool,
+        /// Optional first project key to create/select during setup.
+        #[arg(long = "project-key")]
+        project_key: Option<String>,
+        /// Title for --project-key. Defaults to the key when omitted.
+        #[arg(long = "project-title")]
+        project_title: Option<String>,
+        /// Ref prefix for --project-key, e.g. HV. Defaults to the first two key letters.
+        #[arg(long)]
+        prefix: Option<String>,
     },
     /// Initialise/migrate the database only.
     Init,
@@ -74,6 +84,8 @@ enum Command {
     },
     /// Full-text search over item title/body.
     Search(SearchArgs),
+    /// Export the whole project work-graph (all nodes + edges) in one read.
+    Graph(GraphArgs),
     /// Manage content artifacts on an item.
     Artifact {
         #[command(subcommand)]
@@ -143,10 +155,13 @@ enum ArtifactCmd {
 #[derive(Args)]
 struct ArtifactAddArgs {
     reference: String,
+    /// spec | research | design | handoff | decision | scratch | source | delivery | vision.
     #[arg(long)]
     role: String,
+    /// file | external | delivery. Inferred from --file/--content/--uri when omitted.
     #[arg(long)]
     kind: Option<String>,
+    /// Source file to copy into ~/.haven/<project>/items/<ref>/.
     #[arg(long)]
     file: Option<PathBuf>,
     /// Inline content written to a file by the server (alternative to --file).
@@ -155,16 +170,22 @@ struct ArtifactAddArgs {
     /// Filename for --content (defaults to <role>.md).
     #[arg(long)]
     name: Option<String>,
+    /// External URL, obsidian:// link, or delivery link.
     #[arg(long)]
     uri: Option<String>,
+    /// Optional display title for external/delivery artifacts.
     #[arg(long)]
     title: Option<String>,
+    /// Optional short excerpt or note.
     #[arg(long)]
     excerpt: Option<String>,
+    /// Handoff source owner: human | ai.
     #[arg(long)]
     from: Option<String>,
+    /// Handoff target owner: human | ai.
     #[arg(long)]
     to: Option<String>,
+    /// Optional creator handle.
     #[arg(long)]
     by: Option<String>,
 }
@@ -193,45 +214,71 @@ enum ConfigCmd {
 
 #[derive(Subcommand)]
 enum ProjectCmd {
+    /// Create a project namespace/backlog.
     Add(ProjectAddArgs),
+    /// List project namespaces/backlogs.
     List,
+    /// Show one project by key.
     Get { key: String },
+    /// Set the default project for later commands.
     Use { key: String },
 }
 
 #[derive(Args)]
 struct ProjectAddArgs {
+    /// Project slug used by --project and current-project selection.
     #[arg(long)]
     key: String,
+    /// Human-readable project title.
     #[arg(long)]
     title: String,
+    /// Item ref prefix, e.g. HV. Defaults to the first two key letters.
     #[arg(long)]
     prefix: Option<String>,
+    /// Optional project description.
     #[arg(long)]
     description: Option<String>,
 }
 
 #[derive(Subcommand)]
 enum ItemCmd {
+    /// Create an item. Defaults to uncommitted discovery work in the icebox.
     Add(ItemAddArgs),
+    /// List items with optional filters.
     List(ItemListArgs),
+    /// Show one item by ref or public_id.
     Get(ItemGetArgs),
+    /// Update item fields such as status, type, acceptance, wait-state, and priority.
     Update(ItemUpdateArgs),
+    /// Commit one or more items so ready/unblocked work can appear in `haven next`.
     Commit {
-        reference: String,
+        #[arg(required = true)]
+        references: Vec<String>,
+        /// Priority band 0-4. Lower numbers sort first.
         #[arg(long)]
         priority: Option<i64>,
     },
+    /// Mark one or more items uncommitted. Priority is retained.
     Uncommit {
-        reference: String,
+        #[arg(required = true)]
+        references: Vec<String>,
     },
+    /// Assign execution ownership to human or ai.
     Assign(ItemAssignArgs),
+    /// Hand an item over (ai↔human): record a handoff note, flip owner, set wait/status.
+    Handoff(ItemHandoffArgs),
+    /// Mark an item done: record evidence, set status, report what it unblocked.
+    Complete(ItemCompleteArgs),
+    /// Fine-order an item before or after a sibling in the same priority band.
     Rank(ItemRankArgs),
+    /// Park one or more items without deleting them, emitting lineage.
     Archive {
-        reference: String,
+        #[arg(required = true)]
+        references: Vec<String>,
         #[arg(long)]
         rationale: Option<String>,
     },
+    /// Reopen an archived/superseded item into discovery.
     Reopen {
         reference: String,
         #[arg(long)]
@@ -242,8 +289,10 @@ enum ItemCmd {
 #[derive(Args)]
 struct ItemAddArgs {
     title: String,
+    /// task | code | research | data | design | admin | release | phase | gate.
     #[arg(long = "type")]
     node_type: Option<String>,
+    /// Short summary. Rich content should be stored as artifacts.
     #[arg(long)]
     body: Option<String>,
     /// Acceptance statement — what success looks like (the verify anchor).
@@ -252,36 +301,55 @@ struct ItemAddArgs {
     /// One-line provenance — why this item exists.
     #[arg(long)]
     why: Option<String>,
+    /// discovery | definition | ready | in_progress | blocked | done | superseded | archived.
     #[arg(long)]
     status: Option<String>,
+    /// Priority band 0-4. Lower numbers sort first.
     #[arg(long)]
     priority: Option<i64>,
+    /// Commit immediately so ready/unblocked work can appear in `haven next`.
     #[arg(long)]
     commit: bool,
+    /// Owner kind: human | ai.
     #[arg(long)]
     assign: Option<String>,
+    /// Add a decomposition parent edge.
     #[arg(long)]
     parent: Option<String>,
+    /// Add a dependency edge; this item depends on the referenced item.
     #[arg(long = "depends-on")]
     depends_on: Option<String>,
+    /// Add this item to a release/phase/gate group.
     #[arg(long)]
     group: Option<String>,
 }
 
 #[derive(Args)]
 struct ItemListArgs {
+    /// Filter by status.
     #[arg(long)]
     status: Option<String>,
+    /// Filter by item type.
     #[arg(long = "type")]
     node_type: Option<String>,
+    /// Filter by owner kind: human | ai.
     #[arg(long)]
     owner: Option<String>,
+    /// Show committed items only.
     #[arg(long)]
     committed: bool,
+    /// Show uncommitted, non-archived/superseded items.
     #[arg(long)]
     icebox: bool,
+    /// Show members of a release/phase/gate group.
     #[arg(long)]
     group: Option<String>,
+    /// Only items parked on this wait-state: on_human | on_dependency | on_external.
+    #[arg(long)]
+    wait: Option<String>,
+    /// Only items untouched for at least N days (stale/forgotten work).
+    #[arg(long)]
+    stale: Option<i64>,
 }
 
 #[derive(Args)]
@@ -294,19 +362,26 @@ struct ItemGetArgs {
 
 #[derive(Args)]
 struct ItemUpdateArgs {
-    reference: String,
+    /// One or more refs — the same update is applied to each (grooming).
+    #[arg(required = true)]
+    references: Vec<String>,
+    /// Replace the title.
     #[arg(long)]
     title: Option<String>,
+    /// Replace the short summary.
     #[arg(long)]
     body: Option<String>,
     #[arg(long = "done-looks-like")]
     done_looks_like: Option<String>,
     #[arg(long)]
     why: Option<String>,
+    /// discovery | definition | ready | in_progress | blocked | done | superseded | archived.
     #[arg(long)]
     status: Option<String>,
+    /// Priority band 0-4. Lower numbers sort first.
     #[arg(long)]
     priority: Option<i64>,
+    /// task | code | research | data | design | admin | release | phase | gate.
     #[arg(long = "type")]
     node_type: Option<String>,
     /// on_human | on_dependency | on_external | none
@@ -317,25 +392,71 @@ struct ItemUpdateArgs {
 #[derive(Args)]
 struct ItemAssignArgs {
     reference: String,
+    /// Owner kind: human | ai.
     #[arg(long = "to")]
     to: String,
+    /// Optional actor handle, e.g. ai:claude or human:tom.
     #[arg(long)]
     actor: Option<String>,
 }
 
 #[derive(Args)]
+struct ItemHandoffArgs {
+    reference: String,
+    /// Who picks it up next: human | ai.
+    #[arg(long = "to")]
+    to: String,
+    /// Who's handing off (defaults to the item's current owner).
+    #[arg(long)]
+    from: Option<String>,
+    /// The baton note, recorded as a handoff artifact under notes/.
+    #[arg(long)]
+    note: Option<String>,
+    /// Override the status (default: blocked when handing to a human).
+    #[arg(long)]
+    status: Option<String>,
+    /// Override the wait-state (default: on_human to a human, cleared to ai).
+    #[arg(long)]
+    wait: Option<String>,
+    /// Actor handle recorded as the new assignee / note author.
+    #[arg(long)]
+    actor: Option<String>,
+}
+
+#[derive(Args)]
+struct ItemCompleteArgs {
+    reference: String,
+    /// Proof the work is done (test output, summary, link) — saved as an artifact.
+    #[arg(long)]
+    evidence: Option<String>,
+    /// Role for the evidence artifact (default: delivery).
+    #[arg(long)]
+    role: Option<String>,
+    /// Creator handle recorded on the evidence artifact.
+    #[arg(long)]
+    by: Option<String>,
+}
+
+#[derive(Args)]
 struct ItemRankArgs {
     reference: String,
+    /// Place this item before the referenced item.
     #[arg(long)]
     before: Option<String>,
+    /// Place this item after the referenced item.
     #[arg(long)]
     after: Option<String>,
 }
 
 #[derive(Args)]
 struct NextArgs {
+    /// Explain why the dispatch queue is empty instead of returning items.
+    #[arg(long)]
+    explain: bool,
+    /// Filter by owner kind: human | ai.
     #[arg(long)]
     owner: Option<String>,
+    /// Maximum number of dispatchable items to return.
     #[arg(long)]
     limit: Option<i64>,
 }
@@ -373,6 +494,10 @@ enum EvolveCmd {
     Merge(EvolveMergeArgs),
     Supersede(EvolveSupersedeArgs),
     Graph(EvolveGraphArgs),
+    /// Follow a stale (superseded/archived) ref forward to its live descendant(s).
+    Resolve {
+        reference: String,
+    },
 }
 
 #[derive(Args)]
@@ -424,6 +549,13 @@ struct SearchArgs {
     limit: Option<i64>,
 }
 
+#[derive(Args)]
+struct GraphArgs {
+    /// Also include lineage links (split/merge/supersede/archive history).
+    #[arg(long)]
+    lineage: bool,
+}
+
 fn main() {
     let cli = Cli::parse();
     match run(&cli) {
@@ -438,7 +570,17 @@ fn main() {
 fn run(cli: &Cli) -> Result<Output> {
     let project = cli.project.as_deref();
     match &cli.command {
-        Command::Setup { no_skill } => cmd_setup(*no_skill),
+        Command::Setup {
+            no_skill,
+            project_key,
+            project_title,
+            prefix,
+        } => cmd_setup(
+            *no_skill,
+            project_key.as_deref(),
+            project_title.as_deref(),
+            prefix.as_deref(),
+        ),
         Command::Init => {
             config::open_store()?;
             Ok(Output::Message("database initialised".into()))
@@ -451,7 +593,11 @@ fn run(cli: &Cli) -> Result<Output> {
         Command::Next(a) => {
             let s = config::open_store()?;
             let owner = a.owner.as_deref().map(OwnerKind::parse).transpose()?;
-            Ok(Output::Items(s.next(project, owner, a.limit)?))
+            if a.explain {
+                Ok(Output::Json(s.next_explain(project, owner)?))
+            } else {
+                Ok(Output::Items(s.next(project, owner, a.limit)?))
+            }
         }
         Command::Decompose(a) => cmd_decompose(project, a),
         Command::Depend(a) => cmd_depend(project, a),
@@ -460,6 +606,12 @@ fn run(cli: &Cli) -> Result<Output> {
         Command::Search(a) => {
             let s = config::open_store()?;
             Ok(Output::Items(s.search(project, &a.query, a.limit)?))
+        }
+        Command::Graph(a) => {
+            let s = config::open_store()?;
+            Ok(Output::Json(serde_json::to_value(
+                s.project_graph(project, a.lineage)?,
+            )?))
         }
         Command::Artifact { cmd } => cmd_artifact(project, cmd),
         Command::Note { reference, text } => {
@@ -688,32 +840,76 @@ fn maybe_render(cli: &Cli) {
     }
 }
 
-fn cmd_setup(no_skill: bool) -> Result<Output> {
+fn cmd_setup(
+    no_skill: bool,
+    project_key: Option<&str>,
+    project_title: Option<&str>,
+    prefix: Option<&str>,
+) -> Result<Output> {
     let s = config::open_store()?;
+    if project_title.is_some() && project_key.is_none() {
+        return Err(HavenError::Invalid(
+            "--project-title requires --project-key".into(),
+        ));
+    }
     // Generate a stable device id once.
     if s.meta_get("device_id")?.is_none() {
         s.meta_set("device_id", &uuid_like())?;
     }
+    let mut warnings = Vec::new();
     // Register the MCP server with Claude (best-effort; never fail setup on it).
-    let mcp_config = config::ensure_mcp_wiring()
-        .map(|p| p.display().to_string())
-        .unwrap_or_else(|e| format!("skipped: {e}"));
+    let mcp_config = match config::ensure_mcp_wiring() {
+        Ok(p) => p.display().to_string(),
+        Err(e) => {
+            warnings.push(format!("MCP wiring skipped: {e}"));
+            format!("skipped: {e}")
+        }
+    };
     // Install the embedded skill alongside it (skippable; also best-effort).
     let skill = if no_skill {
         "skipped (--no-skill)".to_string()
     } else {
-        config::ensure_skill_installed()
-            .map(|p| p.display().to_string())
-            .unwrap_or_else(|e| format!("skipped: {e}"))
+        match config::ensure_skill_installed() {
+            Ok(p) => p.display().to_string(),
+            Err(e) => {
+                warnings.push(format!("skill install skipped: {e}"));
+                format!("skipped: {e}")
+            }
+        }
+    };
+
+    let mut project_created = false;
+    let current_project = if let Some(key) = project_key {
+        match s.get_project(key) {
+            Ok(_) => {}
+            Err(HavenError::NotFound(_)) => {
+                let title = project_title.unwrap_or(key);
+                s.add_project(key, prefix, title, None)?;
+                project_created = true;
+            }
+            Err(e) => return Err(e),
+        }
+        s.use_project(key)?;
+        Some(key.to_string())
+    } else {
+        s.current_project()?
     };
     let paths = config::resolve()?;
     Ok(Output::Json(serde_json::json!({
-        "message": "haven is set up",
+        "message": "haven local setup complete",
         "root": paths.root.display().to_string(),
         "db": paths.db.display().to_string(),
         "mcp_config": mcp_config,
         "skill": skill,
-        "note": "auth/sync land in Layer 6",
+        "current_project": current_project,
+        "project_created": project_created,
+        "warnings": warnings,
+        "next": if current_project.is_some() {
+            "add items with `haven item add ...`"
+        } else {
+            "create a project with `haven project add --key <key> --title <title>` then `haven project use <key>`"
+        },
+        "note": "cloud auth/sync is configured separately",
     })))
 }
 
@@ -937,6 +1133,8 @@ fn cmd_item(project: Option<&str>, cmd: &ItemCmd) -> Result<Output> {
                 committed: if a.committed { Some(true) } else { None },
                 icebox: a.icebox,
                 group: a.group.clone(),
+                wait: opt_parse(&a.wait, WaitState::parse)?,
+                stale_days: a.stale,
             };
             Ok(Output::Items(s.list_items(project, &filter)?))
         }
@@ -968,13 +1166,23 @@ fn cmd_item(project: Option<&str>, cmd: &ItemCmd) -> Result<Output> {
                 node_type: opt_parse(&a.node_type, NodeType::parse)?,
                 wait,
             };
-            Ok(Output::Item(s.update_item(project, &a.reference, upd)?))
+            Ok(Output::Items(s.update_items(
+                project,
+                &refs(&a.references),
+                upd,
+            )?))
         }
         ItemCmd::Commit {
-            reference,
+            references,
             priority,
-        } => Ok(Output::Item(s.commit_item(project, reference, *priority)?)),
-        ItemCmd::Uncommit { reference } => Ok(Output::Item(s.uncommit_item(project, reference)?)),
+        } => Ok(Output::Items(s.commit_items(
+            project,
+            &refs(references),
+            *priority,
+        )?)),
+        ItemCmd::Uncommit { references } => {
+            Ok(Output::Items(s.uncommit_items(project, &refs(references))?))
+        }
         ItemCmd::Assign(a) => {
             let owner = OwnerKind::parse(&a.to)?;
             Ok(Output::Item(s.assign_item(
@@ -984,6 +1192,34 @@ fn cmd_item(project: Option<&str>, cmd: &ItemCmd) -> Result<Output> {
                 a.actor.as_deref(),
             )?))
         }
+        ItemCmd::Handoff(a) => {
+            let to = OwnerKind::parse(&a.to)?;
+            let input = HandoffInput {
+                from: opt_parse(&a.from, OwnerKind::parse)?,
+                note: a.note.as_deref(),
+                status: opt_parse(&a.status, Status::parse)?,
+                wait: opt_parse(&a.wait, WaitState::parse)?,
+                actor: a.actor.as_deref(),
+            };
+            Ok(Output::Json(serde_json::to_value(s.handoff(
+                project,
+                &a.reference,
+                to,
+                input,
+            )?)?))
+        }
+        ItemCmd::Complete(a) => {
+            let input = CompleteInput {
+                evidence: a.evidence.as_deref(),
+                artifact_role: opt_parse(&a.role, ArtifactRole::parse)?,
+                by: a.by.as_deref(),
+            };
+            Ok(Output::Json(serde_json::to_value(s.complete_item(
+                project,
+                &a.reference,
+                input,
+            )?)?))
+        }
         ItemCmd::Rank(a) => Ok(Output::Item(s.rank_item(
             project,
             &a.reference,
@@ -991,11 +1227,11 @@ fn cmd_item(project: Option<&str>, cmd: &ItemCmd) -> Result<Output> {
             a.after.as_deref(),
         )?)),
         ItemCmd::Archive {
-            reference,
+            references,
             rationale,
-        } => Ok(Output::Item(s.archive_item(
+        } => Ok(Output::Items(s.archive_items(
             project,
-            reference,
+            &refs(references),
             rationale.as_deref(),
             None,
         )?)),
@@ -1087,12 +1323,18 @@ fn cmd_evolve(project: Option<&str>, cmd: &EvolveCmd) -> Result<Output> {
             let g = s.evolve_graph(project, &a.reference, dir, a.depth)?;
             Ok(Output::Json(serde_json::to_value(g)?))
         }
+        EvolveCmd::Resolve { reference } => Ok(Output::Items(s.resolve_live(project, reference)?)),
     }
 }
 
 /// Parse an optional string field with a core parser, propagating errors.
 fn opt_parse<T>(s: &Option<String>, f: fn(&str) -> Result<T>) -> Result<Option<T>> {
     s.as_deref().map(f).transpose()
+}
+
+/// Borrow a `Vec<String>` of refs as `&[&str]` for the batch store methods.
+fn refs(v: &[String]) -> Vec<&str> {
+    v.iter().map(String::as_str).collect()
 }
 
 /// Cheap unique device id without pulling uuid into the CLI crate.

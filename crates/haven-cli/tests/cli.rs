@@ -142,6 +142,57 @@ fn doctor_reports_install_health() {
 }
 
 #[test]
+fn setup_can_bootstrap_first_project() {
+    let h = Haven::new();
+    let out = h.json(&[
+        "setup",
+        "--project-key",
+        "haven",
+        "--project-title",
+        "Haven",
+        "--prefix",
+        "HV",
+    ]);
+    assert_eq!(out["current_project"], "haven");
+    assert_eq!(out["project_created"], true);
+
+    let item = h.json(&["item", "add", "Draft the spec"]);
+    assert_eq!(item["ref"], "HV-1");
+}
+
+#[test]
+fn batch_commit_and_archive_take_multiple_refs() {
+    let h = Haven::new();
+    h.ok(&["setup"]);
+    h.ok(&[
+        "project", "add", "--key", "haven", "--title", "Haven", "--prefix", "HV",
+    ]);
+    h.ok(&["project", "use", "haven"]);
+    h.json(&["item", "add", "A"]);
+    h.json(&["item", "add", "B"]);
+    h.json(&["item", "add", "C"]);
+
+    // "commit these two" — one command, an array back.
+    let committed = h.json(&["item", "commit", "HV-1", "HV-2", "--priority", "2"]);
+    assert_eq!(committed.as_array().unwrap().len(), 2);
+
+    // "archive those" — one command.
+    let archived = h.json(&["item", "archive", "HV-1", "HV-3", "--rationale", "groomed"]);
+    let refs: Vec<&str> = archived
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["ref"].as_str().unwrap())
+        .collect();
+    assert_eq!(refs, ["HV-1", "HV-3"]);
+    assert!(archived
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|i| i["status"] == "archived"));
+}
+
+#[test]
 fn full_lifecycle() {
     let h = Haven::new();
     h.ok(&["setup"]);
@@ -173,6 +224,10 @@ fn full_lifecycle() {
     let next = h.json(&["next"]);
     assert_eq!(next.as_array().unwrap().len(), 1);
     assert_eq!(next[0]["ref"], "HV-1");
+
+    let explain = h.json(&["next", "--explain", "--owner", "human"]);
+    assert_eq!(explain["dispatchable"], 0);
+    assert_eq!(explain["counts"]["owner_mismatch"], 1);
 
     // Decomposition + dependency edges, read back via include.
     h.ok(&["item", "add", "Frontend"]); // HV-3

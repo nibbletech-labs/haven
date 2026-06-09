@@ -10,11 +10,12 @@ anywhere. A single `haven` binary is the local SQLite + files store, a CLI, and 
 stdio MCP server — with an opt-in remote half (Supabase + Auth0).
 
 ```
+haven setup --project-key haven --project-title "Haven" --prefix HV
+haven item add "Draft the spec" --status ready --commit --assign ai \
+  --done-looks-like "approved by review"
 haven next                          # what should I do next?
-haven item add "Draft the spec" --done-looks-like "approved by review"
-haven depend HV-3 --on HV-2         # HV-3 is blocked by HV-2
-haven assign HV-1 --to ai
-haven sync                          # push to the cloud (opt-in)
+haven item get HV-1 --include edges,artifacts,lineage
+haven item assign HV-1 --to human
 ```
 
 - **Structure** (the work-graph) lives in local SQLite, exposed over CLI + MCP,
@@ -29,7 +30,7 @@ haven sync                          # push to the cloud (opt-in)
 
 ```sh
 brew install nibbletech-labs/tap/haven
-haven setup        # wires the MCP server + Claude skill
+haven setup --project-key haven --project-title "Haven"
 haven doctor       # verify the install
 ```
 
@@ -44,12 +45,13 @@ curl -fsSL https://raw.githubusercontent.com/nibbletech-labs/haven/main/packagin
 ```sh
 git clone https://github.com/nibbletech-labs/haven && cd haven
 cargo build --release
-./target/release/haven setup
+./target/release/haven setup --project-key haven --project-title "Haven"
 ```
 
 `haven setup` is idempotent: it creates `~/.haven`, runs migrations, registers the
-`haven` MCP server in your Claude config, and installs the bundled Claude skill.
-`haven doctor` reports whether each of those is wired.
+`haven` MCP server in your Claude config, installs the bundled Claude skill, and
+can create/select your first project with `--project-key`. `haven doctor` reports
+whether each local install piece is wired.
 
 ## Develop
 

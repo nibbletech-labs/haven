@@ -24,6 +24,330 @@ fn add(s: &Store, title: &str) -> Item {
 }
 
 #[test]
+fn handoff_records_artifact_flips_owner_and_sets_state() {
+    // A real content root: handoff writes a `handoff` artifact to disk.
+    let dir = tempfile::tempdir().unwrap();
+    let s = Store::open_in_memory_at(dir.path()).unwrap();
+    s.add_project("haven", Some("HV"), "Haven", None).unwrap();
+    s.use_project("haven").unwrap();
+    let item = s
+        .add_item(
+            None,
+            NewItem {
+                title: "Build API".into(),
+                assign: Some(OwnerKind::Ai),
+                status: Some(Status::Ready),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(item.reference, "HV-1");
+
+    // ai → human with a note: parks it blocked + on_human, records the baton.
+    let res = s
+        .handoff(
+            None,
+            "HV-1",
+            OwnerKind::Human,
+            HandoffInput {
+                note: Some("Implemented; please review rate-limit defaults."),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(res.item.owner_kind, Some(OwnerKind::Human));
+    assert_eq!(res.item.status, Status::Blocked);
+    assert_eq!(res.item.wait_state, Some(WaitState::OnHuman));
+    let art = res.artifact.expect("a note records a handoff artifact");
+    assert_eq!(art.role, ArtifactRole::Handoff);
+    assert_eq!(art.from_owner, Some(OwnerKind::Ai));
+    assert_eq!(art.to_owner, Some(OwnerKind::Human));
+    assert!(art
+        .path
+        .as_deref()
+        .unwrap()
+        .starts_with("items/HV-1/notes/handoff-"));
+
+    // human → ai, no note: owner flips, wait clears, blocked becomes ready again.
+    let back = s
+        .handoff(None, "HV-1", OwnerKind::Ai, HandoffInput::default())
+        .unwrap();
+    assert_eq!(back.item.owner_kind, Some(OwnerKind::Ai));
+    assert_eq!(back.item.wait_state, None);
+    assert_eq!(back.item.status, Status::Ready);
+    assert!(back.artifact.is_none());
+}
+
+#[test]
+fn complete_records_evidence_marks_done_and_reports_unblocked() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = Store::open_in_memory_at(dir.path()).unwrap();
+    s.add_project("haven", Some("HV"), "Haven", None).unwrap();
+    s.use_project("haven").unwrap();
+
+    // A (HV-1) is a dependency of B (HV-2) and C (HV-4); C also depends on the
+    // still-open D (HV-3). Completing A should unblock B but not C.
+    s.add_item(
+        None,
+        NewItem {
+            title: "A".into(),
+            done_looks_like: Some("tests pass".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    s.add_item(
+        None,
+        NewItem {
+            title: "B".into(),
+            depends_on: Some("HV-1".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    add(&s, "D"); // HV-3
+    s.add_item(
+        None,
+        NewItem {
+            title: "C".into(),
+            depends_on: Some("HV-1".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    s.depend(None, "HV-4", "HV-3", false).unwrap(); // C also blocked by D
+
+    let res = s
+        .complete_item(
+            None,
+            "HV-1",
+            CompleteInput {
+                evidence: Some("cargo test --workspace: ok"),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(res.item.status, Status::Done);
+    assert!(
+        res.warnings.is_empty(),
+        "acceptance was set: {:?}",
+        res.warnings
+    );
+    assert_eq!(res.artifact.unwrap().role, ArtifactRole::Delivery);
+    let unblocked: Vec<&str> = res.unblocked.iter().map(|i| i.reference.as_str()).collect();
+    assert_eq!(unblocked, ["HV-2"], "B unblocks; C still waits on D");
+
+    // No-acceptance path warns but still completes; no evidence → no artifact.
+    let r2 = s
+        .complete_item(None, "HV-3", CompleteInput::default())
+        .unwrap();
+    assert!(!r2.warnings.is_empty());
+    assert!(r2.artifact.is_none());
+
+    // Completing an archived item is refused (reopen first).
+    add(&s, "E"); // HV-5
+    s.archive_item(None, "HV-5", None, None).unwrap();
+    assert!(s
+        .complete_item(None, "HV-5", CompleteInput::default())
+        .is_err());
+}
+
+#[test]
+fn batch_commit_uncommit_archive_validate_refs_first() {
+    let s = store();
+    add(&s, "A"); // HV-1
+    add(&s, "B"); // HV-2
+    add(&s, "C"); // HV-3
+
+    // "commit these two" → one op, both committed at the band.
+    let committed = s.commit_items(None, &["HV-1", "HV-2"], Some(2)).unwrap();
+    assert_eq!(committed.len(), 2);
+    assert!(committed
+        .iter()
+        .all(|i| i.committed && i.priority == Some(2)));
+
+    // "archive those" → batch archive.
+    let archived = s
+        .archive_items(None, &["HV-1", "HV-3"], Some("groomed away"), None)
+        .unwrap();
+    assert!(archived.iter().all(|i| i.status == Status::Archived));
+
+    // Validate-first: an unknown ref aborts the WHOLE batch — HV-2 is untouched,
+    // not half-archived.
+    assert!(s
+        .archive_items(None, &["HV-2", "HV-404"], None, None)
+        .is_err());
+    assert_eq!(
+        s.get_item(None, "HV-2", &[]).unwrap().status,
+        Status::Discovery
+    );
+
+    // Batch uncommit.
+    let unc = s.uncommit_items(None, &["HV-2"]).unwrap();
+    assert!(!unc[0].committed);
+}
+
+#[test]
+fn batch_update_applies_one_change_to_many_refs() {
+    let s = store();
+    add(&s, "A"); // HV-1
+    add(&s, "B"); // HV-2
+    add(&s, "C"); // HV-3
+
+    // "mark these two ready" with an acceptance, in one op.
+    let res = s
+        .update_items(
+            None,
+            &["HV-1", "HV-2"],
+            ItemUpdate {
+                status: Some(Status::Ready),
+                done_looks_like: Some("ship it".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert!(res
+        .iter()
+        .all(|i| i.status == Status::Ready && i.done_looks_like.as_deref() == Some("ship it")));
+    // HV-3 untouched.
+    assert_eq!(
+        s.get_item(None, "HV-3", &[]).unwrap().status,
+        Status::Discovery
+    );
+
+    // Validate-first: an unknown ref aborts the batch; HV-3 stays as it was.
+    assert!(s
+        .update_items(
+            None,
+            &["HV-3", "HV-404"],
+            ItemUpdate {
+                status: Some(Status::Ready),
+                ..Default::default()
+            },
+        )
+        .is_err());
+    assert_eq!(
+        s.get_item(None, "HV-3", &[]).unwrap().status,
+        Status::Discovery
+    );
+}
+
+#[test]
+fn list_filters_by_wait_state_and_staleness() {
+    let s = store();
+    let waiting = add(&s, "Review PR"); // HV-1
+    s.update_item(
+        None,
+        &waiting.reference,
+        ItemUpdate {
+            wait: Some(WaitUpdate::Set(WaitState::OnHuman)),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let fresh = add(&s, "Fresh task"); // HV-2
+
+    // "what's waiting on me?" → only the on_human item.
+    let waits = s
+        .list_items(
+            None,
+            &ItemFilter {
+                wait: Some(WaitState::OnHuman),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        waits
+            .iter()
+            .map(|i| i.reference.as_str())
+            .collect::<Vec<_>>(),
+        [waiting.reference.as_str()]
+    );
+
+    // Backdate the fresh item 10 days; --stale 7 surfaces it, --stale 14 doesn't.
+    s.conn
+        .execute(
+            "UPDATE nodes SET updated_at = datetime('now','-10 days') WHERE ref = ?1",
+            rusqlite::params![fresh.reference],
+        )
+        .unwrap();
+    let stale = s
+        .list_items(
+            None,
+            &ItemFilter {
+                stale_days: Some(7),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        stale
+            .iter()
+            .map(|i| i.reference.as_str())
+            .collect::<Vec<_>>(),
+        [fresh.reference.as_str()]
+    );
+    assert!(s
+        .list_items(
+            None,
+            &ItemFilter {
+                stale_days: Some(14),
+                ..Default::default()
+            },
+        )
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
+fn project_graph_returns_all_nodes_and_edges_in_one_call() {
+    let s = store();
+    add(&s, "A"); // HV-1
+    add(&s, "B"); // HV-2
+    add(&s, "C"); // HV-3
+    s.add_item(
+        None,
+        NewItem {
+            title: "v1".into(),
+            node_type: Some(NodeType::Release),
+            ..Default::default()
+        },
+    )
+    .unwrap(); // HV-4
+    add(&s, "D"); // HV-5
+    s.decompose(None, "HV-1", "HV-2", false).unwrap(); // A composed of B
+    s.depend(None, "HV-2", "HV-3", false).unwrap(); // B depends on C
+    s.group(None, "HV-4", "HV-1", false).unwrap(); // release groups A
+    s.evolve_supersede(None, "HV-3", "HV-5", Some("redesign"), None)
+        .unwrap(); // HV-3 → HV-5
+
+    let g = s.project_graph(None, true).unwrap();
+    assert_eq!(g.project, "haven");
+    // Every node is present, including the superseded HV-3 (faithful dump).
+    assert_eq!(g.nodes.len(), 5);
+    // The three structural edges, each as {kind, from, to} matching add_edge.
+    assert_eq!(g.edges.len(), 3);
+    assert!(g
+        .edges
+        .iter()
+        .any(|e| e.kind == EdgeKind::Decomposition && e.from == "HV-1" && e.to == "HV-2"));
+    assert!(g
+        .edges
+        .iter()
+        .any(|e| e.kind == EdgeKind::Dependency && e.from == "HV-2" && e.to == "HV-3"));
+    assert!(g
+        .edges
+        .iter()
+        .any(|e| e.kind == EdgeKind::Grouping && e.from == "HV-4" && e.to == "HV-1"));
+    // Lineage link from the supersession is included when requested.
+    assert!(g.lineage.iter().any(|l| l.from == "HV-3" && l.to == "HV-5"));
+
+    // Without the flag, lineage is omitted (lean payload).
+    assert!(s.project_graph(None, false).unwrap().lineage.is_empty());
+}
+
+#[test]
 fn add_mints_sequential_refs_and_defaults() {
     let s = store();
     let a = add(&s, "First");

@@ -1,153 +1,176 @@
 ---
 name: haven
 description: >-
-  Manage long-lived project work as a graph of items (the Haven work-graph) — both
-  the building and the human tasks around it: reviews, approvals, decisions,
-  real-world actions. Use it to capture ideas and tasks you'll revisit, decide
-  what to work on next, plan and prioritise, groom rough items until they're ready
-  to start, break big work into parts, evolve items as understanding changes, and
-  hand work back and forth between people and AI agents — tracking who owns each
-  item and what's waiting on whom. Reach for this whenever someone wants to track,
-  plan, or order work they'll come back to, or pass a task to a person or agent —
-  e.g. "add this to the backlog", "make a note to look at X later", "I keep
-  meaning to…", "what should I work on next", "what's left for the launch", "tidy
-  up the backlog", "break this down", "I've finished my part — who picks this up
-  next?", "what's waiting on me?", "track that legal still needs to sign off", or
-  "park this for now". Fire readily on capture, planning, or handoff intent even
-  when they never say "backlog" or "Haven" by name. Not for genuinely ephemeral,
-  one-off reminders that aren't part of a project being tracked.
+  Track long-lived project work as a graph of items in Haven — both the building
+  and the human tasks around it (reviews, approvals, decisions, real-world
+  actions). Use to capture work to revisit, decide what's next, plan and
+  prioritise, groom rough items until ready, break work into parts, evolve items
+  as understanding shifts, and hand work between people and AI (tracking who owns
+  each item and what's waiting on whom). Fire on capture, planning, or handoff
+  intent even when the user never says "Haven" or "backlog" — e.g. "add this to
+  the backlog", "look at X later", "what should I work on next", "what's left for
+  the launch", "break this down", "I've finished my part — who's next?", "what's
+  waiting on me?", "track that legal needs to sign off", "park this". Not for
+  ephemeral one-off reminders outside a tracked project.
 ---
 
 # Haven — the work-graph
 
 Haven is a durable store for a long-lived **work-graph**: every backlog item,
 half-formed idea, task, research question, release — **and human task** (a review,
-approval, decision, or real-world action someone has to take) — is a **node**.
-It's for whole projects, not just the code: AI-owned and human-owned work live in
-the same graph, and passing items between them is a first-class flow (see
-*Ownership + handoffs* below). You manage it through the `haven` CLI (local agent,
-with a terminal) or the `haven_*` MCP tools (remote/headless client). Both drive
-the identical store.
+approval, decision, or real-world action) — is a **node**. AI-owned and
+human-owned work share one graph, and passing items between them is first-class.
 
-Your job with this skill is **judgment**, not capability — the tools are
-complete; what you add is knowing *when* to split / commit / leave floating, *how*
-to run a grooming or planning pass, and what *not* to do. Two ideas carry most of
-the weight; internalise these and read a reference file when you act.
+You drive it through the **`haven` CLI** (local agent with a terminal) or the
+**`haven_*` MCP tools** (remote/headless client) — both over the identical store.
+Your job is **judgment**: knowing *when* to split / commit / leave floating, and
+what *not* to do. The tools are complete.
+
+## Operating loop
+
+Run every Haven interaction through these five steps:
+
+1. **Establish the project.** Every item lives in one (each mints its own `HV-1`,
+   `HV-2`… refs). Settle it once per session — see *Selecting a project* below.
+2. **Classify the intent:** capture · groom · plan · dispatch · execute · handoff ·
+   complete · evolve · archive. (One reply can span a few; do the smallest set.)
+3. **Use the smallest safe operation** — and prefer the *atomic* tool when one
+   exists (`handoff`, `complete`) over hand-assembling the steps.
+4. **Confirm the result** from the returned JSON: the `ref`, `status`, `committed`,
+   `owner`, `wait_state`. Don't assume — read it back.
+5. **Never touch structure or `backlog.md` by hand.** Mutate the graph *only*
+   through tools; edit *content* as files. (The one rule, below.)
+
+## Critical gotchas
+
+The mistakes that actually bite — internalise these:
+
+- **`next` is exact:** it returns only items that are **committed AND `ready` AND
+  not waiting AND have no open dependency.** Creating an item — or just marking it
+  `ready` — will *not* put it in `next`. Set both axes.
+- **Capture ≠ commit.** "Add to the backlog" creates a floating, uncommitted
+  `discovery` node. Don't commit, prioritise, or wire it unless the user engages.
+- **`ready` requires `done_looks_like`.** An item with no acceptance can't be
+  verified or cleanly dispatched. Set it when you mark something `ready`.
+- **Empty `next` → diagnose, don't invent.** Call `next --explain` /
+  `haven_next_explain`; it tells you *why* (uncommitted / not-ready / blocked /
+  waiting / owner-mismatch). Never fabricate work.
+- **Handoff and complete are atomic tools, not recipes.** Use `item handoff` /
+  `haven_handoff` and `item complete` / `haven_complete_item` — don't hand-assemble
+  assign + update + add_artifact (you'll do it inconsistently).
+- **Archive, never delete.** There is no hard delete. "Drop it" = `archive
+  --rationale`; reversible via `reopen`.
+- **The two axes are orthogonal.** Maturity (`status`) ≠ commitment (`committed` +
+  `priority`). "Make this ready" and "do this next" are different operations.
+- **Over MCP, pass `project` on every call** — there is no sticky session.
 
 ## The one rule that matters most: structure vs content
 
-**Structure** — the graph itself: nodes, edges, status, priority, lineage — is
-mutated **only** through `haven …` / `haven_*` ops. Never by editing files or the
-DB by hand, because the projection, lineage, and sync metadata must stay coherent.
+**Structure** — nodes, edges, status, priority, lineage — is mutated **only**
+through `haven …` / `haven_*` ops, never by editing files or the DB by hand
+(the projection, lineage, and sync metadata must stay coherent).
 
-**Content** — the actual work product: specs, research, notes, code — lives as
-**files** under `~/.haven/<project>/items/<ref>/`. If you're a local agent, read
-and edit those files **directly** (Read/Edit/Grep) — no round-trips through the
-graph. The DB indexes the skeleton; it never carries the body. A node's `body`
-field is a one-line summary, never the content itself.
-
-(A filesystem-less client reads/writes content through the artifact `content`
-channel instead — see `references/surface-map.md`.)
+**Content** — the work product: specs, research, notes, code — lives as **files**
+under `~/.haven/<project>/items/<ref>/`. A local agent reads/edits those files
+**directly** (Read/Edit/Grep) — no round-trips through the graph. The `body` field
+is a one-line summary, **never** the content. (A filesystem-less client uses the
+artifact `content` channel instead — see `references/surface-map.md`.)
 
 ## Lazy structure: capture is cheap, structure is earned
 
 Capturing an idea is a single bare node — floating, uncommitted, `discovery`.
-**That floating state is the correct default, not a defect.** You wire edges, set
-priority, and commit *only when the user actually engages* with the work.
-Premature structure (inventing subtasks, committing speculative work, over-wiring
-on capture) just churns. When in doubt, capture the node and stop.
+**That floating state is the correct default, not a defect.** Wire edges, set
+priority, and commit *only when the user actually engages*. When in doubt, capture
+the node and stop — premature structure just churns.
 
 ## Mental model (the concepts, and no more)
 
-- **Node = item.** One unified object for everything. The CLI/MCP call it `item`;
-  the model is a "node". A node with no edges, no priority, uncommitted is valid
-  and normal.
-- **Two independent axes — don't conflate them:**
-  - **Maturity** (`status`): `discovery → definition → ready → in_progress → done`
-    (+ `blocked`, `superseded`, `archived`). *How well-defined* the work is.
-  - **Commitment** (`committed` + `priority` 0–4 + `sort_key`): *whether and when*
-    you'll do it.
-  - They're orthogonal: a fully-spec'd-but-parked item is `ready` + uncommitted; a
-    committed-but-fuzzy item is `discovery` + committed (and needs definition
-    before it can dispatch).
-- **`next` is the dispatch query**, and its contract is exact: it returns items
-  that are **committed AND `ready` AND not waiting AND have no open dependency**,
-  ordered by priority then `sort_key`. **Consequence:** an item the user "wants
-  done next" will *not* appear in `next` unless it's committed *and* ready *and*
-  unblocked. Creating the item is not enough — set those axes too.
-- **Four edge layers** (all optional, all over the same nodes; never overload one
-  for another's job): **decomposition** ("part of"), **dependency** ("blocked
-  by"), **grouping** ("ships in this release/phase"), **lineage** ("what this
-  became" — append-only history).
-- **Acceptance & gates.** When an item is `ready`, set **`done_looks_like`** — the
-  acceptance statement its output is verified against (the anchor for `ready→done`,
-  and what a dispatcher like `orchestrate` checks). A **gate** is a review node:
-  give it *dependency* edges to the items it reviews and it surfaces in `next` once
-  they're all `done`, with the review's pass-criteria in its own `done_looks_like`.
-  No special machinery — gates are just dependency + acceptance.
-- **Never delete.** Splits, merges, supersessions, and "drop it" are all recorded;
-  the old node persists (`superseded`/`archived`) with lineage to its descendants,
-  and a reference to an old id resolves forward to the live one. "Drop it" =
-  `archive --rationale`, which is reversible via `reopen`. There is no hard delete.
-- **Ownership + handoffs.** Every node can be `human`- or `ai`-owned. A **handoff**
-  is the baton-pass when ownership flips, recorded as a `handoff` artifact carrying
-  `from`/`to`. This is the "I've done my part, over to you" flow made concrete.
+- **Node = item.** One unified object for everything; a node with no edges, no
+  priority, uncommitted is valid and normal.
+- **Two independent axes:** **maturity** (`status`: `discovery → definition →
+  ready → in_progress → done`, + `blocked`/`superseded`/`archived`) and
+  **commitment** (`committed` + `priority` 0–4 + `sort_key`). A spec'd-but-parked
+  item is `ready` + uncommitted; a committed-but-fuzzy one is `discovery` +
+  committed and needs definition before it can dispatch.
+- **Four edge layers** (don't overload one for another): **decomposition** ("part
+  of"), **dependency** ("blocked by"), **grouping** ("ships in this release"),
+  **lineage** ("what this became" — append-only).
+- **Acceptance & gates.** A `ready` item carries **`done_looks_like`** (the
+  verify anchor). A **gate** is a review node: give it *dependency* edges to the
+  items it reviews and it surfaces in `next` once they're all `done`, with the
+  pass-criteria in its own `done_looks_like`. No special machinery.
+- **Completion reports what it unblocks.** `complete` returns the items/gates whose
+  last dependency just closed — that's your next dispatch set.
+- **Never delete.** Splits/merges/supersessions/archives are all recorded; an old
+  ref resolves forward to the live one (`evolve resolve` / `haven_resolve_live`).
 
-## When to use this skill — and when not
+## Selecting a project
 
-Fire for anything the user will **revisit**: capturing ideas/tasks, planning,
-prioritising, grooming, asking "what's next", breaking work down, parking or
-reviving an idea, handing work between human and AI. Reach for it even when they
-don't name "backlog" or "Haven".
+- **Local (CLI):** `haven project list`, then `haven project use <key>` sets a
+  sticky current project (or `haven project add` to create one).
+- **Remote (MCP):** `haven_list_projects` to discover, then **pass `project:
+  "<key>"` on every call** — selection is per-call, carried through the
+  conversation; there is no `haven_use_project`. `haven_add_project` creates one.
+  If a call errors with `project_required`, the message lists the available keys.
 
-Don't fire for a genuinely throwaway reminder the user won't return to, or for
-editing the *content* of a file (that's plain Read/Edit — though if that file is a
-Haven artifact, this skill still informs *how* you locate it).
+Settle this once per session; don't nag. One project per product/repo.
 
 ## How to act: workflows
 
-Each workflow has a trigger, concrete steps, judgment heuristics, and real
-commands. Read **`references/workflows.md`** when you're about to do one — don't
-work from memory:
+Read **`references/workflows.md`** when you're about to run one — don't work from
+memory. Each has a trigger, steps, judgment heuristics, and real commands:
 
-1. **Capture** — "add this to the backlog" / "back-pocket this"
-2. **Plan / prioritise** — turn floating items into a committed, ordered plan
-3. **Groom** — move items `discovery → ready`
-4. **Dispatch** — "what's next" (incl. diagnosing an empty `next`)
-5. **Decompose vs group vs depend** — choosing the right edge layer
-6. **Evolve** — split / merge / supersede, with good rationale
-7. **Handoff** — ai ↔ human baton-pass
-8. **Artifacts & content** — registering work product; the no-filesystem channel
+1. **Capture** — "add this to the backlog"
+2. **Plan / prioritise** — floating items → a committed, ordered plan
+3. **Groom** — move items `discovery → ready` (set acceptance)
+4. **Dispatch** — "what's next" (and `next --explain` when it's empty)
+5. **Decompose vs group vs depend** — choosing the edge layer
+6. **Evolve** — split / merge / supersede, with real rationale
+7. **Handoff** — `item handoff`: the atomic ai↔human baton-pass
+8. **Complete** — `item complete`: evidence + done + what it unblocked
+9. **Artifacts & content** — registering work product; the no-filesystem channel
+10. **Gates & reviews** — review checkpoints as dependency + acceptance
 
-The exact command/flag surface and the **CLI-vs-MCP differences** (they are *not*
-1:1) live in **`references/surface-map.md`** — consult it for precise arguments
-and for the MCP tool a remote client must use.
+Precise arguments and the **CLI-vs-MCP differences** (they are *not* 1:1) are in
+**`references/surface-map.md`**.
 
-## Standing conventions and cautions
+## MCP quick reference (concrete payloads)
 
-- **Pick the project once per session.** Every item lives in a project (a backlog
-  / namespace; each mints its own `HV-1`, `HV-2`… refs). How you select depends on
-  the surface:
-  - **Local (CLI):** `haven project list`, then `haven project use <key>` sets a
-    sticky current project for the session (or `haven project add` to create one).
-  - **Remote (MCP):** `haven_list_projects` to discover, then **pass `project:
-    "<key>"` on every call** — selection is per-call, carried through the
-    conversation; there's no `use`. `haven_add_project` creates one. (See
-    `references/surface-map.md` → "Selecting a project over MCP".)
-  Check once; don't nag. One project per product/repo — don't scatter unrelated
-  work into one.
-- **Reference items by `ref`** (`HV-42`) in human-facing flows — stable and
-  readable. `public_id` (UUID) only when crossing machines.
-- **Let `backlog.md` regenerate itself.** It re-renders after every mutating op.
-  Read it for an overview; **never hand-edit it** — edits get clobbered.
-- **Always give a real `--rationale`** on evolve/archive/reopen. Lineage exists to
-  reconstruct intent later; "too big" is weak, "spans two owners, splitting for
-  independent dispatch" is useful.
-- **Sync is manual in v1.** `haven sync` runs one push pass; there's no background
-  loop yet. Don't sync after every mutation — run it (or tell the user to) when a
-  batch of work should reach the cloud. `haven sync status` shows the queue.
-- **Don't conflate the two axes.** "Make this ready" (maturity) ≠ "do this next"
-  (commitment); `next` needs both.
-- **Don't over-structure on capture, don't commit speculative work, don't overload
-  edge layers, don't put content in `body`, don't hard-delete.** The fuller
-  anti-pattern list is in `references/workflows.md`.
+Over MCP, pass `project` on every call. The common ops:
+
+```jsonc
+// Capture — floating, uncommitted, discovery (the default).
+haven_add_item   {"project":"haven","title":"Cache the JWKS lookup"}
+// Make it dispatchable: commit + ready + acceptance, in one update.
+haven_update_item{"project":"haven","ref":"HV-1","status":"ready","commit":true,
+                  "priority":1,"done_looks_like":"p95 verify < 5ms"}
+// Dispatch, and diagnose if empty.
+haven_next         {"project":"haven","owner":"ai"}
+haven_next_explain {"project":"haven","owner":"ai"}   // when next is empty
+// Atomic baton-pass and completion.
+haven_handoff      {"project":"haven","ref":"HV-1","to":"human",
+                    "note":"Implemented; review the rate-limit defaults."}
+haven_complete_item{"project":"haven","ref":"HV-1","evidence":"cargo test: ok"}
+// Edges, evolve, stale refs.
+haven_add_edge     {"project":"haven","kind":"dependency","from":"HV-2","to":"HV-1"}
+haven_resolve_live {"project":"haven","ref":"HV-9"}   // old ref → live descendant
+// Whole graph in one read — to render it, or reason over all dependencies at once.
+haven_graph        {"project":"haven"}                // {nodes[], edges[{kind,from,to}]}
+```
+
+**Reasoning over the whole backlog** (reorganising, fixing dependencies, rendering
+a graph view) — pull it all in one call with `haven graph` / `haven_graph` rather
+than N per-node fetches. It returns every node plus a flat `{kind, from, to}` edge
+list (the same shape `add_edge` takes, so your fixes round-trip).
+
+## Standing cautions
+
+- **Reference items by `ref`** (`HV-42`) in human-facing flows; `public_id` only
+  across machines.
+- **Let `backlog.md` regenerate** — it re-renders after every mutation; never
+  hand-edit it.
+- **Always give a real `--rationale`** on evolve/archive/reopen — lineage exists to
+  reconstruct intent ("spans two owners, splitting for independent dispatch", not
+  "too big").
+- **Sync is manual in v1.** Run `haven sync` once after a batch, not per mutation;
+  `haven sync status` shows the queue.

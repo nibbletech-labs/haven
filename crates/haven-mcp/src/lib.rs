@@ -10,9 +10,9 @@
 use std::io::{self, BufRead, Write};
 
 use haven_core::{
-    ArtifactKind, ArtifactRole, EdgeKind, HavenError, Include, ItemFilter, ItemUpdate,
-    LineageDirection, NewArtifact, NewItem, NodeType, OwnerKind, Result, Status, Store, WaitState,
-    WaitUpdate,
+    ArtifactKind, ArtifactRole, CompleteInput, EdgeKind, HandoffInput, HavenError, Include,
+    ItemFilter, ItemUpdate, LineageDirection, NewArtifact, NewItem, NodeType, OwnerKind, Result,
+    Status, Store, WaitState, WaitUpdate,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -207,6 +207,8 @@ fn call_tool(store: &Store, name: &str, a: &Value) -> Result<Value> {
                 committed: opt_bool(a, "committed"),
                 icebox: opt_bool(a, "icebox").unwrap_or(false),
                 group: opt_str(a, "group").map(String::from),
+                wait: opt_str(a, "wait").map(WaitState::parse).transpose()?,
+                stale_days: opt_i64(a, "stale"),
             };
             to_value(store.list_items(project, &filter)?)
         }
@@ -222,6 +224,13 @@ fn call_tool(store: &Store, name: &str, a: &Value) -> Result<Value> {
             opt_str(a, "owner").map(OwnerKind::parse).transpose()?,
             opt_i64(a, "limit"),
         )?),
+        // Diagnose an empty queue. Returns the same dispatchable count `haven_next`
+        // would, plus a per-reason breakdown — for the "next is empty" branch in
+        // autonomous loops, so the agent diagnoses instead of inventing work.
+        "haven_next_explain" => store.next_explain(
+            project,
+            opt_str(a, "owner").map(OwnerKind::parse).transpose()?,
+        ),
         "haven_add_item" => {
             let new = NewItem {
                 title: req_str(a, "title")?.to_string(),
@@ -338,8 +347,17 @@ fn call_tool(store: &Store, name: &str, a: &Value) -> Result<Value> {
                 .unwrap_or(LineageDirection::Both);
             to_value(store.evolve_graph(project, req_str(a, "ref")?, dir, opt_i64(a, "depth"))?)
         }
+        // Follow a possibly-stale ref forward through lineage to its live
+        // descendant(s) — handoffs and docs often carry superseded refs. A live
+        // item resolves to itself.
+        "haven_resolve_live" => to_value(store.resolve_live(project, req_str(a, "ref")?)?),
         "haven_search" => {
             to_value(store.search(project, req_str(a, "query")?, opt_i64(a, "limit"))?)
+        }
+        // The whole project graph (all nodes + edges) in one read — for rendering
+        // the graph or reasoning over the entire dependency structure at once.
+        "haven_graph" => {
+            to_value(store.project_graph(project, opt_bool(a, "lineage").unwrap_or(false))?)
         }
         "haven_get_artifact" => {
             let role = opt_str(a, "role").map(ArtifactRole::parse).transpose()?;
@@ -396,6 +414,31 @@ fn call_tool(store: &Store, name: &str, a: &Value) -> Result<Value> {
             opt_str(a, "rationale"),
             opt_str(a, "by"),
         )?),
+        // Atomic baton-pass (ai↔human): record a handoff note, flip owner, set
+        // wait/status in one call — the transition agents otherwise botch.
+        "haven_handoff" => {
+            let to = OwnerKind::parse(req_str(a, "to")?)?;
+            let input = HandoffInput {
+                from: opt_str(a, "from").map(OwnerKind::parse).transpose()?,
+                note: opt_str(a, "note"),
+                status: opt_str(a, "status").map(Status::parse).transpose()?,
+                wait: opt_str(a, "wait").map(WaitState::parse).transpose()?,
+                actor: opt_str(a, "actor"),
+            };
+            to_value(store.handoff(project, req_str(a, "ref")?, to, input)?)
+        }
+        // Atomic completion: record evidence, set status=done, and return what
+        // this unblocked — the reliable "I finished this" path for agent loops.
+        "haven_complete_item" => {
+            let input = CompleteInput {
+                evidence: opt_str(a, "evidence"),
+                artifact_role: opt_str(a, "artifact_role")
+                    .map(ArtifactRole::parse)
+                    .transpose()?,
+                by: opt_str(a, "by"),
+            };
+            to_value(store.complete_item(project, req_str(a, "ref")?, input)?)
+        }
         other => Err(HavenError::Invalid(format!("unknown tool {other:?}"))),
     }
 }
@@ -409,12 +452,14 @@ fn to_value<T: Serialize>(v: T) -> Result<Value> {
 fn tools_list() -> Value {
     let obj = |props: Value, required: Value| json!({"type": "object", "properties": props, "required": required});
     json!([
-        { "name": "haven_list_items", "description": "List items in a project under filters.",
-          "inputSchema": obj(json!({"project":{"type":"string"},"status":{"type":"string"},"type":{"type":"string"},"owner":{"type":"string"},"committed":{"type":"boolean"},"icebox":{"type":"boolean"},"group":{"type":"string"}}), json!([])) },
+        { "name": "haven_list_items", "description": "List items in a project under filters. `wait` (on_human|on_dependency|on_external) answers 'what's waiting on me / stuck on X'; `stale` (days) surfaces items untouched for N+ days.",
+          "inputSchema": obj(json!({"project":{"type":"string"},"status":{"type":"string"},"type":{"type":"string"},"owner":{"type":"string"},"committed":{"type":"boolean"},"icebox":{"type":"boolean"},"group":{"type":"string"},"wait":{"type":"string"},"stale":{"type":"integer"}}), json!([])) },
         { "name": "haven_get_item", "description": "Fetch one item, optionally with edges/artifacts/lineage.",
           "inputSchema": obj(json!({"ref":{"type":"string"},"project":{"type":"string"},"include":{"type":"array","items":{"type":"string"}}}), json!(["ref"])) },
         { "name": "haven_next", "description": "Items ready to dispatch (committed, ready, unblocked).",
           "inputSchema": obj(json!({"project":{"type":"string"},"owner":{"type":"string"},"limit":{"type":"integer"}}), json!([])) },
+        { "name": "haven_next_explain", "description": "Diagnose why the dispatch queue is empty: the dispatchable count plus a per-reason breakdown (owner-mismatch, blocked-by-dependency, waiting, committed-not-ready, ready-but-uncommitted) and a hint. Call when haven_next returns nothing — diagnose, don't invent work.",
+          "inputSchema": obj(json!({"project":{"type":"string"},"owner":{"type":"string"}}), json!([])) },
         { "name": "haven_add_item", "description": "Create a work-graph item (node). `done_looks_like` is the acceptance statement output is verified against; `why` is a one-line provenance trace.",
           "inputSchema": obj(json!({"title":{"type":"string"},"project":{"type":"string"},"type":{"type":"string"},"body":{"type":"string"},"done_looks_like":{"type":"string"},"why":{"type":"string"},"status":{"type":"string"},"priority":{"type":"integer"},"commit":{"type":"boolean"},"assign":{"type":"string"},"parent":{"type":"string"},"depends_on":{"type":"string"},"group":{"type":"string"}}), json!(["title"])) },
         { "name": "haven_update_item", "description": "Update maturity/commitment/ownership of an item. Set `done_looks_like` (acceptance) when it becomes ready so dispatch can verify against it.",
@@ -425,8 +470,12 @@ fn tools_list() -> Value {
           "inputSchema": obj(json!({"op":{"type":"string"},"refs":{"type":"array","items":{"type":"string"}},"into":{"type":"array","items":{"type":"string"}},"with":{"type":"string"},"title":{"type":"string"},"rationale":{"type":"string"},"project":{"type":"string"}}), json!(["op","refs"])) },
         { "name": "haven_lineage", "description": "Lineage graph around an item.",
           "inputSchema": obj(json!({"ref":{"type":"string"},"direction":{"type":"string"},"depth":{"type":"integer"},"project":{"type":"string"}}), json!(["ref"])) },
+        { "name": "haven_resolve_live", "description": "Resolve a possibly superseded/archived item ref forward through lineage to its live descendant(s); a live item resolves to itself. Use to follow stale refs found in handoffs or docs.",
+          "inputSchema": obj(json!({"ref":{"type":"string"},"project":{"type":"string"}}), json!(["ref"])) },
         { "name": "haven_search", "description": "Full-text search over item title/body.",
           "inputSchema": obj(json!({"query":{"type":"string"},"project":{"type":"string"},"limit":{"type":"integer"}}), json!(["query"])) },
+        { "name": "haven_graph", "description": "The whole project work-graph in one read: every node plus a flat edge list ({kind, from, to}, same shape as haven_add_edge), and optionally lineage links. Use to render the graph or reason over the entire dependency structure at once, instead of N+1 per-node fetches. Nodes include superseded/archived — filter client-side.",
+          "inputSchema": obj(json!({"project":{"type":"string"},"lineage":{"type":"boolean"}}), json!([])) },
         { "name": "haven_get_artifact", "description": "Read an artifact's content (local or lazy-pulled).",
           "inputSchema": obj(json!({"ref":{"type":"string"},"role":{"type":"string"},"path":{"type":"string"},"project":{"type":"string"}}), json!(["ref"])) },
         { "name": "haven_add_artifact", "description": "Register an artifact on an item. Pass `content` to have the server write the file (the content channel for filesystem-less clients), or `path`/`uri` for a local file / external link.",
@@ -441,6 +490,10 @@ fn tools_list() -> Value {
           "inputSchema": obj(json!({"ref":{"type":"string"},"rationale":{"type":"string"},"by":{"type":"string"},"project":{"type":"string"}}), json!(["ref"])) },
         { "name": "haven_reopen", "description": "Revive an archived/superseded item back into the maturity flow (status→discovery), emitting a lineage event.",
           "inputSchema": obj(json!({"ref":{"type":"string"},"rationale":{"type":"string"},"by":{"type":"string"},"project":{"type":"string"}}), json!(["ref"])) },
+        { "name": "haven_handoff", "description": "Atomic baton-pass (ai↔human): records a handoff note (stamped from/to), flips the owner, and sets wait/status in one call. To a human defaults to blocked + on_human; to ai clears the wait and unblocks. Prefer this over doing assign + update + add_artifact separately.",
+          "inputSchema": obj(json!({"ref":{"type":"string"},"to":{"type":"string"},"from":{"type":"string"},"note":{"type":"string"},"status":{"type":"string"},"wait":{"type":"string"},"actor":{"type":"string"},"project":{"type":"string"}}), json!(["ref","to"])) },
+        { "name": "haven_complete_item", "description": "Mark an item done: record `evidence` as an artifact (default role delivery), set status=done, and return the items/gates this unblocked (newly dispatchable). Warns if no acceptance (done_looks_like) was set. The reliable 'I finished this' path — prefer over a bare status update.",
+          "inputSchema": obj(json!({"ref":{"type":"string"},"evidence":{"type":"string"},"artifact_role":{"type":"string"},"by":{"type":"string"},"project":{"type":"string"}}), json!(["ref"])) },
     ])
 }
 
@@ -498,10 +551,52 @@ mod tests {
         assert_eq!(out.len(), 2);
         assert_eq!(out[0]["result"]["serverInfo"]["name"], "haven");
         let tools = out[1]["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 16);
+        assert_eq!(tools.len(), 21);
         assert!(tools.iter().any(|t| t["name"] == "haven_next"));
+        assert!(tools.iter().any(|t| t["name"] == "haven_next_explain"));
+        assert!(tools.iter().any(|t| t["name"] == "haven_resolve_live"));
+        assert!(tools.iter().any(|t| t["name"] == "haven_handoff"));
+        assert!(tools.iter().any(|t| t["name"] == "haven_complete_item"));
+        assert!(tools.iter().any(|t| t["name"] == "haven_graph"));
         assert!(tools.iter().any(|t| t["name"] == "haven_archive"));
         assert!(tools.iter().any(|t| t["name"] == "haven_list_projects"));
+    }
+
+    /// Guard against doc drift: the documented MCP catalogue in the skill's
+    /// surface-map must list exactly the tools `tools/list` advertises — no
+    /// undocumented tool, no stale doc row. Catalogue rows are table rows whose
+    /// first cell is a `haven_*` code span (the CLI→MCP mapping rows lead with a
+    /// CLI name, so they're skipped).
+    #[test]
+    fn surface_map_matches_tools_list() {
+        use std::collections::BTreeSet;
+        let advertised: BTreeSet<String> = tools_list()
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["name"].as_str().unwrap().to_string())
+            .collect();
+
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../skill/haven/references/surface-map.md"
+        );
+        let md = std::fs::read_to_string(path).unwrap();
+        let documented: BTreeSet<String> = md
+            .lines()
+            .filter_map(|l| {
+                let rest = l.trim_start().strip_prefix("| `haven_")?;
+                Some(format!("haven_{}", rest.split('`').next()?))
+            })
+            .collect();
+
+        assert_eq!(
+            advertised,
+            documented,
+            "surface-map.md catalogue is out of sync with tools/list.\n  only in tools/list: {:?}\n  only in surface-map: {:?}",
+            advertised.difference(&documented).collect::<Vec<_>>(),
+            documented.difference(&advertised).collect::<Vec<_>>(),
+        );
     }
 
     #[test]
@@ -551,6 +646,136 @@ mod tests {
         // Reopen revives it back into the maturity flow.
         assert_eq!(out[2]["result"]["isError"], false);
         assert_eq!(tool_payload(&out[2])["status"], "discovery");
+    }
+
+    #[test]
+    fn handoff_via_tool() {
+        let s = store();
+        let out = session(
+            &s,
+            &[
+                json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{
+                    "name":"haven_add_item",
+                    "arguments":{"title":"Build API","assign":"ai","status":"ready"}
+                }}),
+                json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{
+                    "name":"haven_handoff",
+                    "arguments":{"ref":"HV-1","to":"human","note":"please review"}
+                }}),
+            ],
+        );
+        assert_eq!(out[1]["result"]["isError"], false);
+        let res = tool_payload(&out[1]);
+        // One call flipped owner, parked it, and recorded the baton artifact.
+        assert_eq!(res["item"]["owner_kind"], "human");
+        assert_eq!(res["item"]["status"], "blocked");
+        assert_eq!(res["item"]["wait_state"], "on_human");
+        assert_eq!(res["artifact"]["role"], "handoff");
+        assert_eq!(res["artifact"]["from_owner"], "ai");
+        assert_eq!(res["artifact"]["to_owner"], "human");
+    }
+
+    #[test]
+    fn complete_item_via_tool() {
+        let s = store();
+        let out = session(
+            &s,
+            &[
+                json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{
+                    "name":"haven_add_item",
+                    "arguments":{"title":"Build it","done_looks_like":"tests pass"}
+                }}),
+                // A dependent that should become unblocked when HV-1 completes.
+                json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{
+                    "name":"haven_add_item",
+                    "arguments":{"title":"Ship it","depends_on":"HV-1"}
+                }}),
+                json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{
+                    "name":"haven_complete_item",
+                    "arguments":{"ref":"HV-1","evidence":"cargo test: ok"}
+                }}),
+            ],
+        );
+        assert_eq!(out[2]["result"]["isError"], false);
+        let res = tool_payload(&out[2]);
+        assert_eq!(res["item"]["status"], "done");
+        assert_eq!(res["artifact"]["role"], "delivery");
+        // Acceptance was set → no warnings; HV-2 is reported as unblocked.
+        assert!(res["warnings"].as_array().map_or(true, |w| w.is_empty()));
+        let unblocked: Vec<&str> = res["unblocked"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|i| i["ref"].as_str().unwrap())
+            .collect();
+        assert_eq!(unblocked, ["HV-2"]);
+    }
+
+    #[test]
+    fn graph_via_tool() {
+        let s = store();
+        let out = session(
+            &s,
+            &[
+                json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{
+                    "name":"haven_add_item","arguments":{"title":"API"}
+                }}),
+                json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{
+                    "name":"haven_add_item","arguments":{"title":"UI"}
+                }}),
+                json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{
+                    "name":"haven_add_edge","arguments":{"kind":"dependency","from":"HV-2","to":"HV-1"}
+                }}),
+                json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{
+                    "name":"haven_graph","arguments":{}
+                }}),
+            ],
+        );
+        let g = tool_payload(&out[3]);
+        assert_eq!(g["nodes"].as_array().unwrap().len(), 2);
+        let edges = g["edges"].as_array().unwrap();
+        assert_eq!(edges.len(), 1);
+        // The edge round-trips the {kind, from, to} shape add_edge took.
+        assert_eq!(edges[0]["kind"], "dependency");
+        assert_eq!(edges[0]["from"], "HV-2");
+        assert_eq!(edges[0]["to"], "HV-1");
+    }
+
+    #[test]
+    fn next_explain_and_resolve_live_via_tools() {
+        let s = store();
+        let out = session(
+            &s,
+            &[
+                // Ready but uncommitted: nothing is dispatchable yet.
+                json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{
+                    "name":"haven_add_item","arguments":{"title":"Ready, not committed","status":"ready"}
+                }}),
+                json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{
+                    "name":"haven_next_explain","arguments":{}
+                }}),
+                // Supersede HV-1 with a fresh HV-2, then resolve the stale ref forward.
+                json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{
+                    "name":"haven_add_item","arguments":{"title":"Successor"}
+                }}),
+                json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{
+                    "name":"haven_evolve","arguments":{"op":"supersede","refs":["HV-1"],"with":"HV-2"}
+                }}),
+                json!({"jsonrpc":"2.0","id":5,"method":"tools/call","params":{
+                    "name":"haven_resolve_live","arguments":{"ref":"HV-1"}
+                }}),
+            ],
+        );
+        // Explain diagnoses the empty queue rather than returning items.
+        let explain = tool_payload(&out[1]);
+        assert_eq!(explain["dispatchable"], 0);
+        assert_eq!(explain["counts"]["ready_but_uncommitted"], 1);
+        // The stale ref resolves forward to its live descendant.
+        assert_eq!(out[4]["result"]["isError"], false);
+        let live = tool_payload(&out[4]);
+        let arr = live.as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["ref"], "HV-2");
     }
 
     #[test]

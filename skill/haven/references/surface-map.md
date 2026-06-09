@@ -2,13 +2,13 @@
 
 The two front-ends drive the **same** store but are **not 1:1**. The CLI has many
 friendly verbs (for a human typing); the MCP is a deliberately smaller, more
-general set of 16 tools (for an agent). When a workflow runs over MCP, translate
+general set of 21 tools (for an agent). When a workflow runs over MCP, translate
 using the mapping below.
 
 ## Contents
 - [Enums (valid values)](#enums)
 - [CLI command surface](#cli-command-surface)
-- [MCP tool catalogue (16 tools)](#mcp-tool-catalogue)
+- [MCP tool catalogue (21 tools)](#mcp-tool-catalogue)
 - [CLI → MCP mapping](#cli--mcp-mapping)
 - [CLI-only operations](#cli-only-operations)
 - [The content channel](#the-content-channel)
@@ -51,18 +51,22 @@ haven item add "<title>" [--type] [--body] [--done-looks-like "…"] [--why "…
                          [--status] [--priority N] [--commit] [--assign human|ai]
                          [--parent <ref>] [--depends-on <ref>] [--group <ref>]
 haven item list [--status] [--type] [--owner] [--committed] [--icebox] [--group <ref>]
+                [--wait on_human|on_dependency|on_external] [--stale <days>]
 haven item get <ref> [--include edges,artifacts,lineage]
-haven item update <ref> [--title] [--body] [--done-looks-like "…"] [--why "…"]
-                        [--status] [--priority N] [--type] [--wait]
-haven item commit <ref> [--priority N]
-haven item uncommit <ref>
+haven item update <ref>… [--title] [--body] [--done-looks-like "…"] [--why "…"]
+                        [--status] [--priority N] [--type] [--wait]  # 1+ refs, same update each
+haven item commit <ref>… [--priority N]      # one or more refs (grooming)
+haven item uncommit <ref>…
 haven item assign <ref> --to human|ai [--actor <name>]
+haven item handoff <ref> --to human|ai [--from] [--note "…"] [--status] [--wait] [--actor]
+haven item complete <ref> [--evidence "…"] [--role delivery] [--by]
 haven item rank <ref> [--before <ref>] [--after <ref>]
-haven item archive <ref> [--rationale "…"]
+haven item archive <ref>… [--rationale "…"]  # one or more refs (grooming)
 haven item reopen  <ref> [--rationale "…"]
 
 # Dispatch
 haven next [--owner human|ai] [--limit N]
+haven graph [--lineage]        # whole project: all nodes + edges in one read
 
 # Edges
 haven decompose <parent> [--into <ref> …] [--remove <ref> …]
@@ -74,6 +78,7 @@ haven evolve split <ref> --into "<title>" [--into …] [--rationale] [--by]
 haven evolve merge <ref> <ref> … --title "<t>" [--rationale] [--by]
 haven evolve supersede <ref> --with <ref> [--rationale] [--by]
 haven evolve graph <ref> [--direction ancestors|descendants|both] [--depth N]
+haven evolve resolve <ref>     # stale ref → its live descendant(s)
 
 # Search & content
 haven search "<query>" [--limit N]
@@ -92,20 +97,23 @@ haven sync [status] [--watch]
 
 ## MCP tool catalogue
 
-16 tools, each taking an optional `project` and naming items by `ref` or
+21 tools, each taking an optional `project` and naming items by `ref` or
 `public_id`. Required args in **bold**.
 
 | Tool | Args |
 |---|---|
-| `haven_list_items` | `status?, type?, owner?, committed?, icebox?, group?` |
+| `haven_list_items` | `status?, type?, owner?, committed?, icebox?, group?, wait?, stale?` |
 | `haven_get_item` | **`ref`**, `include?: ["edges","artifacts","lineage"]` |
 | `haven_next` | `owner?, limit?` |
+| `haven_next_explain` | `owner?` — diagnose an empty queue (counts by reason + hint) |
 | `haven_add_item` | **`title`**, `type?, body?, done_looks_like?, why?, status?, priority?, commit?, assign?, parent?, depends_on?, group?` |
 | `haven_update_item` | **`ref`**, `title?, body?, done_looks_like?, why?, status?, priority?, type?, wait?, commit?, assign?, actor?` |
 | `haven_add_edge` | **`kind`** (`decomposition`\|`dependency`\|`grouping`), **`from`**, **`to`**, `remove?` |
 | `haven_evolve` | **`op`** (`split`\|`merge`\|`supersede`), **`refs`**, `into?, with?, title?, rationale?, by?` |
 | `haven_lineage` | **`ref`**, `direction?, depth?` |
+| `haven_resolve_live` | **`ref`** — follow a stale (superseded/archived) ref to its live descendant(s) |
 | `haven_search` | **`query`**, `limit?` |
+| `haven_graph` | `lineage?` — the whole project graph (all nodes + `{kind,from,to}` edges) in one read |
 | `haven_get_artifact` | **`ref`**, `role?, path?` |
 | `haven_add_artifact` | **`ref`**, **`role`**, `kind?, content?, name?, path?, uri?, title?, from?, to?, by?` |
 | `haven_status` | `project?` |
@@ -113,6 +121,8 @@ haven sync [status] [--watch]
 | `haven_add_project` | **`key`**, **`title`**, `prefix?, description?` |
 | `haven_archive` | **`ref`**, `rationale?, by?` |
 | `haven_reopen` | **`ref`**, `rationale?, by?` |
+| `haven_handoff` | **`ref`**, **`to`** (`human`\|`ai`), `from?, note?, status?, wait?, actor?` — atomic baton-pass |
+| `haven_complete_item` | **`ref`**, `evidence?, artifact_role?, by?` — mark done, record evidence, report what it unblocked |
 
 ## CLI → MCP mapping
 
@@ -124,13 +134,24 @@ The collapses that catch people out:
 | `item update` **+** `commit` / `uncommit` / `assign` | **all one tool:** `haven_update_item` (fields `commit: true/false`, `assign`, plus the update fields) |
 | `decompose` / `depend` / `group` | **one tool:** `haven_add_edge {kind: "decomposition"\|"dependency"\|"grouping", from, to}` |
 | `evolve split`/`merge`/`supersede` | `haven_evolve {op, refs, …}` |
-| `evolve graph` | `haven_lineage` |
+| `evolve graph` / `evolve resolve` | `haven_lineage` / `haven_resolve_live` |
 | `item archive` / `reopen` | `haven_archive` / `haven_reopen` |
-| `next`, `search`, `status`, `artifact get`/`add` | `haven_next`, `haven_search`, `haven_status`, `haven_get_artifact`/`haven_add_artifact` |
+| `item handoff` | `haven_handoff` |
+| `item complete` | `haven_complete_item` |
+| `next` / `next --explain` | `haven_next` / `haven_next_explain` |
+| `search`, `status`, `artifact get`/`add` | `haven_search`, `haven_status`, `haven_get_artifact`/`haven_add_artifact` |
+| `graph` | `haven_graph` |
 | `project list` / `add` | `haven_list_projects` / `haven_add_project` |
 
 So, over MCP: to commit, call `haven_update_item {ref, commit: true, priority}`;
 to add a decomposition edge, `haven_add_edge {kind:"decomposition", from, to}`.
+
+**Batch grooming.** The CLI `item update` / `commit` / `uncommit` / `archive`
+verbs accept **multiple refs** in one call (`haven item archive HV-3 HV-7 HV-9`,
+`haven item update --status ready HV-1 HV-2`), validate them all up front, and
+return an array — so "mark these ready, archive those, commit these two" is one op
+each. `update` applies the *same* change to every ref. Over MCP, apply one ref per
+call (loop); there's no batch tool.
 
 **Selecting a project over MCP.** A remote/headless client has no local
 `current_project`. It calls `haven_list_projects` to see what's available, then

@@ -79,6 +79,17 @@ sql_enum! {
     OwnerKind { Human => "human", Ai => "ai" }
 }
 
+impl OwnerKind {
+    /// The other owner — used to infer a handoff's `from` when the item has no
+    /// current owner (a human↔ai baton-pass has exactly two sides).
+    pub fn opposite(self) -> Self {
+        match self {
+            OwnerKind::Human => OwnerKind::Ai,
+            OwnerKind::Ai => OwnerKind::Human,
+        }
+    }
+}
+
 sql_enum! {
     /// Why a node is parked (orthogonal to status).
     WaitState {

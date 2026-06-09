@@ -20,8 +20,9 @@ this once per session, not per command (see `surface-map.md` for the selection m
 - [5. Decompose vs group vs depend](#5-decompose-vs-group-vs-depend)
 - [6. Evolve — split / merge / supersede](#6-evolve)
 - [7. Handoff](#7-handoff)
-- [8. Artifacts & content](#8-artifacts--content)
-- [9. Gates & reviews](#9-gates--reviews)
+- [8. Complete](#8-complete)
+- [9. Artifacts & content](#9-artifacts--content)
+- [10. Gates & reviews](#10-gates--reviews)
 - [Conventions: acceptance, open questions, test-and-learn](#conventions)
 - [Worked end-to-end example](#worked-example)
 - [Anti-patterns](#anti-patterns)
@@ -39,9 +40,9 @@ dispatching:
 | `discovery` | Unknowns remain before it can be defined | Resolve its **open questions** (see [Conventions](#conventions)); when none remain → `definition`. |
 | `definition` | Understood, needs a spec/decision | Write the spec (artifact), set **`done_looks_like`**; when defined → `ready`. |
 | `ready` | Fully specified, dispatchable | It must carry `done_looks_like`. Dispatch (workflow 4); set `in_progress`. |
-| `in_progress` | Being worked | Track; verify output against `done_looks_like` on completion. |
+| `in_progress` | Being worked | Track; finish with **`item complete`** (workflow 8), which verifies against `done_looks_like`. |
 | `blocked` | Parked on something | Check `wait_state` / the blocking dependency; clear when resolved. |
-| `done` | Complete | Verify against `done_looks_like`; check whether any **gate** is now unblocked (workflow 9). |
+| `done` | Complete | Reached via `item complete` (workflow 8); it reports the items/gates the completion **unblocked** — your next dispatch set. |
 | `superseded` / `archived` | Evolved away / dropped | Terminal; reachable through lineage. |
 
 ---
@@ -69,7 +70,7 @@ dispatching:
 - **Don't raise status above `discovery`** unless the user says it's already
   well-defined. **Don't commit on capture** — "add to backlog" ≠ "I'm doing this."
 - If the conversation produced a *document* (research, a rough spec), write it as a
-  file and register it as an artifact (workflow 8) — don't cram it into `body`.
+  file and register it as an artifact (workflow 9) — don't cram it into `body`.
 
 ```bash
 haven item add "Rate-limit the public search endpoint" --body "Abuse vector flagged in perf review"
@@ -108,13 +109,15 @@ ordered plan.
 
 **Steps:**
 1. Pull the under-defined work: `haven item list --status discovery --pretty`,
-   `--status definition`, and `--icebox`.
+   `--status definition`, and `--icebox`. Surface rot with `--stale <days>` (items
+   untouched for N+ days), and answer "what's waiting on me?" with
+   `--wait on_human` (or `--wait on_external` for real-world blockers).
 2. For each, judge and apply:
    - Well-enough-defined to dispatch → set its acceptance and mark ready in one go:
      `haven item update HV-7 --status ready --done-looks-like "what success is"`.
      A `ready` item without `done_looks_like` can't be verified — always set it.
    - Needs a spec/decision first → `--status definition`, write/attach the artifact
-     (workflow 8).
+     (workflow 9).
    - Too big → split (workflow 6). Duplicate → merge (workflow 6).
    - Stale / won't-do → `haven item archive HV-7 --rationale "…"` (never delete).
    - Floating but clearly in-play → commit (workflow 2).
@@ -138,18 +141,20 @@ ordered plan.
 haven next --pretty                 # top of the dispatch queue
 haven next --owner human --limit 3  # what the human could pick up
 haven next --owner ai               # what an AI agent should take
+haven next --explain --owner ai     # WHY the queue is empty (when it is)
 ```
 
 **Heuristics:**
-- **If `next` is empty, diagnose — don't shrug.** Common causes: nothing committed;
-  committed items still `discovery`/`definition` (not `ready`); everything blocked
-  by a dependency; or items in a `wait_state`. Reconstruct which from `item list`
-  filters, report it, and offer the fix (commit it / mark it ready / resolve the
-  blocker). Run this diagnosis automatically whenever `next` is empty.
+- **If `next` is empty, diagnose — don't shrug.** Run `haven next --explain`
+  (MCP `haven_next_explain`): it returns a per-reason breakdown — `owner_mismatch`,
+  `blocked_by_dependency`, `waiting`, `committed_not_ready`, `ready_but_uncommitted`
+  — and a `hint`. Report the reason and offer the fix (commit it / mark it ready /
+  resolve the blocker), rather than reconstructing it by hand or inventing work.
 - **Respect ownership.** Filter `--owner ai` when dispatching to an agent; never
   hand an agent a human-owned node waiting on a real-world action.
 - **Advance maturity on pickup:** `--status in_progress` when work starts (and
-  `assign` if needed), `--status done` on completion.
+  `assign` if needed); finish with **`item complete`** (workflow 8), not a bare
+  `--status done` — it records evidence and tells you what unblocked.
 
 ## 5. Decompose vs group vs depend
 
@@ -197,30 +202,52 @@ lineage.
 **Trigger:** an AI finishes its part and a human must act (review, decide, sign
 something) — or vice versa.
 
-**Steps:**
-1. Write the handoff note as a file and register it (it carries `from`/`to`):
-   ```bash
-   haven artifact add HV-7 --role handoff --from ai --to human \
-     --content "Implemented the API; needs your review of the rate-limit defaults." \
-     --name 2026-06-09-to-tom.md
-   ```
-2. Flip ownership and set the wait-state so it's clearly the other party's move:
-   ```bash
-   haven item assign HV-7 --to human
-   haven item update HV-7 --status blocked --wait on_human
-   ```
-3. On hand-back, reverse it: `assign --to ai`, `--wait none`, `--status ready` or
-   `in_progress`.
+**Use the atomic tool** — `haven item handoff` (MCP `haven_handoff`). It does the
+three steps in one call: records a `handoff` artifact (stamped `from`/`to`), flips
+the owner, and sets the wait-state/status. Don't hand-assemble `assign` + `update`
++ `artifact add` — you'll do it inconsistently.
+
+```bash
+haven item handoff HV-7 --to human \
+  --note "Implemented the API; needs your review of the rate-limit defaults."
+# → owner=human, status=blocked, wait=on_human; a handoff artifact under notes/.
+haven item handoff HV-7 --to ai        # hand back: clears the wait, unblocks it
+```
+
+**Defaults (direction-aware; override with `--status` / `--wait`):**
+- **to a human:** `status=blocked`, `wait=on_human` (now waiting on them);
+- **to ai:** the wait clears, and a `blocked` item becomes `ready` (actionable).
 
 **Heuristics:**
-- A handoff is a *transition*, not just a note — set `from`/`to` and flip ownership
-  in the same logical step.
-- `wait_state` says *why* it's parked: `on_human`, `on_external` (a real-world
-  event), `on_dependency` (prefer a real dependency edge for that).
-- A handoff'd, waiting item correctly **drops out of `next`** — that's the system
-  working.
+- A handoff is a *transition*, not just a note — the atomic tool guarantees the
+  owner flip and wait-state happen together with the note.
+- A handed-off, waiting item correctly **drops out of `next`** — that's the system
+  working. (Prefer a real dependency edge over `on_dependency` for blockers.)
 
-## 8. Artifacts & content
+## 8. Complete
+
+**Trigger:** an item's work is finished and verified.
+
+**Use the atomic tool** — `haven item complete` (MCP `haven_complete_item`). It
+records the evidence as an artifact (default role `delivery`), sets `status=done`,
+and **returns the items/gates the completion unblocked** — your next dispatch set.
+
+```bash
+haven item complete HV-1 --evidence "cargo test --workspace: 72 passed"
+# → {item: …done…, artifact: delivery.md, unblocked: [HV-2], warnings: []}
+```
+
+**Heuristics:**
+- **Verify against `done_looks_like` before completing.** If the item has no
+  acceptance, `complete` still runs but **warns** — treat that warning as a signal
+  the item was under-defined, not noise.
+- **Attach evidence** (test output, a summary, a link) — completion should be
+  auditable, not a bare status flip.
+- **Act on `unblocked`.** Those items just became dispatchable — feed them into the
+  next `dispatch` pass (or surface a now-unblocked gate for review, workflow 10).
+- Completing a `superseded`/`archived` item is refused — `reopen` it first.
+
+## 9. Artifacts & content
 
 **Trigger:** real work product exists (spec, research, design, decision), or a
 filesystem-less client must read/write content.
@@ -250,7 +277,7 @@ filesystem-less client must read/write content.
   use `haven note`. `notes/` is a free filesystem; over-registering clutters the
   queryable layer.
 
-## 9. Gates & reviews
+## 10. Gates & reviews
 
 **Trigger:** a batch of work needs a review checkpoint before the next phase — "once
 the API, UI, and tests are done, review the auth feature before we ship."
@@ -351,19 +378,29 @@ haven next --owner ai --pretty
 # → HV-1 only. HV-2 is committed but still discovery, so absent — correct.
 ```
 
-**User:** "It's done, but I want to review the cache TTL before we ship."
+**User:** "The AI built it, but I want to review the cache TTL before we call it
+done."
 
 ```bash
-haven item update HV-1 --status done
-haven artifact add HV-1 --role handoff --from ai --to human \
-  --content "Done. One open call: TTL defaulted to 10m — confirm before ship." --name to-tom.md
-haven item assign HV-1 --to human
-haven item update HV-1 --status blocked --wait on_human   # drops out of `next` until Tom acts
+# Not done yet — a human review is the remaining work. Hand it off atomically:
+# one call records the note, flips the owner to human, and parks it on_human.
+haven item handoff HV-1 --to human \
+  --note "Cache implemented; p95 verify 3ms. One open call: TTL defaulted to 10m — confirm before ship."
+# → owner=human, status=blocked, wait=on_human, handoff artifact under notes/.
+# HV-1 drops out of `next` until Tom acts — correct.
 ```
 
-Net: every structure change went through a tool; spec and handoff live as files
-(registered, queryable); nothing was deleted; `next` stayed honest; the two axes
-were managed independently.
+**User (later):** "TTL's fine. Done."
+
+```bash
+# Tom confirms → complete it with evidence; this also reports what it unblocked.
+haven item complete HV-1 --evidence "TTL reviewed and accepted at 10m. Shipping."
+# → status=done; unblocked: [HV-4 ship gate, …] if anything depended on HV-1.
+```
+
+Net: every structure change went through a tool (the atomic `handoff`/`complete`
+where they fit); the spec and handoff note live as files (registered, queryable);
+nothing was deleted; `next` stayed honest; the two axes were managed independently.
 
 ---
 

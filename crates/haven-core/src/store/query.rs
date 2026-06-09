@@ -8,7 +8,35 @@ use serde::Serialize;
 use crate::error::Result;
 use crate::model::*;
 
-use super::{item_from_row, Store, ITEM_FROM, ITEM_SELECT};
+use super::{item_from_row, EdgeKind, ItemFilter, Store, ITEM_FROM, ITEM_SELECT};
+
+/// One structural edge in a [`ProjectGraph`], as a `{kind, from, to}` ref triple
+/// — the same shape `add_edge` accepts, so a graph export round-trips.
+#[derive(Debug, Clone, Serialize)]
+pub struct GraphEdge {
+    pub kind: EdgeKind,
+    pub from: String,
+    pub to: String,
+}
+
+/// A lineage link in a [`ProjectGraph`]: `{event, from, to}` per lineage edge.
+#[derive(Debug, Clone, Serialize)]
+pub struct LineageLink {
+    pub event: String,
+    pub from: String,
+    pub to: String,
+}
+
+/// The whole project work-graph in one payload: every node plus a flat edge list
+/// (and optionally lineage links). Returned by [`Store::project_graph`].
+#[derive(Debug, Clone, Serialize)]
+pub struct ProjectGraph {
+    pub project: String,
+    pub nodes: Vec<Item>,
+    pub edges: Vec<GraphEdge>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub lineage: Vec<LineageLink>,
+}
 
 /// Direction for `evolve graph`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,6 +69,18 @@ pub struct LineageGraph {
 const ORDER: &str =
     " ORDER BY n.priority IS NULL, n.priority, n.sort_key IS NULL, n.sort_key, n.created_at, n.id";
 
+/// The `haven next` dispatch filter: committed, ready, not waiting, with no open
+/// dependency (SPEC §1). Shared verbatim by `next` (which returns the items) and
+/// `next_explain`'s `count_dispatchable` (which counts them) so the diagnostic
+/// can never disagree with the real queue. References only the `nodes` alias `n`.
+const DISPATCHABLE_PREDICATE: &str = "n.committed = 1 AND n.status = 'ready'
+             AND n.wait_state IS NULL
+             AND NOT EXISTS (
+               SELECT 1 FROM dependency_edges d
+               JOIN nodes p ON p.id = d.depends_on_id
+               WHERE d.node_id = n.id AND p.status NOT IN ('done','superseded','archived')
+             )";
+
 impl Store {
     /// `haven next`: committed, ready, not waiting, with no open dependency.
     /// Highest priority band first, then `sort_key` (SPEC §1).
@@ -53,13 +93,7 @@ impl Store {
         let (project_id, _) = self.require_project(project)?;
         let mut sql = format!(
             "SELECT {ITEM_SELECT} FROM {ITEM_FROM}
-             WHERE n.project_id = ?1 AND n.committed = 1 AND n.status = 'ready'
-               AND n.wait_state IS NULL
-               AND NOT EXISTS (
-                 SELECT 1 FROM dependency_edges d
-                 JOIN nodes p ON p.id = d.depends_on_id
-                 WHERE d.node_id = n.id AND p.status NOT IN ('done','superseded','archived')
-               )"
+             WHERE n.project_id = ?1 AND {DISPATCHABLE_PREDICATE}"
         );
         let mut args: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(project_id)];
         if let Some(owner) = owner {
@@ -77,6 +111,96 @@ impl Store {
             item_from_row,
         )?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// Explain the local dispatch queue: useful when `next` is empty.
+    pub fn next_explain(
+        &self,
+        project: Option<&str>,
+        owner: Option<OwnerKind>,
+    ) -> Result<serde_json::Value> {
+        let (project_id, key) = self.require_project(project)?;
+        let dispatchable = self.count_dispatchable(project_id, owner)?;
+        let dispatchable_any_owner = self.count_dispatchable(project_id, None)?;
+        let owner_mismatch = owner
+            .map(|_| dispatchable_any_owner.saturating_sub(dispatchable))
+            .unwrap_or(0);
+        let waiting = self.count_next_where(
+            project_id,
+            owner,
+            "n.committed = 1 AND n.status = 'ready' AND n.wait_state IS NOT NULL",
+        )?;
+        let blocked_by_dependency = self.count_next_where(
+            project_id,
+            owner,
+            "n.committed = 1 AND n.status = 'ready' AND n.wait_state IS NULL
+             AND EXISTS (
+               SELECT 1 FROM dependency_edges d
+               JOIN nodes p ON p.id = d.depends_on_id
+               WHERE d.node_id = n.id AND p.status NOT IN ('done','superseded','archived')
+             )",
+        )?;
+        let committed_not_ready = self.count_next_where(
+            project_id,
+            owner,
+            "n.committed = 1 AND n.status NOT IN ('ready','done','superseded','archived')",
+        )?;
+        let ready_but_uncommitted =
+            self.count_next_where(project_id, owner, "n.committed = 0 AND n.status = 'ready'")?;
+
+        let hint = if dispatchable > 0 {
+            "queue has dispatchable items"
+        } else if owner_mismatch > 0 {
+            "ready items exist, but not for the requested owner"
+        } else if blocked_by_dependency > 0 {
+            "ready items are blocked by open dependencies"
+        } else if waiting > 0 {
+            "ready items are waiting on a human, dependency, or external event"
+        } else if committed_not_ready > 0 {
+            "committed items exist but are not ready yet"
+        } else if ready_but_uncommitted > 0 {
+            "ready items exist but are still uncommitted"
+        } else {
+            "no ready committed work found"
+        };
+
+        Ok(serde_json::json!({
+            "project": key,
+            "owner": owner.map(|o| o.as_str()),
+            "dispatchable": dispatchable,
+            "hint": hint,
+            "counts": {
+                "owner_mismatch": owner_mismatch,
+                "blocked_by_dependency": blocked_by_dependency,
+                "waiting": waiting,
+                "committed_not_ready": committed_not_ready,
+                "ready_but_uncommitted": ready_but_uncommitted,
+            }
+        }))
+    }
+
+    fn count_dispatchable(&self, project_id: i64, owner: Option<OwnerKind>) -> Result<i64> {
+        self.count_next_where(project_id, owner, DISPATCHABLE_PREDICATE)
+    }
+
+    fn count_next_where(
+        &self,
+        project_id: i64,
+        owner: Option<OwnerKind>,
+        predicate: &str,
+    ) -> Result<i64> {
+        let mut sql =
+            format!("SELECT count(*) FROM nodes n WHERE n.project_id = ?1 AND {predicate}");
+        let mut args: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(project_id)];
+        if let Some(owner) = owner {
+            sql.push_str(&format!(" AND n.owner_kind = ?{}", args.len() + 1));
+            args.push(Box::new(owner.as_str()));
+        }
+        Ok(self.conn.query_row(
+            &sql,
+            rusqlite::params_from_iter(args.iter().map(|b| b.as_ref())),
+            |r| r.get(0),
+        )?)
     }
 
     /// FTS5 search over node title/body, ranked by relevance.
@@ -118,6 +242,85 @@ impl Store {
                AND n.status NOT IN ('superseded','archived'){ORDER}"
         ))?;
         let rows = stmt.query_map([node_id], item_from_row)?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// The whole project work-graph in one read: every node, plus the structural
+    /// edges as a flat `{kind, from, to}` list (the same shape `add_edge` takes,
+    /// so it round-trips), and optionally the lineage links. This is the call an
+    /// app uses to render the graph, or an agent uses to reason over the entire
+    /// dependency structure at once (vs. N+1 per-node fetches). `nodes` is the
+    /// faithful set — including `superseded`/`archived`; filter client-side.
+    pub fn project_graph(&self, project: Option<&str>, lineage: bool) -> Result<ProjectGraph> {
+        let (project_id, key) = self.require_project(project)?;
+        let nodes = self.list_items(project, &ItemFilter::default())?;
+        let mut edges = Vec::new();
+        edges.extend(self.edges_of_kind(
+            project_id,
+            EdgeKind::Decomposition,
+            "SELECT pn.ref, cn.ref FROM decomposition_edges e
+               JOIN nodes pn ON pn.id = e.parent_id
+               JOIN nodes cn ON cn.id = e.child_id
+             WHERE pn.project_id = ?1 ORDER BY pn.ref, cn.ref",
+        )?);
+        edges.extend(self.edges_of_kind(
+            project_id,
+            EdgeKind::Dependency,
+            "SELECT nn.ref, dn.ref FROM dependency_edges e
+               JOIN nodes nn ON nn.id = e.node_id
+               JOIN nodes dn ON dn.id = e.depends_on_id
+             WHERE nn.project_id = ?1 ORDER BY nn.ref, dn.ref",
+        )?);
+        edges.extend(self.edges_of_kind(
+            project_id,
+            EdgeKind::Grouping,
+            "SELECT gn.ref, mn.ref FROM grouping_edges e
+               JOIN nodes gn ON gn.id = e.group_id
+               JOIN nodes mn ON mn.id = e.member_id
+             WHERE gn.project_id = ?1 ORDER BY gn.ref, mn.ref",
+        )?);
+        let lineage = if lineage {
+            self.project_lineage_links(project_id)?
+        } else {
+            Vec::new()
+        };
+        Ok(ProjectGraph {
+            project: key,
+            nodes,
+            edges,
+            lineage,
+        })
+    }
+
+    /// One structural edge layer for a project, as `{kind, from, to}` ref pairs.
+    fn edges_of_kind(&self, project_id: i64, kind: EdgeKind, sql: &str) -> Result<Vec<GraphEdge>> {
+        let mut stmt = self.conn.prepare(sql)?;
+        let rows = stmt.query_map([project_id], |r| {
+            Ok(GraphEdge {
+                kind,
+                from: r.get(0)?,
+                to: r.get(1)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// Lineage links for the project: `{event, from, to}` per lineage edge.
+    fn project_lineage_links(&self, project_id: i64) -> Result<Vec<LineageLink>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT ev.event_type, fn.ref, tn.ref FROM lineage_edges le
+               JOIN lineage_events ev ON ev.id = le.event_id
+               JOIN nodes fn ON fn.id = le.from_node_id
+               JOIN nodes tn ON tn.id = le.to_node_id
+             WHERE fn.project_id = ?1 ORDER BY ev.id, fn.ref, tn.ref",
+        )?;
+        let rows = stmt.query_map([project_id], |r| {
+            Ok(LineageLink {
+                event: r.get(0)?,
+                from: r.get(1)?,
+                to: r.get(2)?,
+            })
+        })?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 

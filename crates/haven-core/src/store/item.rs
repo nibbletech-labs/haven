@@ -3,12 +3,23 @@
 //! which emit lineage events). All methods on [`Store`].
 
 use rusqlite::{params, Connection, OptionalExtension, Row};
+use serde::Serialize;
 
 use crate::error::{HavenError, Result};
 use crate::model::*;
 use crate::sortkey;
 
-use super::{item_from_row, new_uuid, Store, ITEM_FROM, ITEM_SELECT};
+use super::{item_from_row, new_uuid, NewArtifact, Store, ITEM_FROM, ITEM_SELECT};
+
+/// Milliseconds since the Unix epoch — only used to disambiguate handoff
+/// artifact filenames so successive handoffs on one item don't overwrite.
+fn epoch_millis() -> u128 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0)
+}
 
 /// Parameters for `item add`. All fields beyond `title` are optional — the
 /// default is a bare, floating, uncommitted, `discovery` node (SPEC §3).
@@ -36,6 +47,59 @@ pub enum WaitUpdate {
     Clear,
 }
 
+/// Optional inputs for [`Store::handoff`] beyond the required target owner.
+/// `None` fields take the documented defaults.
+#[derive(Debug, Default)]
+pub struct HandoffInput<'a> {
+    /// Who is handing off. Defaults to the item's current owner, else the
+    /// opposite of the target (a baton-pass has two sides).
+    pub from: Option<OwnerKind>,
+    /// The baton note, recorded as a `handoff` artifact under `notes/`.
+    pub note: Option<&'a str>,
+    /// Status on pickup. Defaults to `blocked` when handing to a human (the work
+    /// is now waiting on them); unchanged otherwise.
+    pub status: Option<Status>,
+    /// Wait-state. Defaults to `on_human` when the target is human; unchanged
+    /// otherwise.
+    pub wait: Option<WaitState>,
+    /// Actor handle recorded as the new assignee and the artifact author.
+    pub actor: Option<&'a str>,
+}
+
+/// The result of a handoff: the updated item and the handoff artifact (when a
+/// note was recorded).
+#[derive(Debug, Serialize)]
+pub struct HandoffResult {
+    pub item: Item,
+    pub artifact: Option<Artifact>,
+}
+
+/// Optional inputs for [`Store::complete_item`].
+#[derive(Debug, Default)]
+pub struct CompleteInput<'a> {
+    /// Proof the work is done (test output, a summary, a link). Recorded as an
+    /// artifact so the completion is auditable.
+    pub evidence: Option<&'a str>,
+    /// Role for the evidence artifact. Defaults to `delivery`.
+    pub artifact_role: Option<ArtifactRole>,
+    /// Creator handle recorded on the evidence artifact.
+    pub by: Option<&'a str>,
+}
+
+/// The result of completing an item: the item (now `done`), the evidence
+/// artifact (when given), the items/gates this completion unblocked, and any
+/// advisory warnings (e.g. no acceptance was set).
+#[derive(Debug, Serialize)]
+pub struct CompleteResult {
+    pub item: Item,
+    pub artifact: Option<Artifact>,
+    /// Items that depended on this one and now have no open dependency — the
+    /// newly-actionable work (includes gates whose triggers are all complete).
+    pub unblocked: Vec<Item>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
+}
+
 /// Mutable fields for `item update`. `None` means "leave unchanged".
 #[derive(Debug, Default, Clone)]
 pub struct ItemUpdate {
@@ -59,6 +123,12 @@ pub struct ItemFilter {
     /// `icebox` view: committed = 0 and not archived/superseded.
     pub icebox: bool,
     pub group: Option<String>,
+    /// Items parked on a specific wait-state — answers "what's waiting on me?"
+    /// (`on_human`) or "stuck on something external?" (`on_external`).
+    pub wait: Option<WaitState>,
+    /// Items untouched for at least this many days (by `updated_at`) — surfaces
+    /// stale/forgotten work.
+    pub stale_days: Option<i64>,
 }
 
 impl Store {
@@ -165,6 +235,18 @@ impl Store {
         if filter.icebox {
             sql.push_str(" AND n.committed = 0 AND n.status NOT IN ('archived','superseded')");
         }
+        if let Some(wait) = filter.wait {
+            sql.push_str(&format!(" AND n.wait_state = ?{}", args.len() + 1));
+            args.push(Box::new(wait.as_str()));
+        }
+        if let Some(days) = filter.stale_days {
+            // `updated_at` is SQLite `datetime('now')`; compare against the cutoff.
+            sql.push_str(&format!(
+                " AND n.updated_at < datetime('now', ?{})",
+                args.len() + 1
+            ));
+            args.push(Box::new(format!("-{days} days")));
+        }
         if let Some(group) = &filter.group {
             let group_id = self.resolve_node_id(project_id, group)?;
             sql.push_str(&format!(
@@ -243,6 +325,21 @@ impl Store {
         self.get_item(project, selector, &[])
     }
 
+    /// Apply the same update to several items in one grooming step ("mark these
+    /// ready"). Refs are validated up front, so a typo aborts the batch before
+    /// any item is touched. Returns the updated items.
+    pub fn update_items(
+        &self,
+        project: Option<&str>,
+        refs: &[&str],
+        upd: ItemUpdate,
+    ) -> Result<Vec<Item>> {
+        self.validate_refs(project, refs)?;
+        refs.iter()
+            .map(|r| self.update_item(project, r, upd.clone()))
+            .collect()
+    }
+
     /// Commitment axis: float → committed (optionally setting a priority band).
     pub fn commit_item(
         &self,
@@ -279,6 +376,40 @@ impl Store {
         self.get_item(project, selector, &[])
     }
 
+    /// Commit several items in one grooming step ("commit these two"). All refs
+    /// are validated up front, so a typo aborts the batch before any write rather
+    /// than committing a prefix. Returns the updated items.
+    pub fn commit_items(
+        &self,
+        project: Option<&str>,
+        refs: &[&str],
+        priority: Option<i64>,
+    ) -> Result<Vec<Item>> {
+        self.validate_refs(project, refs)?;
+        refs.iter()
+            .map(|r| self.commit_item(project, r, priority))
+            .collect()
+    }
+
+    /// Uncommit several items at once (validated up front). Returns the updated
+    /// items.
+    pub fn uncommit_items(&self, project: Option<&str>, refs: &[&str]) -> Result<Vec<Item>> {
+        self.validate_refs(project, refs)?;
+        refs.iter()
+            .map(|r| self.uncommit_item(project, r))
+            .collect()
+    }
+
+    /// Resolve every ref (erroring on the first unknown) before a batch mutation,
+    /// so an unknown ref aborts the whole batch instead of half-applying it.
+    fn validate_refs(&self, project: Option<&str>, refs: &[&str]) -> Result<()> {
+        let (project_id, _key) = self.require_project(project)?;
+        for r in refs {
+            self.resolve_node_id(project_id, r)?;
+        }
+        Ok(())
+    }
+
     /// Ownership: set who executes the node and an optional actor handle.
     pub fn assign_item(
         &self,
@@ -295,6 +426,174 @@ impl Store {
             params![owner, actor, node_id],
         )?;
         self.get_item(project, selector, &[])
+    }
+
+    /// Atomic handoff — the baton-pass when a node changes hands (ai↔human).
+    /// Does in one call the three steps agents otherwise do inconsistently:
+    /// records a `handoff` artifact (the note, stamped with `from`/`to`), flips
+    /// the owner, and sets the wait-state/status. Direction-aware defaults (an
+    /// explicit `status`/`wait` in [`HandoffInput`] overrides them): handing to a
+    /// human parks it `blocked` + `on_human` (now waiting on them); handing to ai
+    /// clears the wait and, if it was `blocked`, makes it `ready` (actionable
+    /// again). Returns the updated item + the handoff artifact (when a note given).
+    ///
+    /// Best-effort composition, not a single transaction: a handoff spans the
+    /// filesystem (the artifact file) and several row writes, so it can't be one
+    /// atomic unit. Ordered artifact → owner → state so a mid-way failure leaves
+    /// the most recoverable state (the note is always recorded first).
+    pub fn handoff(
+        &self,
+        project: Option<&str>,
+        selector: &str,
+        to: OwnerKind,
+        opts: HandoffInput,
+    ) -> Result<HandoffResult> {
+        // Validate the item exists up front (clean error before any write), and
+        // read the current owner/status to default `from` and the new state.
+        let before = self.get_item(project, selector, &[])?;
+        let from = opts
+            .from
+            .or(before.owner_kind)
+            .unwrap_or_else(|| to.opposite());
+
+        // 1. Record the baton note as a handoff artifact (preserves from/to+text).
+        //    A unique filename so successive handoffs don't overwrite each other.
+        let artifact = match opts.note {
+            Some(note) => Some(self.add_artifact(
+                project,
+                selector,
+                NewArtifact {
+                    role: ArtifactRole::Handoff,
+                    kind: ArtifactKind::File,
+                    content: Some(note.to_string()),
+                    name: Some(format!("handoff-{}.md", epoch_millis())),
+                    from_owner: Some(from),
+                    to_owner: Some(to),
+                    created_by: opts.actor.map(String::from),
+                    ..Default::default()
+                },
+            )?),
+            None => None,
+        };
+
+        // 2. Flip ownership.
+        self.assign_item(project, selector, to, opts.actor)?;
+
+        // 3. Wait-state + status, direction-aware (see the doc comment). An
+        //    explicit caller value always wins over the default.
+        let wait = match opts.wait {
+            Some(w) => WaitUpdate::Set(w),
+            None if to == OwnerKind::Human => WaitUpdate::Set(WaitState::OnHuman),
+            None => WaitUpdate::Clear,
+        };
+        let status = opts.status.or_else(|| match to {
+            OwnerKind::Human => Some(Status::Blocked),
+            OwnerKind::Ai => (before.status == Status::Blocked).then_some(Status::Ready),
+        });
+        let item = self.update_item(
+            project,
+            selector,
+            ItemUpdate {
+                status,
+                wait: Some(wait),
+                ..Default::default()
+            },
+        )?;
+
+        Ok(HandoffResult { item, artifact })
+    }
+
+    /// Mark an item done — the reliable "I finished this" path. Records the
+    /// `evidence` as an artifact (default role `delivery`) so completion is
+    /// auditable, sets status `done`, and returns the items/gates this unblocks
+    /// (their last open dependency just closed) so an agent loop knows what's now
+    /// actionable. Warns — but does not refuse — when no acceptance
+    /// (`done_looks_like`) was ever set. Refuses to complete a superseded or
+    /// archived item (reopen it first).
+    ///
+    /// Like [`Store::handoff`], a best-effort composition (artifact write + row
+    /// updates), not one transaction.
+    pub fn complete_item(
+        &self,
+        project: Option<&str>,
+        selector: &str,
+        input: CompleteInput,
+    ) -> Result<CompleteResult> {
+        let (project_id, _key) = self.require_project(project)?;
+        let node_id = self.resolve_node_id(project_id, selector)?;
+        let before = self.get_item(project, selector, &[])?;
+        if matches!(before.status, Status::Superseded | Status::Archived) {
+            return Err(HavenError::Invalid(format!(
+                "cannot complete a {} item; reopen it first",
+                before.status.as_str()
+            )));
+        }
+
+        let mut warnings = Vec::new();
+        if before.done_looks_like.is_none() {
+            warnings.push(
+                "no acceptance was set (done_looks_like) — completing without a verifiable anchor"
+                    .to_string(),
+            );
+        }
+
+        // 1. Record evidence as an artifact (default role: delivery).
+        let artifact = match input.evidence {
+            Some(evidence) => Some(self.add_artifact(
+                project,
+                selector,
+                NewArtifact {
+                    role: input.artifact_role.unwrap_or(ArtifactRole::Delivery),
+                    kind: ArtifactKind::File,
+                    content: Some(evidence.to_string()),
+                    created_by: input.by.map(String::from),
+                    ..Default::default()
+                },
+            )?),
+            None => None,
+        };
+
+        // 2. Mark it done.
+        let item = self.update_item(
+            project,
+            selector,
+            ItemUpdate {
+                status: Some(Status::Done),
+                ..Default::default()
+            },
+        )?;
+
+        // 3. What did finishing this unblock? (Query after the status flip so the
+        //    NOT EXISTS sees this item as complete.)
+        let unblocked = self.unblocked_dependents(node_id)?;
+
+        Ok(CompleteResult {
+            item,
+            artifact,
+            unblocked,
+            warnings,
+        })
+    }
+
+    /// Items that depend on `completed_id` and now have no remaining open
+    /// dependency — i.e. became dispatchable/reviewable when it completed. Run
+    /// after `completed_id` is marked done. Includes gate nodes whose triggers
+    /// are all complete.
+    fn unblocked_dependents(&self, completed_id: i64) -> Result<Vec<Item>> {
+        let sql = format!(
+            "SELECT {ITEM_SELECT} FROM {ITEM_FROM}
+             WHERE n.id IN (SELECT node_id FROM dependency_edges WHERE depends_on_id = ?1)
+               AND n.status NOT IN ('done','superseded','archived')
+               AND NOT EXISTS (
+                 SELECT 1 FROM dependency_edges d2
+                 JOIN nodes p ON p.id = d2.depends_on_id
+                 WHERE d2.node_id = n.id AND p.status NOT IN ('done','superseded','archived')
+               )
+             ORDER BY n.id"
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map([completed_id], item_from_row)?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
     /// Set `sort_key` so the item sorts immediately before/after `target`.
@@ -402,6 +701,23 @@ impl Store {
         )?;
         tx.commit()?;
         self.get_item(project, selector, &[])
+    }
+
+    /// Archive several items in one grooming step ("archive those"). Refs are
+    /// validated up front, so a typo aborts the batch before any item is parked.
+    /// Each archival is its own transaction (they don't share one); the shared
+    /// `rationale`/`by` apply to all. Returns the archived items.
+    pub fn archive_items(
+        &self,
+        project: Option<&str>,
+        refs: &[&str],
+        rationale: Option<&str>,
+        by: Option<&str>,
+    ) -> Result<Vec<Item>> {
+        self.validate_refs(project, refs)?;
+        refs.iter()
+            .map(|r| self.archive_item(project, r, rationale, by))
+            .collect()
     }
 
     /// Reopen an archived/superseded item back into the maturity flow.

@@ -26,6 +26,20 @@ impl EdgeKind {
             other => Err(HavenError::Invalid(format!("unknown edge kind {other:?}"))),
         }
     }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            EdgeKind::Decomposition => "decomposition",
+            EdgeKind::Dependency => "dependency",
+            EdgeKind::Grouping => "grouping",
+        }
+    }
+}
+
+impl serde::Serialize for EdgeKind {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
+        s.serialize_str(self.as_str())
+    }
 }
 
 impl Store {

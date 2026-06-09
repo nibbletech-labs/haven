@@ -17,6 +17,7 @@ pub mod store;
 pub use error::{HavenError, Result};
 pub use model::*;
 pub use store::{
-    ArtifactContent, EdgeKind, EvolveResult, Include, ItemFilter, ItemUpdate, LineageDirection,
-    LineageGraph, NewArtifact, NewItem, Store, WaitUpdate,
+    ArtifactContent, CompleteInput, CompleteResult, EdgeKind, EvolveResult, GraphEdge,
+    HandoffInput, HandoffResult, Include, ItemFilter, ItemUpdate, LineageDirection, LineageGraph,
+    LineageLink, NewArtifact, NewItem, ProjectGraph, Store, WaitUpdate,
 };

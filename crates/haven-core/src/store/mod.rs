@@ -23,8 +23,11 @@ use crate::model::*;
 pub use content::{ArtifactContent, NewArtifact};
 pub use edge::EdgeKind;
 pub use evolve::EvolveResult;
-pub use item::{Include, ItemFilter, ItemUpdate, NewItem, WaitUpdate};
-pub use query::{LineageDirection, LineageGraph};
+pub use item::{
+    CompleteInput, CompleteResult, HandoffInput, HandoffResult, Include, ItemFilter, ItemUpdate,
+    NewItem, WaitUpdate,
+};
+pub use query::{GraphEdge, LineageDirection, LineageGraph, LineageLink, ProjectGraph};
 
 /// Columns selected for an `Item`, in the order `item_from_row` expects. Joined
 /// against `projects` to resolve the human project key.
@@ -201,15 +204,44 @@ impl Store {
         self.meta_get("current_project")
     }
 
+    /// Project keys that currently exist, for enriching "which project?" errors so
+    /// a caller — especially a headless MCP agent that just forgot `project` — can
+    /// self-correct in one step. Best-effort: a query error yields an empty list
+    /// rather than masking the original error.
+    fn project_keys(&self) -> Vec<String> {
+        self.conn
+            .prepare("SELECT key FROM projects ORDER BY key")
+            .and_then(|mut stmt| {
+                stmt.query_map([], |r| r.get::<_, String>(0))?
+                    .collect::<rusqlite::Result<Vec<_>>>()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Suffix listing the available projects (or how to make one if there are
+    /// none), appended to the project-selection errors below.
+    fn available_projects_hint(&self) -> String {
+        let keys = self.project_keys();
+        if keys.is_empty() {
+            " — no projects exist yet; create one with `haven_add_project` (MCP) \
+             or `haven project add` (CLI)"
+                .into()
+        } else {
+            format!(" — available projects: {}", keys.join(", "))
+        }
+    }
+
     /// Resolve a project selector to `(id, key)`. Falls back to the current
     /// project when `selector` is `None`.
     pub(crate) fn require_project(&self, selector: Option<&str>) -> Result<(i64, String)> {
         let key = match selector {
             Some(k) => k.to_string(),
             None => self.current_project()?.ok_or_else(|| {
-                HavenError::Invalid(
-                    "no project selected; pass --project or run `haven project use`".into(),
-                )
+                HavenError::Invalid(format!(
+                    "no project selected; pass `project` (MCP) or `--project` / \
+                     `haven project use` (CLI){}",
+                    self.available_projects_hint()
+                ))
             })?,
         };
         let id = self
@@ -218,7 +250,9 @@ impl Store {
                 r.get(0)
             })
             .optional()?
-            .ok_or_else(|| HavenError::NotFound(format!("project {key:?}")))?;
+            .ok_or_else(|| {
+                HavenError::NotFound(format!("project {key:?}{}", self.available_projects_hint()))
+            })?;
         Ok((id, key))
     }
 
