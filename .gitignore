@@ -1,0 +1,19 @@
+# Rust
+/target
+**/*.rs.bk
+Cargo.lock.orig
+
+# Local state / secrets
+*.db
+*.db-journal
+.env
+.env.*
+config.local.toml
+
+# macOS
+.DS_Store
+
+# In-house docs — kept local, deliberately not part of the public repo.
+# (See the publish decision: docs/ + STATUS + CLAUDE.md are working-tree only.)
+/docs/
+/CLAUDE.md

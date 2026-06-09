@@ -1,0 +1,29 @@
+[package]
+name = "haven-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Haven CLI — the `haven` binary."
+
+[[bin]]
+name = "haven"
+path = "src/main.rs"
+
+[dependencies]
+haven-core.workspace = true
+haven-mcp = { path = "../haven-mcp" }
+haven-auth.workspace = true
+haven-sync.workspace = true
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+directories.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+assert_cmd.workspace = true
+predicates.workspace = true
+tempfile.workspace = true

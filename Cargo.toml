@@ -1,0 +1,47 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/haven-core",
+    "crates/haven-sync",
+    "crates/haven-auth",
+    "crates/haven-cli",
+    "crates/haven-mcp",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+license = "MIT"
+repository = "https://github.com/nibbletech-labs/haven"
+
+[workspace.dependencies]
+# Internal crates
+haven-core = { path = "crates/haven-core" }
+haven-sync = { path = "crates/haven-sync" }
+haven-auth = { path = "crates/haven-auth" }
+
+# Shared external deps (pinned to current major versions)
+rusqlite = { version = "0.32", features = ["bundled", "uuid"] }
+rusqlite_migration = "1.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["v4", "serde"] }
+sha2 = "0.10"
+thiserror = "1"
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+directories = "5"
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+keyring = "3"
+
+# Dev
+tempfile = "3"
+assert_cmd = "2"
+predicates = "3"
+
+[profile.release]
+lto = true
+strip = true
+codegen-units = 1

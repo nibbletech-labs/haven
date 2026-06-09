@@ -1,0 +1,20 @@
+[package]
+name = "haven-sync"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Haven sync client: offline-first push/pull against Supabase (servo pattern)."
+
+[dependencies]
+haven-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+reqwest.workspace = true
+tokio.workspace = true
+rusqlite.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

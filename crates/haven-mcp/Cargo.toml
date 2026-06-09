@@ -1,0 +1,20 @@
+[package]
+name = "haven-mcp"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Haven MCP server — hand-rolled stdio JSON-RPC over the haven-core service layer."
+
+[[bin]]
+name = "haven-mcp"
+path = "src/main.rs"
+
+[dependencies]
+haven-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

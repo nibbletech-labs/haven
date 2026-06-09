@@ -1,0 +1,545 @@
+//! Item operations: CRUD, the maturity axis (status/wait), the commitment axis
+//! (commit/uncommit/priority/rank), ownership, and lifecycle (archive/reopen,
+//! which emit lineage events). All methods on [`Store`].
+
+use rusqlite::{params, Connection, OptionalExtension, Row};
+
+use crate::error::{HavenError, Result};
+use crate::model::*;
+use crate::sortkey;
+
+use super::{item_from_row, new_uuid, Store, ITEM_FROM, ITEM_SELECT};
+
+/// Parameters for `item add`. All fields beyond `title` are optional — the
+/// default is a bare, floating, uncommitted, `discovery` node (SPEC §3).
+#[derive(Debug, Default, Clone)]
+pub struct NewItem {
+    pub title: String,
+    pub node_type: Option<NodeType>,
+    pub body: Option<String>,
+    pub done_looks_like: Option<String>,
+    pub why: Option<String>,
+    pub status: Option<Status>,
+    pub priority: Option<i64>,
+    pub commit: bool,
+    pub assign: Option<OwnerKind>,
+    pub parent: Option<String>,
+    pub depends_on: Option<String>,
+    pub group: Option<String>,
+    pub metadata: Option<serde_json::Value>,
+}
+
+/// How to change a node's `wait_state`: set it, or clear it (`--wait none`).
+#[derive(Debug, Clone, Copy)]
+pub enum WaitUpdate {
+    Set(WaitState),
+    Clear,
+}
+
+/// Mutable fields for `item update`. `None` means "leave unchanged".
+#[derive(Debug, Default, Clone)]
+pub struct ItemUpdate {
+    pub title: Option<String>,
+    pub body: Option<String>,
+    pub done_looks_like: Option<String>,
+    pub why: Option<String>,
+    pub status: Option<Status>,
+    pub priority: Option<i64>,
+    pub node_type: Option<NodeType>,
+    pub wait: Option<WaitUpdate>,
+}
+
+/// Filters for `item list`. `committed`/`icebox` are mutually-exclusive views.
+#[derive(Debug, Default, Clone)]
+pub struct ItemFilter {
+    pub status: Option<Status>,
+    pub node_type: Option<NodeType>,
+    pub owner: Option<OwnerKind>,
+    pub committed: Option<bool>,
+    /// `icebox` view: committed = 0 and not archived/superseded.
+    pub icebox: bool,
+    pub group: Option<String>,
+}
+
+impl Store {
+    /// Create a node. Mints a `ref` from the project counter, applies the
+    /// requested axes, and wires any parent/dependency/group edges given.
+    pub fn add_item(&self, project: Option<&str>, new: NewItem) -> Result<Item> {
+        if new.title.trim().is_empty() {
+            return Err(HavenError::Invalid("item title must not be empty".into()));
+        }
+        let (project_id, _key) = self.require_project(project)?;
+        let tx = self.conn.unchecked_transaction()?;
+
+        let node_type = new.node_type.unwrap_or(NodeType::Task);
+        let status = new.status.unwrap_or(Status::Discovery);
+        let metadata = new
+            .metadata
+            .clone()
+            .unwrap_or_else(|| serde_json::json!({}));
+
+        let (node_id, reference) = self.insert_node(
+            &tx,
+            project_id,
+            &new.title,
+            node_type,
+            status,
+            new.body.as_deref(),
+            new.done_looks_like.as_deref(),
+            new.why.as_deref(),
+            new.assign,
+            new.commit,
+            new.priority,
+            &metadata,
+        )?;
+
+        // Optional edges. These reuse the edge helpers, which run inside `tx`.
+        if let Some(parent) = &new.parent {
+            let parent_id = self.resolve_node_id(project_id, parent)?;
+            self.insert_decomposition(&tx, parent_id, node_id)?;
+        }
+        if let Some(dep) = &new.depends_on {
+            let dep_id = self.resolve_node_id(project_id, dep)?;
+            self.insert_dependency(&tx, node_id, dep_id)?;
+        }
+        if let Some(group) = &new.group {
+            let group_id = self.resolve_node_id(project_id, group)?;
+            self.insert_grouping(&tx, group_id, node_id)?;
+        }
+
+        tx.commit()?;
+        self.get_item(project, &reference, &[])
+    }
+
+    /// Fetch one item, optionally hydrating edges/artifacts/lineage.
+    pub fn get_item(
+        &self,
+        project: Option<&str>,
+        selector: &str,
+        include: &[Include],
+    ) -> Result<Item> {
+        let (project_id, _key) = self.require_project(project)?;
+        let node_id = self.resolve_node_id(project_id, selector)?;
+        let mut item = self
+            .conn
+            .query_row(
+                &format!("SELECT {ITEM_SELECT} FROM {ITEM_FROM} WHERE n.id = ?1"),
+                [node_id],
+                item_from_row,
+            )
+            .optional()?
+            .ok_or_else(|| HavenError::NotFound(format!("item {selector:?}")))?;
+
+        for inc in include {
+            match inc {
+                Include::Edges => item.edges = Some(self.load_edges(node_id)?),
+                Include::Artifacts => item.artifacts = Some(self.load_artifacts(node_id)?),
+                Include::Lineage => item.lineage = Some(self.lineage_events_for_node(node_id)?),
+            }
+        }
+        Ok(item)
+    }
+
+    /// List items in a project under the given filters.
+    pub fn list_items(&self, project: Option<&str>, filter: &ItemFilter) -> Result<Vec<Item>> {
+        let (project_id, _key) = self.require_project(project)?;
+        let mut sql = format!("SELECT {ITEM_SELECT} FROM {ITEM_FROM} WHERE n.project_id = ?1");
+        let mut args: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(project_id)];
+
+        if let Some(status) = filter.status {
+            sql.push_str(&format!(" AND n.status = ?{}", args.len() + 1));
+            args.push(Box::new(status.as_str()));
+        }
+        if let Some(t) = filter.node_type {
+            sql.push_str(&format!(" AND n.type = ?{}", args.len() + 1));
+            args.push(Box::new(t.as_str()));
+        }
+        if let Some(owner) = filter.owner {
+            sql.push_str(&format!(" AND n.owner_kind = ?{}", args.len() + 1));
+            args.push(Box::new(owner.as_str()));
+        }
+        if let Some(committed) = filter.committed {
+            sql.push_str(&format!(" AND n.committed = ?{}", args.len() + 1));
+            args.push(Box::new(committed as i64));
+        }
+        if filter.icebox {
+            sql.push_str(" AND n.committed = 0 AND n.status NOT IN ('archived','superseded')");
+        }
+        if let Some(group) = &filter.group {
+            let group_id = self.resolve_node_id(project_id, group)?;
+            sql.push_str(&format!(
+                " AND n.id IN (SELECT member_id FROM grouping_edges WHERE group_id = ?{})",
+                args.len() + 1
+            ));
+            args.push(Box::new(group_id));
+        }
+        sql.push_str(" ORDER BY n.priority IS NULL, n.priority, n.sort_key IS NULL, n.sort_key, n.created_at, n.id");
+
+        let mut stmt = self.conn.prepare(&sql)?;
+        let params = rusqlite::params_from_iter(args.iter().map(|b| b.as_ref()));
+        let rows = stmt.query_map(params, item_from_row)?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// Update mutable attributes (maturity axis + content). Bumps revision.
+    pub fn update_item(
+        &self,
+        project: Option<&str>,
+        selector: &str,
+        upd: ItemUpdate,
+    ) -> Result<Item> {
+        let (project_id, _key) = self.require_project(project)?;
+        let node_id = self.resolve_node_id(project_id, selector)?;
+
+        let mut sets: Vec<String> = Vec::new();
+        let mut args: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+        macro_rules! set {
+            ($col:literal, $val:expr) => {{
+                sets.push(format!("{} = ?{}", $col, args.len() + 1));
+                args.push(Box::new($val));
+            }};
+        }
+        if let Some(title) = upd.title {
+            set!("title", title);
+        }
+        if let Some(body) = upd.body {
+            set!("body", body);
+        }
+        if let Some(done) = upd.done_looks_like {
+            set!("done_looks_like", done);
+        }
+        if let Some(why) = upd.why {
+            set!("why", why);
+        }
+        if let Some(status) = upd.status {
+            set!("status", status.as_str());
+        }
+        if let Some(priority) = upd.priority {
+            set!("priority", priority);
+        }
+        if let Some(t) = upd.node_type {
+            set!("type", t.as_str());
+        }
+        match upd.wait {
+            Some(WaitUpdate::Set(w)) => set!("wait_state", w.as_str()),
+            Some(WaitUpdate::Clear) => sets.push("wait_state = NULL".into()),
+            None => {}
+        }
+        if sets.is_empty() {
+            return Err(HavenError::Invalid("update: no fields to change".into()));
+        }
+        sets.push("revision = revision + 1".into());
+        sets.push("updated_at = datetime('now')".into());
+        sets.push("sync_state = 'local'".into());
+
+        let sql = format!(
+            "UPDATE nodes SET {} WHERE id = ?{}",
+            sets.join(", "),
+            args.len() + 1
+        );
+        args.push(Box::new(node_id));
+        let params = rusqlite::params_from_iter(args.iter().map(|b| b.as_ref()));
+        self.conn.execute(&sql, params)?;
+        self.get_item(project, selector, &[])
+    }
+
+    /// Commitment axis: float → committed (optionally setting a priority band).
+    pub fn commit_item(
+        &self,
+        project: Option<&str>,
+        selector: &str,
+        priority: Option<i64>,
+    ) -> Result<Item> {
+        let (project_id, _key) = self.require_project(project)?;
+        let node_id = self.resolve_node_id(project_id, selector)?;
+        match priority {
+            Some(p) => self.conn.execute(
+                "UPDATE nodes SET committed = 1, priority = ?1, revision = revision + 1,
+                     updated_at = datetime('now'), sync_state = 'local' WHERE id = ?2",
+                params![p, node_id],
+            )?,
+            None => self.conn.execute(
+                "UPDATE nodes SET committed = 1, revision = revision + 1,
+                     updated_at = datetime('now'), sync_state = 'local' WHERE id = ?1",
+                [node_id],
+            )?,
+        };
+        self.get_item(project, selector, &[])
+    }
+
+    /// Commitment axis: back to the icebox (floating). Priority is retained.
+    pub fn uncommit_item(&self, project: Option<&str>, selector: &str) -> Result<Item> {
+        let (project_id, _key) = self.require_project(project)?;
+        let node_id = self.resolve_node_id(project_id, selector)?;
+        self.conn.execute(
+            "UPDATE nodes SET committed = 0, revision = revision + 1,
+                 updated_at = datetime('now'), sync_state = 'local' WHERE id = ?1",
+            [node_id],
+        )?;
+        self.get_item(project, selector, &[])
+    }
+
+    /// Ownership: set who executes the node and an optional actor handle.
+    pub fn assign_item(
+        &self,
+        project: Option<&str>,
+        selector: &str,
+        owner: OwnerKind,
+        actor: Option<&str>,
+    ) -> Result<Item> {
+        let (project_id, _key) = self.require_project(project)?;
+        let node_id = self.resolve_node_id(project_id, selector)?;
+        self.conn.execute(
+            "UPDATE nodes SET owner_kind = ?1, assignee = ?2, revision = revision + 1,
+                 updated_at = datetime('now'), sync_state = 'local' WHERE id = ?3",
+            params![owner, actor, node_id],
+        )?;
+        self.get_item(project, selector, &[])
+    }
+
+    /// Set `sort_key` so the item sorts immediately before/after `target`.
+    pub fn rank_item(
+        &self,
+        project: Option<&str>,
+        selector: &str,
+        before: Option<&str>,
+        after: Option<&str>,
+    ) -> Result<Item> {
+        let (project_id, _key) = self.require_project(project)?;
+        let node_id = self.resolve_node_id(project_id, selector)?;
+        let (target_sel, is_before) = match (before, after) {
+            (Some(t), None) => (t, true),
+            (None, Some(t)) => (t, false),
+            _ => {
+                return Err(HavenError::Invalid(
+                    "rank requires exactly one of --before/--after".into(),
+                ))
+            }
+        };
+        let target_id = self.resolve_node_id(project_id, target_sel)?;
+        if target_id == node_id {
+            return Err(HavenError::Invalid(
+                "cannot rank an item relative to itself".into(),
+            ));
+        }
+
+        // Ensure the target has a key to anchor against. Fetch its priority band
+        // too: `sort_key` is fine ordering *within a band* (SPEC §0 Q2), so the
+        // gap search is scoped to the target's band — a key from another band must
+        // not narrow the gap (it would burn key space without affecting order).
+        let (mut target_key, target_priority): (Option<String>, Option<i64>) =
+            self.conn.query_row(
+                "SELECT sort_key, priority FROM nodes WHERE id = ?1",
+                [target_id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )?;
+        if target_key.is_none() {
+            let k = sortkey::between(None, None)?;
+            self.conn.execute(
+                "UPDATE nodes SET sort_key = ?1, revision = revision + 1,
+                     updated_at = datetime('now'), sync_state = 'local' WHERE id = ?2",
+                params![k, target_id],
+            )?;
+            target_key = Some(k);
+        }
+        let target_key = target_key.unwrap();
+
+        // Find the neighbour on the far side of the target, in the same band,
+        // excluding the moving node; mint a key in the gap. `priority IS ?4` is
+        // SQLite NULL-safe equality, so the unprioritised band matches too.
+        let new_key = if is_before {
+            let lower: Option<String> = self.conn.query_row(
+                "SELECT max(sort_key) FROM nodes
+                 WHERE project_id = ?1 AND sort_key < ?2 AND id <> ?3 AND priority IS ?4",
+                params![project_id, target_key, node_id, target_priority],
+                |r| r.get(0),
+            )?;
+            sortkey::between(lower.as_deref(), Some(&target_key))?
+        } else {
+            let upper: Option<String> = self.conn.query_row(
+                "SELECT min(sort_key) FROM nodes
+                 WHERE project_id = ?1 AND sort_key > ?2 AND id <> ?3 AND priority IS ?4",
+                params![project_id, target_key, node_id, target_priority],
+                |r| r.get(0),
+            )?;
+            sortkey::between(Some(&target_key), upper.as_deref())?
+        };
+
+        self.conn.execute(
+            "UPDATE nodes SET sort_key = ?1, revision = revision + 1,
+                 updated_at = datetime('now'), sync_state = 'local' WHERE id = ?2",
+            params![new_key, node_id],
+        )?;
+        self.get_item(project, selector, &[])
+    }
+
+    /// Archive: status → archived, stamp `archived_at`, emit a lineage `archive`
+    /// event (never hard-delete, SPEC §3).
+    pub fn archive_item(
+        &self,
+        project: Option<&str>,
+        selector: &str,
+        rationale: Option<&str>,
+        by: Option<&str>,
+    ) -> Result<Item> {
+        let (project_id, _key) = self.require_project(project)?;
+        let node_id = self.resolve_node_id(project_id, selector)?;
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute(
+            "UPDATE nodes SET status = 'archived', archived_at = datetime('now'),
+                 revision = revision + 1, updated_at = datetime('now'), sync_state = 'local'
+             WHERE id = ?1",
+            [node_id],
+        )?;
+        self.record_event(
+            &tx,
+            project_id,
+            EventType::Archive,
+            rationale,
+            by,
+            &serde_json::json!({}),
+            &[(node_id, node_id)],
+        )?;
+        tx.commit()?;
+        self.get_item(project, selector, &[])
+    }
+
+    /// Reopen an archived/superseded item back into the maturity flow.
+    pub fn reopen_item(
+        &self,
+        project: Option<&str>,
+        selector: &str,
+        rationale: Option<&str>,
+        by: Option<&str>,
+    ) -> Result<Item> {
+        let (project_id, _key) = self.require_project(project)?;
+        let node_id = self.resolve_node_id(project_id, selector)?;
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute(
+            "UPDATE nodes SET status = 'discovery', archived_at = NULL,
+                 revision = revision + 1, updated_at = datetime('now'), sync_state = 'local'
+             WHERE id = ?1",
+            [node_id],
+        )?;
+        self.record_event(
+            &tx,
+            project_id,
+            EventType::Reopen,
+            rationale,
+            by,
+            &serde_json::json!({}),
+            &[(node_id, node_id)],
+        )?;
+        tx.commit()?;
+        self.get_item(project, selector, &[])
+    }
+
+    /// Mint a `ref` and insert a node row on `conn`. Shared by `add_item` and
+    /// the evolve ops so node creation has exactly one implementation.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn insert_node(
+        &self,
+        conn: &Connection,
+        project_id: i64,
+        title: &str,
+        node_type: NodeType,
+        status: Status,
+        body: Option<&str>,
+        done_looks_like: Option<&str>,
+        why: Option<&str>,
+        owner: Option<OwnerKind>,
+        committed: bool,
+        priority: Option<i64>,
+        metadata: &serde_json::Value,
+    ) -> Result<(i64, String)> {
+        conn.execute(
+            "UPDATE projects
+             SET ref_counter = ref_counter + 1, revision = revision + 1,
+                 updated_at = datetime('now'), sync_state = 'local'
+             WHERE id = ?1",
+            [project_id],
+        )?;
+        let (prefix, counter): (String, i64) = conn.query_row(
+            "SELECT ref_prefix, ref_counter FROM projects WHERE id = ?1",
+            [project_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        let reference = format!("{prefix}-{counter}");
+        conn.execute(
+            "INSERT INTO nodes
+               (public_id, project_id, ref, title, body, done_looks_like, why,
+                type, status, owner_kind, committed, priority, metadata, client_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+            params![
+                new_uuid(),
+                project_id,
+                reference,
+                title,
+                body,
+                done_looks_like,
+                why,
+                node_type,
+                status,
+                owner,
+                committed as i64,
+                priority,
+                metadata.to_string(),
+                new_uuid(),
+            ],
+        )?;
+        Ok((conn.last_insert_rowid(), reference))
+    }
+
+    // ---- artifacts read (file add/get is Layer 4) -------------------------
+
+    pub(crate) fn load_artifacts(&self, node_id: i64) -> Result<Vec<Artifact>> {
+        let node_ref = self.node_ref(node_id)?;
+        let mut stmt = self.conn.prepare(
+            "SELECT id, public_id, role, kind, path, uri, title, excerpt,
+                    from_owner, to_owner, content_hash, remote_path,
+                    created_at, created_by, revision, sync_state
+             FROM artifacts WHERE node_id = ?1 ORDER BY id",
+        )?;
+        let rows = stmt.query_map([node_id], |row: &Row<'_>| {
+            Ok(Artifact {
+                id: row.get(0)?,
+                public_id: row.get(1)?,
+                node_ref: Some(node_ref.clone()),
+                role: row.get(2)?,
+                kind: row.get(3)?,
+                path: row.get(4)?,
+                uri: row.get(5)?,
+                title: row.get(6)?,
+                excerpt: row.get(7)?,
+                from_owner: row.get(8)?,
+                to_owner: row.get(9)?,
+                content_hash: row.get(10)?,
+                remote_path: row.get(11)?,
+                created_at: row.get(12)?,
+                created_by: row.get(13)?,
+                revision: row.get(14)?,
+                sync_state: row.get(15)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+}
+
+/// What to hydrate on `item get` (SPEC §2 `--include`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Include {
+    Edges,
+    Artifacts,
+    Lineage,
+}
+
+impl Include {
+    pub fn parse(s: &str) -> Result<Self> {
+        match s {
+            "edges" => Ok(Include::Edges),
+            "artifacts" => Ok(Include::Artifacts),
+            "lineage" => Ok(Include::Lineage),
+            other => Err(HavenError::Invalid(format!("unknown include {other:?}"))),
+        }
+    }
+}
