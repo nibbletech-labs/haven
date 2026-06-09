@@ -1,9 +1,10 @@
 //! HTTP transport against Supabase PostgREST + Storage (SPEC §5).
 //!
-//! **Written, not live-verified** — needs a real Supabase project and a valid
-//! Auth0 access token. The push pass is fully implemented; the pull pass fetches
-//! remote rows, and the final reverse-translation + LWW reconcile is the one
-//! piece left to wire against a live project (clearly marked below).
+//! **Written; push is live-verified, pull is unit-tested against a local DB.**
+//! Both passes are implemented: push uploads unsynced rows; pull fetches the
+//! remote snapshot and reconciles it locally (reverse FK translation + revision
+//! LWW, in [`crate::local::apply_snapshot`]). The HTTP transport itself needs a
+//! real Supabase project + a valid Auth0 token to exercise end-to-end.
 
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
 use rusqlite::Connection;
@@ -205,14 +206,21 @@ impl SyncEngine {
         Ok(resp.json().await?)
     }
 
-    /// Pull pass: fetch remote rows for reconcile.
-    ///
-    /// Deferred (the one piece needing a live project to finish): apply the
-    /// fetched rows to the local DB by reverse-translating `public_id` FKs to
-    /// local integer ids — inserting unknown nodes first so FKs resolve — and
-    /// taking the higher `revision` per row (LWW), `updated_at` breaking ties.
-    /// `fetch_table` above provides the transport; this returns the raw rows so
-    /// the reconcile can be wired and tested against real data.
+    /// Run one pull pass: fetch the remote snapshot and reconcile it into the
+    /// local store (reverse FK translation + revision LWW, all in one
+    /// transaction). Returns what changed locally.
+    pub async fn pull_pass(
+        &self,
+        conn: &Connection,
+    ) -> Result<crate::local::ReconcileStats, SyncError> {
+        let snapshot = self.pull_remote().await?;
+        crate::local::apply_snapshot(conn, &snapshot)
+    }
+
+    /// Fetch every remote table into a [`RemoteSnapshot`] (full reconcile, no
+    /// cursor in v1 — single-user volume is small, SPEC §5). The
+    /// reverse-translation + LWW apply lives in [`crate::local::apply_snapshot`];
+    /// [`Self::pull_pass`] chains the two.
     pub async fn pull_remote(&self) -> Result<RemoteSnapshot, SyncError> {
         Ok(RemoteSnapshot {
             projects: self.fetch_table("projects").await?,

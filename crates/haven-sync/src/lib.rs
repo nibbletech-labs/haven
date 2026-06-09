@@ -17,7 +17,8 @@ use std::time::Duration;
 
 use thiserror::Error;
 
-pub use engine::{SyncConfig, SyncEngine};
+pub use engine::{RemoteSnapshot, SyncConfig, SyncEngine};
+pub use local::ReconcileStats;
 
 #[derive(Debug, Error)]
 pub enum SyncError {

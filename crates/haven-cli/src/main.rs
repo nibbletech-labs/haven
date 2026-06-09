@@ -736,7 +736,7 @@ fn cmd_sync(project: Option<&str>, cmd: &Option<SyncCmd>, watch: bool) -> Result
         .and_then(|v| v.get("sync_pending").and_then(|n| n.as_i64()))
         .unwrap_or(0);
 
-    block_on(async move {
+    let stats = block_on(async move {
         let access = match env_token {
             Some(t) => t,
             None => {
@@ -751,13 +751,25 @@ fn cmd_sync(project: Option<&str>, cmd: &Option<SyncCmd>, watch: bool) -> Result
         };
         let engine = haven_sync::SyncEngine::new(sync_cfg, access);
         let conn = haven_core::db::open(&paths.db)?;
+        // Push local changes first, then pull + reconcile remote state (so a
+        // just-pushed row round-trips cleanly instead of being re-applied).
         engine.push_pass(&conn).await.map_err(sync_err)?;
-        Ok::<(), HavenError>(())
+        let stats = engine.pull_pass(&conn).await.map_err(sync_err)?;
+        Ok::<_, HavenError>(stats)
     })??;
 
     Ok(Output::Json(serde_json::json!({
         "pushed": true,
         "pending_before": pending_before,
+        "pulled": {
+            "total": stats.total(),
+            "projects": stats.projects,
+            "nodes": stats.nodes,
+            "lineage_events": stats.lineage_events,
+            "lineage_edges": stats.lineage_edges,
+            "edges": stats.edges,
+            "artifacts": stats.artifacts,
+        },
     })))
 }
 
