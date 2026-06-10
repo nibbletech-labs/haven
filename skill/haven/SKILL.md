@@ -62,6 +62,10 @@ The mistakes that actually bite — internalise these:
   --rationale`; reversible via `reopen`.
 - **The two axes are orthogonal.** Maturity (`status`) ≠ commitment (`committed` +
   `priority`). "Make this ready" and "do this next" are different operations.
+- **On the CLI, commit/uncommit are their own verbs.** `haven item commit <ref>
+  [--priority N]` — `item update` does *not* take `--commit` (`--commit` exists
+  only on `item add`). Over MCP it's the opposite: one tool, `haven_update_item
+  {commit: true, …}`. Don't carry one surface's shape to the other.
 - **Over MCP, pass `project` on every call** — there is no sticky session.
 
 ## The one rule that matters most: structure vs content
