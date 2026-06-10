@@ -17,12 +17,13 @@ this once per session, not per command (see `surface-map.md` for the selection m
 - [2. Plan / prioritise](#2-plan--prioritise)
 - [3. Groom](#3-groom)
 - [4. Dispatch — "what's next"](#4-dispatch)
-- [5. Decompose vs group vs depend](#5-decompose-vs-group-vs-depend)
-- [6. Evolve — split / merge / supersede](#6-evolve)
-- [7. Handoff](#7-handoff)
-- [8. Complete](#8-complete)
-- [9. Artifacts & content](#9-artifacts--content)
-- [10. Gates & reviews](#10-gates--reviews)
+- [5. Multi-item delivery](#5-multi-item-delivery)
+- [6. Decompose vs group vs depend](#6-decompose-vs-group-vs-depend)
+- [7. Evolve — split / merge / supersede](#7-evolve)
+- [8. Handoff](#8-handoff)
+- [9. Complete](#9-complete)
+- [10. Artifacts & content](#10-artifacts--content)
+- [11. Gates & reviews](#11-gates--reviews)
 - [Conventions: acceptance, open questions, test-and-learn](#conventions)
 - [Worked end-to-end example](#worked-example)
 - [Anti-patterns](#anti-patterns)
@@ -40,9 +41,9 @@ dispatching:
 | `discovery` | Unknowns remain before it can be defined | Resolve its **open questions** (see [Conventions](#conventions)); when none remain → `definition`. |
 | `definition` | Understood, needs a spec/decision | Write the spec (artifact), set **`done_looks_like`**; when defined → `ready`. |
 | `ready` | Fully specified, dispatchable | It must carry `done_looks_like`. Dispatch (workflow 4); set `in_progress`. |
-| `in_progress` | Being worked | Track; finish with **`item complete`** (workflow 8), which verifies against `done_looks_like`. |
+| `in_progress` | Being worked | Track; finish with **`item complete`** (workflow 9), which verifies against `done_looks_like`. |
 | `blocked` | Parked on something | Check `wait_state` / the blocking dependency; clear when resolved. |
-| `done` | Complete | Reached via `item complete` (workflow 8); it reports the items/gates the completion **unblocked** — your next dispatch set. |
+| `done` | Complete | Reached via `item complete` (workflow 9); it reports the items/gates the completion **unblocked** — your next dispatch set. |
 | `superseded` / `archived` | Evolved away / dropped | Terminal; reachable through lineage. |
 
 ---
@@ -70,7 +71,7 @@ dispatching:
 - **Don't raise status above `discovery`** unless the user says it's already
   well-defined. **Don't commit on capture** — "add to backlog" ≠ "I'm doing this."
 - If the conversation produced a *document* (research, a rough spec), write it as a
-  file and register it as an artifact (workflow 9) — don't cram it into `body`.
+  file and register it as an artifact (workflow 10) — don't cram it into `body`.
 
 ```bash
 haven item add "Rate-limit the public search endpoint" --body "Abuse vector flagged in perf review"
@@ -93,6 +94,8 @@ ordered plan.
 4. Wire **dependencies** for real ordering constraints: `haven depend HV-12 --on HV-9`.
 5. For a release/phase, create the container node and group members:
    `haven item add "v1 launch" --type release` then `haven group HV-30 --add HV-12 --add HV-8`.
+6. If the user is asking to deliver several items as one effort, continue through
+   [Multi-item delivery](#5-multi-item-delivery) before dispatching the work.
 
 **Heuristics:**
 - **Commit only what you'll pull soon.** Commitment means "in play." Keep
@@ -117,8 +120,8 @@ ordered plan.
      `haven item update HV-7 --status ready --done-looks-like "what success is"`.
      A `ready` item without `done_looks_like` can't be verified — always set it.
    - Needs a spec/decision first → `--status definition`, write/attach the artifact
-     (workflow 9).
-   - Too big → split (workflow 6). Duplicate → merge (workflow 6).
+     (workflow 10).
+   - Too big → split (workflow 7). Duplicate → merge (workflow 7).
    - Stale / won't-do → `haven item archive HV-7 --rationale "…"` (never delete).
    - Floating but clearly in-play → commit (workflow 2).
 3. Clear stale waits: if the external thing arrived,
@@ -153,10 +156,62 @@ haven next --explain --owner ai     # WHY the queue is empty (when it is)
 - **Respect ownership.** Filter `--owner ai` when dispatching to an agent; never
   hand an agent a human-owned node waiting on a real-world action.
 - **Advance maturity on pickup:** `--status in_progress` when work starts (and
-  `assign` if needed); finish with **`item complete`** (workflow 8), not a bare
+  `assign` if needed); finish with **`item complete`** (workflow 9), not a bare
   `--status done` — it records evidence and tells you what unblocked.
 
-## 5. Decompose vs group vs depend
+## 5. Multi-item delivery
+
+**Trigger:** the user asks to deliver several items together: "ship these",
+"do the first three", "for launch", "this release", "the MVP slice", "bundle X and
+Y", or similar.
+
+**Rule:** multi-item delivery must have a durable container before dispatch. Use:
+- `release` when the group is an externally meaningful shipping scope, launch, or
+  milestone.
+- `phase` when the group is an internal slice, preparation batch, or sequencing
+  step that is not itself a release.
+
+```bash
+haven item add "v1 auth hardening" --type release
+haven group HV-30 --add HV-12 --add HV-13 --add HV-14
+```
+
+**Shared-context check:** before telling an AI to work the group, inspect whether
+the members share any of these:
+- architecture or subsystem boundary
+- API, event, schema, or data model contract
+- user journey, screen, design pattern, or copy surface
+- test strategy, fixture setup, migration, or rollout concern
+- overlapping key files, risky parallelism, or integration checkpoint
+
+If none apply and each member is individually `ready`, the group may be a simple
+batch: dispatch members normally, keeping the release/phase as the durable
+membership record.
+
+If any apply, **do not silently dispatch the items in isolation.** The group needs
+an integrated execution view first:
+1. If a Context Pack / execution-pack workflow is available, recommend using it and
+   attach the resulting pack as a `spec` artifact on the release/phase node.
+2. If that workflow is unavailable or unknown, pause and clarify the integrated
+   architecture with the user. Capture the result as a short `spec` or `decision`
+   artifact on the release/phase node before dispatch.
+3. If the check surfaces missing work, capture it as new items and group or depend
+   them correctly.
+
+**Heuristics:**
+- The release/phase node is the delivery container; member items remain the value
+  or scope contributors. Don't lose the user's original items just because the
+  execution slice needs a different shape.
+- A Context Pack is optional, not automatic. It is warranted when shared context
+  is the main risk.
+- If the pack introduces execution-local items, map them back to Haven refs or
+  create child/member items before work starts. Don't let the pack become a second
+  hidden backlog.
+- Record the decision either way: "simple batch, no shared architecture found" or
+  "shared API and migration; pack/spec required". Put durable reasoning in a
+  `decision` artifact if it matters later.
+
+## 6. Decompose vs group vs depend
 
 Pick the edge layer by *why* the nodes relate — they can co-exist; don't force one
 to do another's job:
@@ -170,7 +225,7 @@ to do another's job:
 
 Don't fake a release with decomposition, and don't model blocking as decomposition.
 
-## 6. Evolve
+## 7. Evolve
 
 **Trigger:** an item is too big (split), two items are the same problem (merge), or
 a redesign replaces an item (supersede). All emit append-only lineage; sources
@@ -197,7 +252,7 @@ of one idea. Don't merge merely-related items — use a dependency or shared gro
 pivot). If you're only refining the same item, just `update` it — don't churn
 lineage.
 
-## 7. Handoff
+## 8. Handoff
 
 **Trigger:** an AI finishes its part and a human must act (review, decide, sign
 something) — or vice versa.
@@ -224,7 +279,7 @@ haven item handoff HV-7 --to ai        # hand back: clears the wait, unblocks it
 - A handed-off, waiting item correctly **drops out of `next`** — that's the system
   working. (Prefer a real dependency edge over `on_dependency` for blockers.)
 
-## 8. Complete
+## 9. Complete
 
 **Trigger:** an item's work is finished and verified.
 
@@ -244,10 +299,10 @@ haven item complete HV-1 --evidence "cargo test --workspace: 72 passed"
 - **Attach evidence** (test output, a summary, a link) — completion should be
   auditable, not a bare status flip.
 - **Act on `unblocked`.** Those items just became dispatchable — feed them into the
-  next `dispatch` pass (or surface a now-unblocked gate for review, workflow 10).
+  next `dispatch` pass (or surface a now-unblocked gate for review, workflow 11).
 - Completing a `superseded`/`archived` item is refused — `reopen` it first.
 
-## 9. Artifacts & content
+## 10. Artifacts & content
 
 **Trigger:** real work product exists (spec, research, design, decision), or a
 filesystem-less client must read/write content.
@@ -277,7 +332,7 @@ filesystem-less client must read/write content.
   use `haven note`. `notes/` is a free filesystem; over-registering clutters the
   queryable layer.
 
-## 10. Gates & reviews
+## 11. Gates & reviews
 
 **Trigger:** a batch of work needs a review checkpoint before the next phase — "once
 the API, UI, and tests are done, review the auth feature before we ship."

@@ -55,6 +55,13 @@ The mistakes that actually bite — internalise these:
 - **Empty `next` → diagnose, don't invent.** Call `next --explain` /
   `haven_next_explain`; it tells you *why* (uncommitted / not-ready / blocked /
   waiting / owner-mismatch). Never fabricate work.
+- **Multi-item delivery needs a container.** If the user asks to deliver several
+  items together ("this release", "ship these", "do the first three", "for
+  launch"), create or reuse a `release`/`phase` node and group the members before
+  dispatch. Then check for shared architecture/UX/API/data/test strategy. If
+  shared context exists, recommend a Context Pack when that workflow is available;
+  otherwise pause to clarify the integrated architecture and attach the result as
+  a `spec`/`decision` artifact on the container.
 - **Handoff and complete are atomic tools, not recipes.** Use `item handoff` /
   `haven_handoff` and `item complete` / `haven_complete_item` — don't hand-assemble
   assign + update + add_artifact (you'll do it inconsistently).
@@ -136,12 +143,14 @@ memory. Each has a trigger, steps, judgment heuristics, and real commands:
 2. **Plan / prioritise** — floating items → a committed, ordered plan
 3. **Groom** — move items `discovery → ready` (set acceptance)
 4. **Dispatch** — "what's next" (and `next --explain` when it's empty)
-5. **Decompose vs group vs depend** — choosing the edge layer
-6. **Evolve** — split / merge / supersede, with real rationale
-7. **Handoff** — `item handoff`: the atomic ai↔human baton-pass
-8. **Complete** — `item complete`: evidence + done + what it unblocked
-9. **Artifacts & content** — registering work product; the no-filesystem channel
-10. **Gates & reviews** — review checkpoints as dependency + acceptance
+5. **Multi-item delivery** — create/reuse a release/phase container and assess
+   shared execution context before dispatch
+6. **Decompose vs group vs depend** — choosing the edge layer
+7. **Evolve** — split / merge / supersede, with real rationale
+8. **Handoff** — `item handoff`: the atomic ai↔human baton-pass
+9. **Complete** — `item complete`: evidence + done + what it unblocked
+10. **Artifacts & content** — registering work product; the no-filesystem channel
+11. **Gates & reviews** — review checkpoints as dependency + acceptance
 
 Precise arguments and the **CLI-vs-MCP differences** (they are *not* 1:1) are in
 **`references/surface-map.md`**.
