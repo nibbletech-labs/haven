@@ -656,8 +656,10 @@ fn cmd_auth(cmd: &AuthCmd) -> Result<Output> {
     match cmd {
         AuthCmd::Login { token: Some(jwt) } => {
             // Headless path: store a pasted token (no refresh; far-future expiry).
+            // It lands in `access_token`; `bearer_token()` falls back to it.
             let tokens = haven_auth::Tokens {
                 access_token: jwt.clone(),
+                id_token: None,
                 refresh_token: None,
                 expires_at: u64::MAX,
             };
@@ -693,6 +695,10 @@ fn cmd_auth(cmd: &AuthCmd) -> Result<Output> {
                     "signed_in": true,
                     "expires_at": t.expires_at,
                     "has_refresh_token": t.refresh_token.is_some(),
+                    // Without an ID token, Supabase sees no `role` claim and
+                    // RLS reads as anon — surfaced here so `doctor`-style
+                    // triage can spot a stale pre-ID-token session.
+                    "has_id_token": t.id_token.is_some(),
                 }),
                 None => serde_json::json!({ "signed_in": false }),
             }))
@@ -758,9 +764,10 @@ fn cmd_sync(project: Option<&str>, cmd: &Option<SyncCmd>, watch: bool) -> Result
     })))
 }
 
-/// Resolve the access token for remote calls: `$HAVEN_ACCESS_TOKEN` (headless/CI,
+/// Resolve the bearer token for remote calls: `$HAVEN_ACCESS_TOKEN` (headless/CI,
 /// SPEC §6 paste-a-token) wins; otherwise load from the keyring, auto-refreshing
-/// via Auth0.
+/// via Auth0. Keyring sessions send the **ID token** (it carries the `role`
+/// claim Supabase requires; Auth0 won't put it on an access token).
 async fn resolve_access_token(store: &haven_core::Store) -> Result<String> {
     if let Some(t) = std::env::var("HAVEN_ACCESS_TOKEN")
         .ok()
@@ -770,7 +777,7 @@ async fn resolve_access_token(store: &haven_core::Store) -> Result<String> {
     }
     let cfg = config::auth_config(store)?;
     let token_store = haven_auth::TokenStore::new();
-    haven_auth::current_access_token(&cfg, &token_store)
+    haven_auth::current_bearer_token(&cfg, &token_store)
         .await
         .map_err(auth_err)
 }

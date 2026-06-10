@@ -8,6 +8,7 @@ repository.workspace = true
 description = "Haven auth: Auth0 Device Authorization flow + OS keyring token storage."
 
 [dependencies]
+base64.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

@@ -30,13 +30,18 @@ fn default_interval() -> u64 {
 /// Begin the device flow: request a user code + verification URL.
 pub async fn start(cfg: &AuthConfig) -> Result<DeviceAuthorization> {
     let client = reqwest::Client::new();
+    let mut form = vec![
+        ("client_id", cfg.client_id.as_str()),
+        ("scope", cfg.scope.as_str()),
+    ];
+    // Only request a custom-API audience when one is configured; the ID-token
+    // flow (Supabase third-party auth) doesn't use one.
+    if let Some(aud) = cfg.audience.as_deref().filter(|a| !a.is_empty()) {
+        form.push(("audience", aud));
+    }
     let resp = client
         .post(cfg.device_code_url())
-        .form(&[
-            ("client_id", cfg.client_id.as_str()),
-            ("scope", cfg.scope.as_str()),
-            ("audience", cfg.audience.as_str()),
-        ])
+        .form(&form)
         .send()
         .await?;
     if !resp.status().is_success() {

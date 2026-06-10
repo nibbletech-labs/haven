@@ -519,12 +519,19 @@ fn hydrate_content(
         {
             Some(t) => t,
             None => {
+                // Audience is optional — the ID-token flow doesn't use one
+                // (mirrors `haven-cli/config.rs::auth_config`).
+                let audience = match store.meta_get("auth0_audience")? {
+                    Some(v) => Some(v),
+                    None => std::env::var_os("HAVEN_AUTH0_AUDIENCE")
+                        .map(|v| v.to_string_lossy().into_owned()),
+                };
                 let cfg = haven_auth::AuthConfig::new(
                     remote_setting(store, "auth0_domain", "HAVEN_AUTH0_DOMAIN")?,
                     remote_setting(store, "auth0_client_id", "HAVEN_AUTH0_CLIENT_ID")?,
-                    remote_setting(store, "auth0_audience", "HAVEN_AUTH0_AUDIENCE")?,
+                    audience,
                 );
-                haven_auth::current_access_token(&cfg, &haven_auth::TokenStore::new())
+                haven_auth::current_bearer_token(&cfg, &haven_auth::TokenStore::new())
                     .await
                     .map_err(|e| HavenError::Invalid(format!("auth: {e}")))?
             }

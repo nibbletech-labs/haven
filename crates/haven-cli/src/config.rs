@@ -51,12 +51,21 @@ fn setting(store: &Store, meta_key: &str, env: &str) -> Result<String> {
     )))
 }
 
-/// Auth0 tenant config for the CLI app (SPEC §6).
+/// Resolve an optional setting: `meta`, then the env var, else `None`.
+fn setting_opt(store: &Store, meta_key: &str, env: &str) -> Result<Option<String>> {
+    if let Some(v) = store.meta_get(meta_key)? {
+        return Ok(Some(v));
+    }
+    Ok(std::env::var_os(env).map(|v| v.to_string_lossy().into_owned()))
+}
+
+/// Auth0 tenant config for the CLI app (SPEC §6). The audience is optional:
+/// the ID-token flow Supabase third-party auth uses doesn't need one.
 pub fn auth_config(store: &Store) -> Result<AuthConfig> {
     Ok(AuthConfig::new(
         setting(store, "auth0_domain", "HAVEN_AUTH0_DOMAIN")?,
         setting(store, "auth0_client_id", "HAVEN_AUTH0_CLIENT_ID")?,
-        setting(store, "auth0_audience", "HAVEN_AUTH0_AUDIENCE")?,
+        setting_opt(store, "auth0_audience", "HAVEN_AUTH0_AUDIENCE")?,
     ))
 }
 
