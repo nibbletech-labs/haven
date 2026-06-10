@@ -52,9 +52,43 @@ cargo build --release
 ```
 
 `haven setup` is idempotent: it creates `~/.haven`, runs migrations, registers the
-`haven` MCP server in your Claude config, installs the bundled Claude skill, and
+`haven` MCP server for Claude and Codex, installs the bundled skill into the
+agent-readable skill paths, writes/refreshes the Haven stanza in `AGENTS.md`, and
 can create/select your first project with `--project-key`. `haven doctor` reports
 whether each local install piece is wired.
+
+Agent-specific setup is available when you only want one integration:
+
+```sh
+haven setup --agent codex
+haven setup --agent claude
+haven skill install --agent codex
+```
+
+Codex reads MCP servers from `~/.codex/config.toml` or trusted project
+`.codex/config.toml`. Haven writes this stanza for Codex:
+
+```toml
+[mcp_servers.haven]
+command = "haven"
+args = ["mcp"]
+```
+
+Codex/Open Agent Skills are installed to `~/.agents/skills/haven` by default
+(`.agents/skills`, `~/.agents/skills`, and `/etc/codex/skills` are readable by
+Codex). Claude keeps using `~/.claude/skills/haven`; Codex does not read that
+Claude path.
+
+To expose a human/agent-friendly project entry point inside a repo:
+
+```sh
+haven link
+```
+
+This creates a visible `Haven/` workspace containing a generated `backlog.md`
+projection and room for docs. The canonical graph and content remain under
+`~/.haven`; `Haven/` is a disposable alias and is added to `.git/info/exclude`
+when the current directory is inside a Git repo.
 
 ## Develop
 

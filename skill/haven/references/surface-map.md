@@ -39,8 +39,9 @@ values error.
 
 ```
 # Setup & introspection
-haven setup | init | status | doctor
+haven setup [--agent all|claude|codex] [--no-skill] | init | status | doctor
 haven config get <key> | set <key> <value>
+haven link [--name Haven]  # visible repo-local workspace/projection; canonical state stays in ~/.haven
 
 # Projects
 haven project add --key <k> --title <t> [--prefix HV] [--description …]
@@ -93,6 +94,7 @@ haven artifact list <ref> [--role <role>]
 haven artifact get  <ref> [--role <role>] [--path <relpath>]
 haven note <ref> "<text>"
 haven render
+haven skill install [--agent all|claude|codex]
 
 # Server / cloud
 haven mcp
@@ -184,7 +186,32 @@ must rely on a local CLI or a pre-arranged state:
 - **`import`** — bulk capture from a JSON file (plan-loading is an
   at-the-terminal act). Over MCP, loop `haven_add_item` — with
   `if_absent: true` for dedupe — one call per item.
-- **Lifecycle/admin** — `setup`, `init`, `doctor`, `config`, `auth`, `sync`.
+- **Lifecycle/admin** — `setup`, `init`, `doctor`, `config`, `link`, `skill`,
+  `auth`, `sync`.
+
+## Agent discovery and setup
+
+`haven setup` writes an agent-agnostic `AGENTS.md` Haven stanza in the current
+repo, then wires selected agent integrations. `--agent all` is the default.
+
+Claude MCP lives in the Claude user config and its skill snapshot lives under
+`~/.claude/skills/haven`. Codex MCP lives in `~/.codex/config.toml` or a trusted
+project `.codex/config.toml` as:
+
+```toml
+[mcp_servers.haven]
+command = "haven"
+args = ["mcp"]
+```
+
+Codex/Open Agent Skills are discovered from `.agents/skills`,
+`~/.agents/skills`, and `/etc/codex/skills`; Haven installs the user-scope
+snapshot to `~/.agents/skills/haven` by default. Codex does not read
+`~/.claude/skills`.
+
+`haven link` creates a visible repo-local `Haven/` workspace with `backlog.md`
+linked/copied from the canonical generated projection under `~/.haven`. Treat
+`Haven/` as disposable; structure still changes only through Haven tools.
 
 If a remote client genuinely needs to create projects or re-rank, that's a gap to
 raise against the binary — don't fake it through other tools.

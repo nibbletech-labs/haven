@@ -17,6 +17,7 @@ impl Haven {
     fn new() -> Self {
         let home = TempDir::new().unwrap();
         let path = home.path().join("haven");
+        std::fs::create_dir_all(&path).unwrap();
         Haven {
             home: path,
             _home: home,
@@ -63,6 +64,9 @@ impl Haven {
         c.env("HAVEN_HOME", &self.home);
         // Keep `setup`'s MCP-config write inside the temp tree, never ~/.claude.
         c.env("HAVEN_CLAUDE_DIR", self.home.join(".claude"));
+        c.env("HAVEN_CODEX_DIR", self.home.join(".codex"));
+        c.env("HAVEN_AGENTS_DIR", self.home.join(".agents"));
+        c.current_dir(&self.home);
         c.args(args);
         c
     }
@@ -75,24 +79,42 @@ fn skill_install_and_setup_write_the_snapshot() {
 
     // Explicit install writes the embedded snapshot.
     let out = h.json(&["skill", "install"]);
-    assert!(out["installed"].as_str().unwrap().ends_with("skills/haven"));
+    assert!(out["installed"]["claude"]
+        .as_str()
+        .unwrap()
+        .ends_with("skills/haven"));
     assert!(skill_dir.join("SKILL.md").exists());
     assert!(skill_dir.join("references/workflows.md").exists());
     assert!(skill_dir.join("references/surface-map.md").exists());
+    assert!(skill_dir.join("agents/openai.yaml").exists());
     // It's the real skill (frontmatter name), not an empty file.
     let body = std::fs::read_to_string(skill_dir.join("SKILL.md")).unwrap();
     assert!(body.contains("name: haven"));
 
-    // `setup` installs it too (alongside the MCP wiring) — unless --no-skill.
+    let codex = h.json(&["skill", "install", "--agent", "codex"]);
+    assert!(codex["installed"]["codex"]
+        .as_str()
+        .unwrap()
+        .ends_with("skills/haven"));
+    assert!(h.home.join(".agents/skills/haven/SKILL.md").exists());
+
+    // `setup` installs both default agent skills (alongside MCP wiring) — unless --no-skill.
     let fresh = Haven::new();
     let setup = fresh.json(&["setup"]);
     assert!(setup["skill"].as_str().unwrap().ends_with("skills/haven"));
     assert!(fresh.home.join(".claude/skills/haven/SKILL.md").exists());
+    assert!(fresh.home.join(".agents/skills/haven/SKILL.md").exists());
+    assert!(fresh.home.join("AGENTS.md").exists());
+    let codex_config = std::fs::read_to_string(fresh.home.join(".codex/config.toml")).unwrap();
+    assert!(codex_config.contains("[mcp_servers.haven]"));
+    assert!(codex_config.contains("command = \"haven\""));
+    assert!(codex_config.contains("args = [\"mcp\"]"));
 
     let skipped = Haven::new();
     let out = skipped.json(&["setup", "--no-skill"]);
     assert_eq!(out["skill"], "skipped (--no-skill)");
     assert!(!skipped.home.join(".claude/skills/haven/SKILL.md").exists());
+    assert!(!skipped.home.join(".agents/skills/haven/SKILL.md").exists());
 }
 
 #[test]
@@ -115,8 +137,11 @@ fn doctor_reports_install_health() {
     let before = h.json(&["doctor"]);
     assert_eq!(before["ok"], false);
     assert_eq!(status_of(&before, "database"), "ok");
-    assert_eq!(status_of(&before, "mcp"), "warn");
-    assert_eq!(status_of(&before, "skill"), "warn");
+    assert_eq!(status_of(&before, "claude_mcp"), "warn");
+    assert_eq!(status_of(&before, "claude_skill"), "warn");
+    assert_eq!(status_of(&before, "codex_mcp"), "warn");
+    assert_eq!(status_of(&before, "codex_skill"), "warn");
+    assert_eq!(status_of(&before, "agents_md"), "warn");
 
     // After setup, MCP + skill are green. Put the built binary on $PATH so the
     // `path` check can resolve `haven` (it isn't there by default in the test env).
@@ -127,13 +152,19 @@ fn doctor_reports_install_health() {
         .unwrap()
         .env("HAVEN_HOME", &h.home)
         .env("HAVEN_CLAUDE_DIR", h.home.join(".claude"))
+        .env("HAVEN_CODEX_DIR", h.home.join(".codex"))
+        .env("HAVEN_AGENTS_DIR", h.home.join(".agents"))
+        .current_dir(&h.home)
         .env("PATH", bindir)
         .arg("doctor")
         .output()
         .unwrap();
     let after: Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(status_of(&after, "mcp"), "ok");
-    assert_eq!(status_of(&after, "skill"), "ok");
+    assert_eq!(status_of(&after, "claude_mcp"), "ok");
+    assert_eq!(status_of(&after, "claude_skill"), "ok");
+    assert_eq!(status_of(&after, "codex_mcp"), "ok");
+    assert_eq!(status_of(&after, "codex_skill"), "ok");
+    assert_eq!(status_of(&after, "agents_md"), "ok");
     assert_eq!(status_of(&after, "path"), "ok");
     assert_eq!(
         after["ok"], true,
@@ -208,6 +239,40 @@ fn docs_lists_anchor_artifacts_without_dispatching_them() {
         h.fail(&["item", "archive", "HV-1", "--rationale", "not work"])["error"]["code"],
         "invalid"
     );
+}
+
+#[test]
+fn link_creates_visible_workspace_projection_and_local_git_exclude() {
+    let h = Haven::new();
+    std::fs::create_dir_all(h.home.join(".git/info")).unwrap();
+    h.ok(&[
+        "setup",
+        "--project-key",
+        "demo",
+        "--project-title",
+        "Demo",
+        "--prefix",
+        "DM",
+    ]);
+    h.json(&[
+        "item",
+        "add",
+        "Codex can read the projection",
+        "--commit",
+        "--status",
+        "ready",
+        "--done-looks-like",
+        "visible in Haven/backlog.md",
+    ]);
+
+    let out = h.json(&["link"]);
+    assert!(out["workspace"].as_str().unwrap().ends_with("/Haven"));
+    assert!(h.home.join("Haven/README.md").exists());
+    assert!(h.home.join("Haven/docs").is_dir());
+    let backlog = std::fs::read_to_string(h.home.join("Haven/backlog.md")).unwrap();
+    assert!(backlog.contains("Codex can read the projection"));
+    let exclude = std::fs::read_to_string(h.home.join(".git/info/exclude")).unwrap();
+    assert!(exclude.lines().any(|line| line.trim() == "/Haven/"));
 }
 
 #[test]

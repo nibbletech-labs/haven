@@ -7,7 +7,7 @@ mod output;
 
 use std::path::PathBuf;
 
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use haven_core::{
     ArtifactKind, ArtifactRole, CompleteInput, HandoffInput, HavenError, Include, ItemFilter,
     ItemUpdate, LineageDirection, NewArtifact, NewItem, NodeType, OwnerKind, Result, Status,
@@ -35,6 +35,9 @@ struct Cli {
 enum Command {
     /// Create ~/.haven, init the DB + migrations, wire MCP, install the skill (idempotent).
     Setup {
+        /// Agent wiring to install: all, claude, or codex.
+        #[arg(long, value_enum, default_value_t = AgentTarget::All)]
+        agent: AgentTarget,
         /// Skip installing the Claude skill (headless / non-Claude installs).
         #[arg(long)]
         no_skill: bool,
@@ -107,7 +110,13 @@ enum Command {
     Note { reference: String, text: String },
     /// (Re)write the project's backlog.md projection.
     Render,
-    /// Install the embedded Claude skill snapshot.
+    /// Create a visible repo-local Haven/ workspace projection.
+    Link {
+        /// Visible workspace directory to create in the current repo.
+        #[arg(long, default_value = "Haven")]
+        name: PathBuf,
+    },
+    /// Install the embedded skill snapshot.
     Skill {
         #[command(subcommand)]
         cmd: SkillCmd,
@@ -150,8 +159,29 @@ enum SyncCmd {
 
 #[derive(Subcommand)]
 enum SkillCmd {
-    /// Write the embedded skill to ~/.claude/skills/haven/ (overridable via $HAVEN_CLAUDE_DIR).
-    Install,
+    /// Write the embedded skill to the selected agent skill path.
+    Install {
+        /// Agent skill target: all, claude, or codex.
+        #[arg(long, value_enum, default_value_t = AgentTarget::Claude)]
+        agent: AgentTarget,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+enum AgentTarget {
+    All,
+    Claude,
+    Codex,
+}
+
+impl AgentTarget {
+    fn includes_claude(self) -> bool {
+        matches!(self, AgentTarget::All | AgentTarget::Claude)
+    }
+
+    fn includes_codex(self) -> bool {
+        matches!(self, AgentTarget::All | AgentTarget::Codex)
+    }
 }
 
 #[derive(Subcommand)]
@@ -587,11 +617,13 @@ fn run(cli: &Cli) -> Result<Output> {
     let project = cli.project.as_deref();
     match &cli.command {
         Command::Setup {
+            agent,
             no_skill,
             project_key,
             project_title,
             prefix,
         } => cmd_setup(
+            *agent,
             *no_skill,
             project_key.as_deref(),
             project_title.as_deref(),
@@ -649,6 +681,7 @@ fn run(cli: &Cli) -> Result<Output> {
                 serde_json::json!({ "rendered": path.display().to_string() }),
             ))
         }
+        Command::Link { name } => cmd_link(project, name),
         Command::Skill { cmd } => cmd_skill(cmd),
         Command::Mcp => {
             // Serve until stdin EOF; stdout is the MCP channel, so exit without
@@ -927,6 +960,7 @@ fn maybe_render(cli: &Cli) {
 }
 
 fn cmd_setup(
+    agent: AgentTarget,
     no_skill: bool,
     project_key: Option<&str>,
     project_title: Option<&str>,
@@ -943,24 +977,61 @@ fn cmd_setup(
         s.meta_set("device_id", &uuid_like())?;
     }
     let mut warnings = Vec::new();
-    // Register the MCP server with Claude (best-effort; never fail setup on it).
-    let mcp_config = match config::ensure_mcp_wiring() {
-        Ok(p) => p.display().to_string(),
-        Err(e) => {
-            warnings.push(format!("MCP wiring skipped: {e}"));
-            format!("skipped: {e}")
+    let claude_mcp_config = if agent.includes_claude() {
+        match config::ensure_mcp_wiring() {
+            Ok(p) => p.display().to_string(),
+            Err(e) => {
+                warnings.push(format!("Claude MCP wiring skipped: {e}"));
+                format!("skipped: {e}")
+            }
         }
-    };
-    // Install the embedded skill alongside it (skippable; also best-effort).
-    let skill = if no_skill {
-        "skipped (--no-skill)".to_string()
     } else {
+        "skipped (--agent codex)".to_string()
+    };
+    let codex_mcp_config = if agent.includes_codex() {
+        match config::ensure_codex_mcp_wiring() {
+            Ok(p) => p.display().to_string(),
+            Err(e) => {
+                warnings.push(format!("Codex MCP wiring skipped: {e}"));
+                format!("skipped: {e}")
+            }
+        }
+    } else {
+        "skipped (--agent claude)".to_string()
+    };
+
+    let claude_skill = if no_skill {
+        "skipped (--no-skill)".to_string()
+    } else if agent.includes_claude() {
         match config::ensure_skill_installed() {
             Ok(p) => p.display().to_string(),
             Err(e) => {
-                warnings.push(format!("skill install skipped: {e}"));
+                warnings.push(format!("Claude skill install skipped: {e}"));
                 format!("skipped: {e}")
             }
+        }
+    } else {
+        "skipped (--agent codex)".to_string()
+    };
+    let codex_skill = if no_skill {
+        "skipped (--no-skill)".to_string()
+    } else if agent.includes_codex() {
+        match config::ensure_codex_skill_installed() {
+            Ok(p) => p.display().to_string(),
+            Err(e) => {
+                warnings.push(format!("Codex skill install skipped: {e}"));
+                format!("skipped: {e}")
+            }
+        }
+    } else {
+        "skipped (--agent claude)".to_string()
+    };
+
+    let agents_md = match config::ensure_agents_md() {
+        Ok(p) => p.display().to_string(),
+        Err(e) => {
+            warnings.push(format!("AGENTS.md discovery skipped: {e}"));
+            format!("skipped: {e}")
         }
     };
 
@@ -985,8 +1056,13 @@ fn cmd_setup(
         "message": "haven local setup complete",
         "root": paths.root.display().to_string(),
         "db": paths.db.display().to_string(),
-        "mcp_config": mcp_config,
-        "skill": skill,
+        "mcp_config": claude_mcp_config.clone(),
+        "skill": claude_skill.clone(),
+        "claude_mcp_config": claude_mcp_config,
+        "claude_skill": claude_skill,
+        "codex_mcp_config": codex_mcp_config,
+        "codex_skill": codex_skill,
+        "agents_md": agents_md,
         "current_project": current_project,
         "project_created": project_created,
         "warnings": warnings,
@@ -1001,14 +1077,40 @@ fn cmd_setup(
 
 fn cmd_skill(cmd: &SkillCmd) -> Result<Output> {
     match cmd {
-        SkillCmd::Install => {
-            let dir = config::ensure_skill_installed()?;
+        SkillCmd::Install { agent } => {
+            let mut installed = serde_json::Map::new();
+            if agent.includes_claude() {
+                installed.insert(
+                    "claude".into(),
+                    serde_json::json!(config::ensure_skill_installed()?.display().to_string()),
+                );
+            }
+            if agent.includes_codex() {
+                installed.insert(
+                    "codex".into(),
+                    serde_json::json!(config::ensure_codex_skill_installed()?
+                        .display()
+                        .to_string()),
+                );
+            }
             Ok(Output::Json(serde_json::json!({
-                "installed": dir.display().to_string(),
-                "files": ["SKILL.md", "references/workflows.md", "references/surface-map.md"],
+                "installed": installed,
+                "files": config::SKILL_FILE_LIST,
             })))
         }
     }
+}
+
+fn cmd_link(project: Option<&str>, name: &std::path::Path) -> Result<Output> {
+    let s = config::open_store()?;
+    let linked = config::link_workspace(&s, project, name)?;
+    Ok(Output::Json(serde_json::json!({
+        "workspace": linked.workspace.display().to_string(),
+        "backlog": linked.backlog.display().to_string(),
+        "canonical_backlog": linked.canonical_backlog.display().to_string(),
+        "git_exclude": linked.git_exclude.map(|p| p.display().to_string()),
+        "note": "canonical graph/content remains under ~/.haven; this workspace is disposable",
+    })))
 }
 
 fn cmd_status(project: Option<&str>) -> Result<Output> {
@@ -1059,49 +1161,119 @@ fn cmd_doctor() -> Result<Output> {
         )),
     }
 
-    // 2–4. Install wiring: MCP stanza, skill snapshot, binary on PATH.
+    // 2–6. Install wiring: MCP stanzas, skill snapshots, AGENTS.md, binary on PATH.
     match config::install_check() {
         Ok(w) => {
-            checks.push(if w.mcp_registered {
+            checks.push(if w.claude_mcp_registered {
                 check(
-                    "mcp",
+                    "claude_mcp",
                     "ok",
                     format!(
                         "`haven` server registered in {}",
-                        w.mcp_config_path.display()
+                        w.claude_mcp_config_path.display()
                     ),
                 )
             } else {
                 check(
-                    "mcp",
+                    "claude_mcp",
                     "warn",
                     format!(
                         "not registered in {} — run `haven setup`",
-                        w.mcp_config_path.display()
+                        w.claude_mcp_config_path.display()
                     ),
                 )
             });
 
-            checks.push(if w.skill_present && w.skill_current {
+            checks.push(if w.claude_skill_present && w.claude_skill_current {
                 check(
-                    "skill",
+                    "claude_skill",
                     "ok",
-                    format!("up to date at {}", w.skill_dir.display()),
+                    format!("up to date at {}", w.claude_skill_dir.display()),
                 )
-            } else if w.skill_present {
+            } else if w.claude_skill_present {
                 check(
-                    "skill",
+                    "claude_skill",
                     "warn",
                     "installed but stale vs this binary — run `haven skill install`".into(),
                 )
             } else {
                 check(
-                    "skill",
+                    "claude_skill",
                     "warn",
                     format!(
                         "missing {} — run `haven skill install`",
-                        w.missing_skill_files.join(", ")
+                        w.claude_missing_skill_files.join(", ")
                     ),
+                )
+            });
+
+            checks.push(if w.codex_mcp_registered {
+                check(
+                    "codex_mcp",
+                    "ok",
+                    format!(
+                        "`haven` server registered in {}",
+                        w.codex_mcp_config_path.display()
+                    ),
+                )
+            } else {
+                check(
+                    "codex_mcp",
+                    "warn",
+                    format!(
+                        "not registered in {} — run `haven setup --agent codex`",
+                        w.codex_mcp_config_path.display()
+                    ),
+                )
+            });
+
+            checks.push(if w.codex_skill_present && w.codex_skill_current {
+                check(
+                    "codex_skill",
+                    "ok",
+                    format!("up to date at {}", w.codex_skill_dir.display()),
+                )
+            } else if w.codex_skill_present {
+                check(
+                    "codex_skill",
+                    "warn",
+                    "installed but stale vs this binary — run `haven skill install --agent codex`"
+                        .into(),
+                )
+            } else {
+                check(
+                    "codex_skill",
+                    "warn",
+                    format!(
+                        "missing {} — run `haven skill install --agent codex`",
+                        w.codex_missing_skill_files.join(", ")
+                    ),
+                )
+            });
+
+            checks.push(if w.agents_md_current {
+                check(
+                    "agents_md",
+                    "ok",
+                    format!(
+                        "Haven discovery stanza present in {}",
+                        w.agents_md_path.display()
+                    ),
+                )
+            } else if w.agents_md_present {
+                check(
+                    "agents_md",
+                    "warn",
+                    format!(
+                        "Haven discovery stanza stale in {} — run `haven setup`",
+                        w.agents_md_path.display()
+                    ),
+                )
+            } else {
+                check(
+                    "agents_md",
+                    "warn",
+                    format!("missing {} — run `haven setup`", w.agents_md_path.display()),
                 )
             });
 

@@ -1,0 +1,14 @@
+name: haven
+agent: codex
+skill: haven
+mcp:
+  server: haven
+  command: haven
+  args:
+    - mcp
+discovery:
+  agents_md: AGENTS.md
+  skill_paths:
+    - .agents/skills/haven
+    - ~/.agents/skills/haven
+    - /etc/codex/skills/haven

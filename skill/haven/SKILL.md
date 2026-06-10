@@ -26,6 +26,12 @@ You drive it through the **`haven` CLI** (local agent with a terminal) or the
 Your job is **judgment**: knowing *when* to split / commit / leave floating, and
 what *not* to do. The tools are complete.
 
+Agent discovery is intentionally separate from agent-specific skill paths:
+`AGENTS.md` is the durable repo-level instruction entry point, while Claude reads
+`~/.claude/skills/haven` and Codex/Open Agent Skills reads `.agents/skills`,
+`~/.agents/skills`, or `/etc/codex/skills`. Codex does not read
+`~/.claude/skills`.
+
 ## Operating loop
 
 Run every Haven interaction through these five steps:
@@ -192,6 +198,8 @@ list (the same shape `add_edge` takes, so your fixes round-trip).
   across machines.
 - **Let `backlog.md` regenerate** — it re-renders after every mutation; never
   hand-edit it.
+- **Repo-local `Haven/` is a projection.** It is a visible alias for humans and
+  agents; canonical graph/content remains under `~/.haven`.
 - **Always give a real `--rationale`** on evolve/archive/reopen — lineage exists to
   reconstruct intent ("spans two owners, splitting for independent dispatch", not
   "too big").
