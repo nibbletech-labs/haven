@@ -38,6 +38,18 @@ pub enum HavenError {
     #[error("graph rule violated: {0}")]
     GraphRule(String),
 
+    /// The local DB has been migrated by a newer Haven binary. Refuse to open it
+    /// rather than attempting an unsafe downgrade or surfacing a low-level
+    /// migration error.
+    #[error(
+        "Haven store at {path} uses schema migration {db_version}, but this binary only supports up to {supported_version}. Upgrade or reinstall `haven` before using this store."
+    )]
+    StoreTooNew {
+        path: String,
+        db_version: i64,
+        supported_version: i64,
+    },
+
     #[error("database error: {0}")]
     Db(#[from] rusqlite::Error),
 
@@ -60,6 +72,7 @@ impl HavenError {
             HavenError::Conflict(_) => "conflict",
             HavenError::ContentNotLocal { .. } => "content_not_local",
             HavenError::GraphRule(_) => "graph_rule",
+            HavenError::StoreTooNew { .. } => "store_too_new",
             HavenError::Db(_) => "db",
             HavenError::Migration(_) => "migration",
             HavenError::Serde(_) => "serde",

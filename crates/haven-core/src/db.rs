@@ -15,6 +15,7 @@ use crate::error::{HavenError, Result};
 
 const MIGRATION_001: &str = include_str!("../../../migrations/001_init.sql");
 const MIGRATION_002: &str = include_str!("../../../migrations/002_acceptance.sql");
+pub const LATEST_SCHEMA_MIGRATION: i64 = 2;
 
 fn migrations() -> &'static Migrations<'static> {
     static MIGRATIONS: OnceLock<Migrations<'static>> = OnceLock::new();
@@ -24,8 +25,10 @@ fn migrations() -> &'static Migrations<'static> {
 /// Open (creating if needed) the SQLite database at `path`, apply connection
 /// PRAGMAs, and run any pending migrations. Returns a ready-to-use connection.
 pub fn open<P: AsRef<Path>>(path: P) -> Result<Connection> {
+    let path = path.as_ref();
     let mut conn = Connection::open(path)?;
     configure(&conn, /* wal */ true)?;
+    ensure_supported_schema_version(&conn, Some(path))?;
     migrations().to_latest(&mut conn)?;
     Ok(conn)
 }
@@ -36,8 +39,23 @@ pub fn open<P: AsRef<Path>>(path: P) -> Result<Connection> {
 pub fn open_in_memory() -> Result<Connection> {
     let mut conn = Connection::open_in_memory()?;
     configure(&conn, /* wal */ false)?;
+    ensure_supported_schema_version(&conn, None)?;
     migrations().to_latest(&mut conn)?;
     Ok(conn)
+}
+
+fn ensure_supported_schema_version(conn: &Connection, path: Option<&Path>) -> Result<()> {
+    let db_version: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    if db_version > LATEST_SCHEMA_MIGRATION {
+        return Err(HavenError::StoreTooNew {
+            path: path
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| "<memory>".into()),
+            db_version,
+            supported_version: LATEST_SCHEMA_MIGRATION,
+        });
+    }
+    Ok(())
 }
 
 fn configure(conn: &Connection, wal: bool) -> Result<()> {
@@ -76,6 +94,10 @@ mod tests {
     #[test]
     fn schema_applies_and_seeds_version() {
         let conn = open_in_memory().unwrap();
+        let user_version: i64 = conn
+            .pragma_query_value(None, "user_version", |r| r.get(0))
+            .unwrap();
+        assert_eq!(user_version, LATEST_SCHEMA_MIGRATION);
         let v: String = conn
             .query_row(
                 "SELECT value FROM meta WHERE key = 'schema_version'",
@@ -84,6 +106,31 @@ mod tests {
             )
             .unwrap();
         assert_eq!(v, "1");
+    }
+
+    #[test]
+    fn newer_database_gets_actionable_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("haven.db");
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.pragma_update(None, "user_version", LATEST_SCHEMA_MIGRATION + 1)
+                .unwrap();
+        }
+
+        let err = open(&path).unwrap_err();
+        match err {
+            HavenError::StoreTooNew {
+                path: err_path,
+                db_version,
+                supported_version,
+            } => {
+                assert_eq!(err_path, path.display().to_string());
+                assert_eq!(db_version, LATEST_SCHEMA_MIGRATION + 1);
+                assert_eq!(supported_version, LATEST_SCHEMA_MIGRATION);
+            }
+            other => panic!("expected StoreTooNew, got {other:?}"),
+        }
     }
 
     #[test]
