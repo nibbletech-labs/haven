@@ -161,6 +161,56 @@ fn setup_can_bootstrap_first_project() {
 }
 
 #[test]
+fn docs_lists_anchor_artifacts_without_dispatching_them() {
+    let h = Haven::new();
+    h.ok(&[
+        "setup",
+        "--project-key",
+        "haven",
+        "--project-title",
+        "Haven",
+        "--prefix",
+        "HV",
+    ]);
+    h.json(&[
+        "item",
+        "add",
+        "Haven docs",
+        "--type",
+        "anchor",
+        "--status",
+        "ready",
+        "--commit",
+        "--assign",
+        "ai",
+    ]);
+    h.json(&[
+        "artifact",
+        "add",
+        "HV-1",
+        "--role",
+        "vision",
+        "--content",
+        "Project vision",
+    ]);
+
+    let docs = h.json(&["docs"]);
+    assert_eq!(docs.as_array().unwrap().len(), 1);
+    assert_eq!(docs[0]["ref"], "HV-1");
+    assert_eq!(docs[0]["type"], "anchor");
+    assert_eq!(docs[0]["artifacts"][0]["role"], "vision");
+    assert!(h
+        .json(&["next", "--owner", "ai"])
+        .as_array()
+        .unwrap()
+        .is_empty());
+    assert_eq!(
+        h.fail(&["item", "archive", "HV-1", "--rationale", "not work"])["error"]["code"],
+        "invalid"
+    );
+}
+
+#[test]
 fn batch_commit_and_archive_take_multiple_refs() {
     let h = Haven::new();
     h.ok(&["setup"]);

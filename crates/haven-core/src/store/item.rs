@@ -380,6 +380,7 @@ impl Store {
         }
         if let Some(days) = filter.stale_days {
             // `updated_at` is SQLite `datetime('now')`; compare against the cutoff.
+            sql.push_str(" AND n.type <> 'anchor'");
             sql.push_str(&format!(
                 " AND n.updated_at < datetime('now', ?{})",
                 args.len() + 1
@@ -667,6 +668,7 @@ impl Store {
                 before.status.as_str()
             )));
         }
+        self.refuse_artifact_bearing_anchor(node_id, "complete")?;
 
         let mut warnings = Vec::new();
         if before.done_looks_like.is_none() {
@@ -714,6 +716,21 @@ impl Store {
         })
     }
 
+    fn refuse_artifact_bearing_anchor(&self, node_id: i64, op: &str) -> Result<()> {
+        let (node_type, artifact_count): (NodeType, i64) = self.conn.query_row(
+            "SELECT type, (SELECT count(*) FROM artifacts WHERE node_id = nodes.id)
+             FROM nodes WHERE id = ?1",
+            [node_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        if matches!(node_type, NodeType::Anchor) && artifact_count > 0 {
+            return Err(HavenError::Invalid(format!(
+                "cannot {op} an artifact-bearing anchor; move or remove its artifacts first"
+            )));
+        }
+        Ok(())
+    }
+
     /// Items that depend on `completed_id` and now have no remaining open
     /// dependency — i.e. became dispatchable/reviewable when it completed. Run
     /// after `completed_id` is marked done. Includes gate nodes whose triggers
@@ -722,6 +739,7 @@ impl Store {
         let sql = format!(
             "SELECT {ITEM_SELECT} FROM {ITEM_FROM}
              WHERE n.id IN (SELECT node_id FROM dependency_edges WHERE depends_on_id = ?1)
+               AND n.type <> 'anchor'
                AND n.status NOT IN ('done','superseded','archived')
                AND NOT EXISTS (
                  SELECT 1 FROM dependency_edges d2
@@ -758,6 +776,17 @@ impl Store {
         if target_id == node_id {
             return Err(HavenError::Invalid(
                 "cannot rank an item relative to itself".into(),
+            ));
+        }
+
+        let (node_type, target_type): (NodeType, NodeType) = self.conn.query_row(
+            "SELECT n.type, t.type FROM nodes n JOIN nodes t ON t.id = ?2 WHERE n.id = ?1",
+            params![node_id, target_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        if matches!(node_type, NodeType::Anchor) || matches!(target_type, NodeType::Anchor) {
+            return Err(HavenError::Invalid(
+                "anchor nodes cannot be ranked or used as rank targets".into(),
             ));
         }
 
@@ -822,6 +851,7 @@ impl Store {
     ) -> Result<Item> {
         let (project_id, _key) = self.require_project(project)?;
         let node_id = self.resolve_node_id(project_id, selector)?;
+        self.refuse_artifact_bearing_anchor(node_id, "archive")?;
         let tx = self.conn.unchecked_transaction()?;
         tx.execute(
             "UPDATE nodes SET status = 'archived', archived_at = datetime('now'),

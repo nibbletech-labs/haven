@@ -41,7 +41,7 @@ create table nodes (
   done_looks_like text,                        -- acceptance statement (verify anchor)
   why          text,                            -- one-line provenance / vision trace
   type         text not null default 'task'
-    check (type in ('task','code','research','data','design','admin','release','phase','gate')),
+    check (type in ('task','code','research','data','design','admin','release','phase','gate','anchor')),
   status       text not null default 'discovery'
     check (status in ('discovery','definition','ready','in_progress','blocked','done','superseded','archived')),
   owner_kind   text check (owner_kind in ('human','ai')),

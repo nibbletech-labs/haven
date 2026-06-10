@@ -153,6 +153,116 @@ fn complete_records_evidence_marks_done_and_reports_unblocked() {
 }
 
 #[test]
+fn anchors_are_living_docs_not_dispatch_work() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = Store::open_in_memory_at(dir.path()).unwrap();
+    s.add_project("haven", Some("HV"), "Haven", None).unwrap();
+    s.use_project("haven").unwrap();
+
+    let anchor = s
+        .add_item(
+            None,
+            NewItem {
+                title: "Haven docs".into(),
+                node_type: Some(NodeType::Anchor),
+                status: Some(Status::Ready),
+                commit: true,
+                assign: Some(OwnerKind::Ai),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let work = s
+        .add_item(
+            None,
+            NewItem {
+                title: "Build feature".into(),
+                status: Some(Status::Ready),
+                commit: true,
+                assign: Some(OwnerKind::Ai),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    let next = s.next(None, Some(OwnerKind::Ai), None).unwrap();
+    let refs: Vec<&str> = next.iter().map(|i| i.reference.as_str()).collect();
+    assert_eq!(refs, [work.reference.as_str()]);
+    let explain = s.next_explain(None, Some(OwnerKind::Ai)).unwrap();
+    assert_eq!(explain["dispatchable"], 1);
+
+    s.conn
+        .execute(
+            "UPDATE nodes SET updated_at = datetime('now','-30 days') WHERE ref = ?1",
+            rusqlite::params![anchor.reference],
+        )
+        .unwrap();
+    let stale = s
+        .list_items(
+            None,
+            &ItemFilter {
+                stale_days: Some(7),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert!(!stale.iter().any(|i| i.reference == anchor.reference));
+
+    assert!(s
+        .rank_item(None, &anchor.reference, None, Some(&work.reference))
+        .is_err());
+    assert!(s
+        .rank_item(None, &work.reference, None, Some(&anchor.reference))
+        .is_err());
+
+    let artifact = s
+        .add_artifact(
+            None,
+            &anchor.reference,
+            NewArtifact {
+                role: ArtifactRole::Vision,
+                kind: ArtifactKind::File,
+                content: Some("Project vision".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(artifact.role, ArtifactRole::Vision);
+    let docs = s.docs(None).unwrap();
+    assert_eq!(docs.len(), 1);
+    assert_eq!(docs[0].item.reference, anchor.reference);
+    assert_eq!(docs[0].artifacts.len(), 1);
+
+    let complete = s
+        .complete_item(None, &anchor.reference, CompleteInput::default())
+        .unwrap_err();
+    assert_eq!(complete.code(), "invalid");
+    assert!(complete.to_string().contains("artifact-bearing anchor"));
+    let archive = s
+        .archive_item(None, &anchor.reference, Some("cleanup"), None)
+        .unwrap_err();
+    assert_eq!(archive.code(), "invalid");
+    assert!(archive.to_string().contains("artifact-bearing anchor"));
+
+    let empty_anchor = s
+        .add_item(
+            None,
+            NewItem {
+                title: "Empty docs anchor".into(),
+                node_type: Some(NodeType::Anchor),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        s.archive_item(None, &empty_anchor.reference, Some("unused"), None)
+            .unwrap()
+            .status,
+        Status::Archived
+    );
+}
+
+#[test]
 fn batch_commit_uncommit_archive_validate_refs_first() {
     let s = store();
     add(&s, "A"); // HV-1

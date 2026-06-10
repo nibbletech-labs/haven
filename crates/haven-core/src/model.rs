@@ -57,11 +57,12 @@ macro_rules! sql_enum {
 }
 
 sql_enum! {
-    /// Node type. `release`/`phase`/`gate` are container nodes (group targets).
+    /// Node type. `release`/`phase`/`gate` are container nodes (group targets);
+    /// `anchor` is a long-lived project-docs node.
     NodeType {
         Task => "task", Code => "code", Research => "research", Data => "data",
         Design => "design", Admin => "admin", Release => "release",
-        Phase => "phase", Gate => "gate",
+        Phase => "phase", Gate => "gate", Anchor => "anchor",
     }
 }
 

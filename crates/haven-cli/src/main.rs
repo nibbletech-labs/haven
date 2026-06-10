@@ -96,6 +96,8 @@ enum Command {
     Search(SearchArgs),
     /// Export the whole project work-graph (all nodes + edges) in one read.
     Graph(GraphArgs),
+    /// List project living-doc anchors and their artifacts.
+    Docs,
     /// Manage content artifacts on an item.
     Artifact {
         #[command(subcommand)]
@@ -299,7 +301,7 @@ enum ItemCmd {
 #[derive(Args)]
 struct ItemAddArgs {
     title: String,
-    /// task | code | research | data | design | admin | release | phase | gate.
+    /// task | code | research | data | design | admin | release | phase | gate | anchor.
     #[arg(long = "type")]
     node_type: Option<String>,
     /// Short summary. Rich content should be stored as artifacts.
@@ -395,7 +397,7 @@ struct ItemUpdateArgs {
     /// Priority band 0-4. Lower numbers sort first.
     #[arg(long)]
     priority: Option<i64>,
-    /// task | code | research | data | design | admin | release | phase | gate.
+    /// task | code | research | data | design | admin | release | phase | gate | anchor.
     #[arg(long = "type")]
     node_type: Option<String>,
     /// on_human | on_dependency | on_external | none
@@ -627,6 +629,10 @@ fn run(cli: &Cli) -> Result<Output> {
             Ok(Output::Json(serde_json::to_value(
                 s.project_graph(project, a.lineage)?,
             )?))
+        }
+        Command::Docs => {
+            let s = config::open_store()?;
+            Ok(Output::Json(serde_json::to_value(s.docs(project)?)?))
         }
         Command::Artifact { cmd } => cmd_artifact(project, cmd),
         Command::Note { reference, text } => {

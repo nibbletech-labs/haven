@@ -38,6 +38,14 @@ pub struct ProjectGraph {
     pub lineage: Vec<LineageLink>,
 }
 
+/// One living-doc anchor and the artifacts attached to it.
+#[derive(Debug, Clone, Serialize)]
+pub struct DocAnchor {
+    #[serde(flatten)]
+    pub item: Item,
+    pub artifacts: Vec<Artifact>,
+}
+
 /// Direction for `evolve graph`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LineageDirection {
@@ -74,6 +82,7 @@ const ORDER: &str =
 /// `next_explain`'s `count_dispatchable` (which counts them) so the diagnostic
 /// can never disagree with the real queue. References only the `nodes` alias `n`.
 const DISPATCHABLE_PREDICATE: &str = "n.committed = 1 AND n.status = 'ready'
+             AND n.type <> 'anchor'
              AND n.wait_state IS NULL
              AND NOT EXISTS (
                SELECT 1 FROM dependency_edges d
@@ -128,12 +137,12 @@ impl Store {
         let waiting = self.count_next_where(
             project_id,
             owner,
-            "n.committed = 1 AND n.status = 'ready' AND n.wait_state IS NOT NULL",
+            "n.type <> 'anchor' AND n.committed = 1 AND n.status = 'ready' AND n.wait_state IS NOT NULL",
         )?;
         let blocked_by_dependency = self.count_next_where(
             project_id,
             owner,
-            "n.committed = 1 AND n.status = 'ready' AND n.wait_state IS NULL
+            "n.type <> 'anchor' AND n.committed = 1 AND n.status = 'ready' AND n.wait_state IS NULL
              AND EXISTS (
                SELECT 1 FROM dependency_edges d
                JOIN nodes p ON p.id = d.depends_on_id
@@ -143,10 +152,13 @@ impl Store {
         let committed_not_ready = self.count_next_where(
             project_id,
             owner,
-            "n.committed = 1 AND n.status NOT IN ('ready','done','superseded','archived')",
+            "n.type <> 'anchor' AND n.committed = 1 AND n.status NOT IN ('ready','done','superseded','archived')",
         )?;
-        let ready_but_uncommitted =
-            self.count_next_where(project_id, owner, "n.committed = 0 AND n.status = 'ready'")?;
+        let ready_but_uncommitted = self.count_next_where(
+            project_id,
+            owner,
+            "n.type <> 'anchor' AND n.committed = 0 AND n.status = 'ready'",
+        )?;
 
         let hint = if dispatchable > 0 {
             "queue has dispatchable items"
@@ -290,6 +302,26 @@ impl Store {
             edges,
             lineage,
         })
+    }
+
+    /// Project-level living docs: all live anchor nodes plus their artifacts.
+    pub fn docs(&self, project: Option<&str>) -> Result<Vec<DocAnchor>> {
+        let (project_id, _) = self.require_project(project)?;
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT {ITEM_SELECT} FROM {ITEM_FROM}
+             WHERE n.project_id = ?1
+               AND n.type = 'anchor'
+               AND n.status NOT IN ('archived','superseded')
+             ORDER BY n.created_at, n.id"
+        ))?;
+        let rows = stmt.query_map([project_id], item_from_row)?;
+        let mut anchors = Vec::new();
+        for row in rows {
+            let item = row?;
+            let artifacts = self.load_artifacts(item.id)?;
+            anchors.push(DocAnchor { item, artifacts });
+        }
+        Ok(anchors)
     }
 
     /// One structural edge layer for a project, as `{kind, from, to}` ref pairs.

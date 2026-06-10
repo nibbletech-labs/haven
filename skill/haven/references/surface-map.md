@@ -2,13 +2,13 @@
 
 The two front-ends drive the **same** store but are **not 1:1**. The CLI has many
 friendly verbs (for a human typing); the MCP is a deliberately smaller, more
-general set of 22 tools (for an agent). When a workflow runs over MCP, translate
+general set of 23 tools (for an agent). When a workflow runs over MCP, translate
 using the mapping below.
 
 ## Contents
 - [Enums (valid values)](#enums)
 - [CLI command surface](#cli-command-surface)
-- [MCP tool catalogue (22 tools)](#mcp-tool-catalogue)
+- [MCP tool catalogue (23 tools)](#mcp-tool-catalogue)
 - [CLI → MCP mapping](#cli--mcp-mapping)
 - [CLI-only operations](#cli-only-operations)
 - [The content channel](#the-content-channel)
@@ -21,8 +21,8 @@ Used everywhere a `--type` / `--status` / `--role` etc. is accepted. Invalid
 values error.
 
 - **Node type** (`--type`): `task` (default), `code`, `research`, `data`,
-  `design`, `admin`, `release`, `phase`, `gate`. The last three are *container*
-  nodes (group targets).
+  `design`, `admin`, `release`, `phase`, `gate`, `anchor`. `release`/`phase`/
+  `gate` are container nodes (group targets); `anchor` is for living project docs.
 - **Status** (`--status`): `discovery` (default) → `definition` → `ready` →
   `in_progress` → `done`, plus `blocked`, `superseded`, `archived`.
 - **Owner** (`--to` / `--owner` / `--assign`): `human`, `ai`.
@@ -71,6 +71,7 @@ haven item reopen  <ref> [--rationale "…"]
 # Dispatch
 haven next [--owner human|ai] [--limit N]
 haven graph [--lineage]        # whole project: all nodes + edges in one read
+haven docs                     # live project-doc anchors + their artifacts
 
 # Edges
 haven decompose <parent> [--into <ref> …] [--remove <ref> …]
@@ -101,7 +102,7 @@ haven sync [status] [--watch]
 
 ## MCP tool catalogue
 
-22 tools, each taking an optional `project` and naming items by `ref` or
+23 tools, each taking an optional `project` and naming items by `ref` or
 `public_id`. Required args in **bold**.
 
 | Tool | Args |
@@ -119,6 +120,7 @@ haven sync [status] [--watch]
 | `haven_resolve_live` | **`ref`** — follow a stale (superseded/archived) ref to its live descendant(s) |
 | `haven_search` | **`query`**, `limit?` |
 | `haven_graph` | `lineage?` — the whole project graph (all nodes + `{kind,from,to}` edges) in one read |
+| `haven_docs` | `project?` — live project-doc anchors and their artifacts |
 | `haven_get_artifact` | **`ref`**, `role?, path?` |
 | `haven_add_artifact` | **`ref`**, **`role`**, `kind?, content?, name?, path?, uri?, title?, from?, to?, by?` |
 | `haven_status` | `project?` |
@@ -148,6 +150,7 @@ The collapses that catch people out:
 | `item rank` | `haven_rank` |
 | `search`, `status`, `artifact get`/`add` | `haven_search`, `haven_status`, `haven_get_artifact`/`haven_add_artifact` |
 | `graph` | `haven_graph` |
+| `docs` | `haven_docs` |
 | `project list` / `add` | `haven_list_projects` / `haven_add_project` |
 
 So, over MCP: to commit, call `haven_update_item {ref, commit: true, priority}`;

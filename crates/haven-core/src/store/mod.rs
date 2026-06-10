@@ -29,7 +29,7 @@ pub use item::{
     AddOutcome, CompleteInput, CompleteResult, HandoffInput, HandoffResult, Include, ItemFilter,
     ItemUpdate, NewItem, SimilarItem, WaitUpdate,
 };
-pub use query::{GraphEdge, LineageDirection, LineageGraph, LineageLink, ProjectGraph};
+pub use query::{DocAnchor, GraphEdge, LineageDirection, LineageGraph, LineageLink, ProjectGraph};
 
 /// Columns selected for an `Item`, in the order `item_from_row` expects. Joined
 /// against `projects` to resolve the human project key.

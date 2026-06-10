@@ -15,11 +15,18 @@ use crate::error::{HavenError, Result};
 
 const MIGRATION_001: &str = include_str!("../../../migrations/001_init.sql");
 const MIGRATION_002: &str = include_str!("../../../migrations/002_acceptance.sql");
-pub const LATEST_SCHEMA_MIGRATION: i64 = 2;
+const MIGRATION_003: &str = include_str!("../../../migrations/003_anchor_type.sql");
+pub const LATEST_SCHEMA_MIGRATION: i64 = 3;
 
 fn migrations() -> &'static Migrations<'static> {
     static MIGRATIONS: OnceLock<Migrations<'static>> = OnceLock::new();
-    MIGRATIONS.get_or_init(|| Migrations::new(vec![M::up(MIGRATION_001), M::up(MIGRATION_002)]))
+    MIGRATIONS.get_or_init(|| {
+        Migrations::new(vec![
+            M::up(MIGRATION_001),
+            M::up(MIGRATION_002),
+            M::up(MIGRATION_003),
+        ])
+    })
 }
 
 /// Open (creating if needed) the SQLite database at `path`, apply connection

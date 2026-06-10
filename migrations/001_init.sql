@@ -39,7 +39,7 @@ CREATE TABLE nodes (
 
   type          TEXT NOT NULL DEFAULT 'task'
     CHECK (type IN ('task','code','research','data','design','admin',
-                    'release','phase','gate')),     -- release/phase/gate = container nodes
+                    'release','phase','gate','anchor')), -- release/phase/gate = containers; anchor = living docs
 
   -- maturity axis (how well-defined)
   status        TEXT NOT NULL DEFAULT 'discovery'

@@ -16,12 +16,15 @@ haven item add "Draft the spec" --status ready --commit --assign ai \
 haven next                          # what should I do next?
 haven item get HV-1 --include edges,artifacts,lineage
 haven item assign HV-1 --to human
+haven docs                          # project vision/architecture/spec anchors
 ```
 
 - **Structure** (the work-graph) lives in local SQLite, exposed over CLI + MCP,
   optionally synced to the cloud.
 - **Content** (specs, research, notes) lives as files under `~/.haven/`, edited
   directly by local agents.
+- **Project docs** (vision, architecture, decisions) attach to `anchor` nodes and
+  are discoverable with `haven docs` / `haven_docs`.
 - Your tools and apps are *clients* of Haven; Haven doesn't depend on them.
 
 ## Install

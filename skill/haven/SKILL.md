@@ -89,8 +89,9 @@ artifact `content` channel instead — see `references/surface-map.md`.)
 
 **Project-level documents belong in the store too.** Vision, architecture, and
 decision docs are artifacts (`--role vision|design|decision`) on a long-lived
-**anchor node** (`--type phase`, e.g. "Project X — vision & architecture") — not
-loose repo markdown. They then sync, lazy-download, and back every item's `why`
+**anchor node** (`--type anchor`, e.g. "Project X — vision & architecture") — not
+loose repo markdown. Discover them with `haven docs` / `haven_docs`; don't
+hard-code a magic ref. They then sync, lazy-download, and back every item's `why`
 trace like all other content. When asked to tidy or restructure a project's
 docs, **migrating the durable ones into the graph is usually the move** — don't
 just reshuffle files.
@@ -175,6 +176,7 @@ haven_complete_item{"project":"haven","ref":"HV-1","evidence":"cargo test: ok"}
 // Edges, evolve, stale refs.
 haven_add_edge     {"project":"haven","kind":"dependency","from":"HV-2","to":"HV-1"}
 haven_resolve_live {"project":"haven","ref":"HV-9"}   // old ref → live descendant
+haven_docs         {"project":"haven"}                // anchor docs + artifacts
 // Whole graph in one read — to render it, or reason over all dependencies at once.
 haven_graph        {"project":"haven"}                // {nodes[], edges[{kind,from,to}]}
 ```

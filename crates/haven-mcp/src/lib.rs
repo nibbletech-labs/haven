@@ -369,6 +369,7 @@ fn call_tool(store: &Store, name: &str, a: &Value) -> Result<Value> {
         "haven_graph" => {
             to_value(store.project_graph(project, opt_bool(a, "lineage").unwrap_or(false))?)
         }
+        "haven_docs" => to_value(store.docs(project)?),
         "haven_get_artifact" => {
             let role = opt_str(a, "role").map(ArtifactRole::parse).transpose()?;
             let reference = req_str(a, "ref")?;
@@ -587,6 +588,8 @@ fn tools_list() -> Value {
           "inputSchema": obj(json!({"query":{"type":"string"},"project":{"type":"string"},"limit":{"type":"integer"}}), json!(["query"])) },
         { "name": "haven_graph", "description": "The whole project work-graph in one read: every node plus a flat edge list ({kind, from, to}, same shape as haven_add_edge), and optionally lineage links. Use to render the graph or reason over the entire dependency structure at once, instead of N+1 per-node fetches. Nodes include superseded/archived — filter client-side.",
           "inputSchema": obj(json!({"project":{"type":"string"},"lineage":{"type":"boolean"}}), json!([])) },
+        { "name": "haven_docs", "description": "List live project living-doc anchors and their artifacts. Use this instead of hard-coding a docs ref.",
+          "inputSchema": obj(json!({"project":{"type":"string"}}), json!([])) },
         { "name": "haven_get_artifact", "description": "Read an artifact's content (local or lazy-pulled).",
           "inputSchema": obj(json!({"ref":{"type":"string"},"role":{"type":"string"},"path":{"type":"string"},"project":{"type":"string"}}), json!(["ref"])) },
         { "name": "haven_add_artifact", "description": "Register an artifact on an item. Pass `content` to have the server write the file (the content channel for filesystem-less clients), or `path`/`uri` for a local file / external link.",
@@ -662,13 +665,14 @@ mod tests {
         assert_eq!(out.len(), 2);
         assert_eq!(out[0]["result"]["serverInfo"]["name"], "haven");
         let tools = out[1]["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 22);
+        assert_eq!(tools.len(), 23);
         assert!(tools.iter().any(|t| t["name"] == "haven_next"));
         assert!(tools.iter().any(|t| t["name"] == "haven_next_explain"));
         assert!(tools.iter().any(|t| t["name"] == "haven_resolve_live"));
         assert!(tools.iter().any(|t| t["name"] == "haven_handoff"));
         assert!(tools.iter().any(|t| t["name"] == "haven_complete_item"));
         assert!(tools.iter().any(|t| t["name"] == "haven_graph"));
+        assert!(tools.iter().any(|t| t["name"] == "haven_docs"));
         assert!(tools.iter().any(|t| t["name"] == "haven_archive"));
         assert!(tools.iter().any(|t| t["name"] == "haven_list_projects"));
     }
@@ -850,6 +854,37 @@ mod tests {
         assert_eq!(edges[0]["kind"], "dependency");
         assert_eq!(edges[0]["from"], "HV-2");
         assert_eq!(edges[0]["to"], "HV-1");
+    }
+
+    #[test]
+    fn docs_via_tool_lists_anchor_artifacts() {
+        let s = store();
+        let out = session(
+            &s,
+            &[
+                json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{
+                    "name":"haven_add_item",
+                    "arguments":{"title":"Haven docs","type":"anchor","status":"ready","commit":true}
+                }}),
+                json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{
+                    "name":"haven_add_artifact",
+                    "arguments":{"ref":"HV-1","role":"vision","content":"Project vision"}
+                }}),
+                json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{
+                    "name":"haven_docs","arguments":{}
+                }}),
+                json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{
+                    "name":"haven_next","arguments":{}
+                }}),
+            ],
+        );
+        assert_eq!(out[2]["result"]["isError"], false);
+        let docs = tool_payload(&out[2]);
+        assert_eq!(docs.as_array().unwrap().len(), 1);
+        assert_eq!(docs[0]["ref"], "HV-1");
+        assert_eq!(docs[0]["type"], "anchor");
+        assert_eq!(docs[0]["artifacts"][0]["role"], "vision");
+        assert!(tool_payload(&out[3]).as_array().unwrap().is_empty());
     }
 
     #[test]
