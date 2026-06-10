@@ -76,6 +76,14 @@ under `~/.haven/<project>/items/<ref>/`. A local agent reads/edits those files
 is a one-line summary, **never** the content. (A filesystem-less client uses the
 artifact `content` channel instead — see `references/surface-map.md`.)
 
+**Project-level documents belong in the store too.** Vision, architecture, and
+decision docs are artifacts (`--role vision|design|decision`) on a long-lived
+**anchor node** (`--type phase`, e.g. "Project X — vision & architecture") — not
+loose repo markdown. They then sync, lazy-download, and back every item's `why`
+trace like all other content. When asked to tidy or restructure a project's
+docs, **migrating the durable ones into the graph is usually the move** — don't
+just reshuffle files.
+
 ## Lazy structure: capture is cheap, structure is earned
 
 Capturing an idea is a single bare node — floating, uncommitted, `discovery`.

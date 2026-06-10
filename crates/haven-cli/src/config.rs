@@ -79,8 +79,19 @@ fn claude_dir() -> Result<PathBuf> {
     }
 }
 
+/// The Claude Code **user-scope** config file (`~/.claude.json`) — the file
+/// whose top-level `mcpServers` map Claude Code actually reads for user-wide
+/// MCP servers. (Not `~/.claude/mcp.json`: Claude Code ignores that path —
+/// found live when `claude mcp list` showed no `haven` after `setup`.) With
+/// `$HAVEN_CLAUDE_DIR` set, the file lives *inside* that dir so tests stay
+/// hermetic.
 fn claude_mcp_config_path() -> Result<PathBuf> {
-    Ok(claude_dir()?.join("mcp.json"))
+    match std::env::var_os("HAVEN_CLAUDE_DIR") {
+        Some(d) => Ok(PathBuf::from(d).join(".claude.json")),
+        None => directories::BaseDirs::new()
+            .map(|b| b.home_dir().join(".claude.json"))
+            .ok_or_else(|| HavenError::Invalid("could not determine home directory".into())),
+    }
 }
 
 /// The `haven` Claude skill, embedded in the binary so it versions with the
