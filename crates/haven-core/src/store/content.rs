@@ -203,8 +203,10 @@ impl Store {
     }
 
     /// Read an artifact's content. Resolves by `path` if given, else the latest
-    /// artifact of `role`. For `kind = file`, reads the local file (lazy pull
-    /// from Storage is the Layer 6 sync concern).
+    /// artifact of `role`. For `kind = file`, reads the local file; when the
+    /// file is absent but the row carries a `remote_path` (a synced copy in
+    /// cloud Storage), this returns [`HavenError::ContentNotLocal`] so a
+    /// sync-aware front-end can lazy-download and retry (SPEC §5).
     pub fn get_artifact(
         &self,
         project: Option<&str>,
@@ -239,12 +241,25 @@ impl Store {
                         "artifact path {rel:?} escapes the project directory"
                     )));
                 }
-                Some(std::fs::read_to_string(&full).map_err(|e| {
-                    HavenError::NotFound(format!(
-                        "content file {} not present locally: {e}",
-                        full.display()
-                    ))
-                })?)
+                match std::fs::read_to_string(&full) {
+                    Ok(text) => Some(text),
+                    // Missing locally but synced to Storage → a typed signal the
+                    // front-ends catch to lazy-download, then retry the read.
+                    Err(_) if chosen.remote_path.is_some() && !full.exists() => {
+                        return Err(HavenError::ContentNotLocal {
+                            project: project_key,
+                            rel_path: rel.clone(),
+                            remote_path: chosen.remote_path.expect("checked is_some"),
+                            content_hash: chosen.content_hash,
+                        });
+                    }
+                    Err(e) => {
+                        return Err(HavenError::NotFound(format!(
+                            "content file {} not present locally: {e}",
+                            full.display()
+                        )));
+                    }
+                }
             }
             None => None,
         };
@@ -453,6 +468,80 @@ mod tests {
             .get_artifact(None, &item.reference, Some(ArtifactRole::Spec), None)
             .unwrap();
         assert_eq!(got.content.as_deref(), Some("# Spec\nhello\n"));
+    }
+
+    #[test]
+    fn missing_file_signals_content_not_local_only_with_a_remote_copy() {
+        let tmp = tempfile::tempdir().unwrap();
+        let s = store_with_root(tmp.path());
+        let item = s
+            .add_item(
+                None,
+                NewItem {
+                    title: "Spec work".into(),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let art = s
+            .add_artifact(
+                None,
+                &item.reference,
+                NewArtifact {
+                    role: ArtifactRole::Spec,
+                    kind: ArtifactKind::File,
+                    content: Some("the spec".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+        // Delete the local file (simulating a row that arrived via pull).
+        std::fs::remove_file(tmp.path().join("haven/items/HV-1/spec.md")).unwrap();
+
+        // No remote copy → plain NotFound, as before.
+        let err = s
+            .get_artifact(None, &item.reference, Some(ArtifactRole::Spec), None)
+            .unwrap_err();
+        assert!(matches!(err, HavenError::NotFound(_)));
+
+        // With a remote_path on the row (as a pulled row would carry) → the
+        // typed signal a sync-aware front-end catches to lazy-download.
+        s.conn
+            .execute(
+                "UPDATE artifacts SET remote_path = 'u/haven/items/HV-1/spec.md'
+                 WHERE public_id = ?1",
+                [&art.public_id],
+            )
+            .unwrap();
+        let err = s
+            .get_artifact(None, &item.reference, Some(ArtifactRole::Spec), None)
+            .unwrap_err();
+        match err {
+            HavenError::ContentNotLocal {
+                project,
+                rel_path,
+                remote_path,
+                content_hash,
+            } => {
+                assert_eq!(project, "haven");
+                assert_eq!(rel_path, "items/HV-1/spec.md");
+                assert_eq!(remote_path, "u/haven/items/HV-1/spec.md");
+                assert_eq!(content_hash, art.content_hash);
+            }
+            other => panic!("expected ContentNotLocal, got {other:?}"),
+        }
+        assert_eq!(err_code_is_stable(), "content_not_local");
+    }
+
+    fn err_code_is_stable() -> &'static str {
+        HavenError::ContentNotLocal {
+            project: String::new(),
+            rel_path: String::new(),
+            remote_path: String::new(),
+            content_hash: None,
+        }
+        .code()
     }
 
     #[test]

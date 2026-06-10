@@ -186,8 +186,10 @@ with the file (or cloud Storage blob) staying canonical and the row holding only
 the pointer (`path`, `content_hash`, `remote_path`).
 
 - **Read:** `haven_get_artifact {ref, role}` → `{path, role, content}`; `content`
-  is the file's bytes (local read, or lazy-pulled from Storage for a remote-only
-  row).
+  is the file's bytes. If the file isn't on this machine but the row carries a
+  synced cloud copy (`remote_path`), the read **lazy-downloads it from Storage**
+  (hash-verified, then cached locally) — transparent when sync is configured;
+  otherwise it errors `content_not_local` with the remote location.
 - **Write:** `haven_add_artifact {ref, role, content, name}` — the **server**
   writes the bytes into `items/<ref>/<file>`, hashes them, and records the pointer.
   The content never lands in the DB. Filenames must be a single plain component

@@ -514,21 +514,26 @@ dependencies = [
 name = "haven-mcp"
 version = "0.1.0"
 dependencies = [
+ "haven-auth",
  "haven-core",
+ "haven-sync",
  "serde",
  "serde_json",
  "tempfile",
+ "tokio",
 ]
 
 [[package]]
 name = "haven-sync"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "haven-core",
  "reqwest",
  "rusqlite",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "thiserror 1.0.69",
  "tokio",

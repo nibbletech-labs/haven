@@ -6,11 +6,13 @@
 //! LWW, in [`crate::local::apply_snapshot`]). The HTTP transport itself needs a
 //! real Supabase project + a valid Auth0 token to exercise end-to-end.
 
+use std::path::Path;
+
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
 use rusqlite::Connection;
 use serde_json::Value;
 
-use crate::local::{self, PushBatch};
+use crate::local;
 use crate::{classify_status, ErrorClass, SyncError};
 
 /// Connection details for a Supabase project.
@@ -100,8 +102,21 @@ impl SyncEngine {
             return Ok(());
         }
         match classify_status(status) {
-            // A duplicate means the rows already landed — treat as success.
-            ErrorClass::Duplicate => Ok(()),
+            // PostgREST returns 409 for unique violations (23505 — the row
+            // already landed: success) AND for FK violations (23503 — a parent
+            // row is missing remotely: a real failure that must not be
+            // swallowed, found live when a wiped remote made every child push
+            // "succeed"). Disambiguate by the Postgres error code in the body.
+            ErrorClass::Duplicate => {
+                let body = resp.text().await.unwrap_or_default();
+                if body.contains("23503") {
+                    Err(SyncError::Permanent(format!(
+                        "{table}: HTTP {status} (foreign key violation — parent row missing remotely): {body}"
+                    )))
+                } else {
+                    Ok(())
+                }
+            }
             ErrorClass::Unauthorized => Err(SyncError::Unauthorized),
             ErrorClass::Transient => Err(SyncError::Transient(format!("{table}: HTTP {status}"))),
             ErrorClass::Permanent => {
@@ -116,12 +131,19 @@ impl SyncEngine {
     /// Run one push pass in the strict pipeline order (SPEC §5): content files to
     /// Storage first (so the rows that name them resolve), then projects, nodes,
     /// the append-only lineage core, the mutable edges, and artifacts. Each
-    /// table is marked `synced` locally only after its push succeeds.
-    pub async fn push_pass(&self, conn: &Connection) -> Result<(), SyncError> {
-        let batch = local::collect_push_batch(conn)?;
+    /// table is marked `synced` locally only after its push succeeds. Returns
+    /// how many content blobs were uploaded.
+    pub async fn push_pass(
+        &self,
+        conn: &Connection,
+        content_root: &Path,
+    ) -> Result<usize, SyncError> {
+        // 1. Content blobs → Storage, BEFORE collecting the row batch: uploading
+        //    stamps `remote_path`/`content_hash` (+ revision bump) on the rows,
+        //    and the batch below must carry those values.
+        let uploaded = self.upload_changed_content(conn, content_root).await?;
 
-        // 1. Content blobs → Storage (so artifact rows can reference them).
-        self.upload_changed_content(conn, &batch).await?;
+        let batch = local::collect_push_batch(conn)?;
 
         // 2-3. Projects, then nodes.
         self.push_and_mark(conn, "projects", &batch.projects)
@@ -145,7 +167,7 @@ impl SyncEngine {
         self.push_and_mark(conn, "artifacts", &batch.artifacts)
             .await?;
 
-        Ok(())
+        Ok(uploaded)
     }
 
     /// Upsert a mutable table then mark its pushed rows synced by `client_id`.
@@ -167,20 +189,120 @@ impl SyncEngine {
         Ok(())
     }
 
+    /// Headers for Storage object requests: same apikey + bearer as PostgREST,
+    /// but raw bytes instead of JSON, and `x-upsert` so a re-upload of a changed
+    /// file overwrites its blob (allowed by the Storage UPDATE policy).
+    fn storage_headers(&self) -> HeaderMap {
+        let mut h = self.headers();
+        h.insert(
+            CONTENT_TYPE,
+            HeaderValue::from_static("application/octet-stream"),
+        );
+        h.insert("x-upsert", HeaderValue::from_static("true"));
+        h
+    }
+
+    fn object_url(&self, key: &str) -> String {
+        format!(
+            "{}/storage/v1/object/{}/{}",
+            self.config.api_url, self.config.bucket, key
+        )
+    }
+
     /// Upload each changed `kind='file'` artifact blob to Storage under
-    /// `<user_id>/<project-key>/items/<ref>/<file>`. The object key's first
-    /// segment is enforced by Storage RLS to equal the Auth0 subject.
-    ///
-    /// Deferred: needs the resolved content root + user id at call time. Left as
-    /// a no-op stub so the push order is correct once wired.
+    /// `<sub>/<project-key>/<rel_path>` (= `…/items/<ref>/<file>`). The key's
+    /// first segment must equal the Auth0 subject — enforced by Storage RLS, and
+    /// derived here from the access token's `sub` claim. Selection is by hash
+    /// comparison ([`local::needs_upload`]); each success stamps the row's
+    /// `remote_path`/`content_hash` so the row push that follows carries them.
+    /// Returns the number of blobs uploaded.
     async fn upload_changed_content(
         &self,
-        _conn: &Connection,
-        _batch: &PushBatch,
-    ) -> Result<(), SyncError> {
-        // TODO(live): read artifact bytes from the content tree, PUT to
-        // {api_url}/storage/v1/object/{bucket}/{key}, then record remote_path.
-        Ok(())
+        conn: &Connection,
+        content_root: &Path,
+    ) -> Result<usize, SyncError> {
+        let candidates = local::collect_content_candidates(conn)?;
+        if candidates.is_empty() {
+            return Ok(0);
+        }
+        let sub = crate::jwt_sub(&self.access_token)?;
+        let mut uploaded = 0;
+        for c in &candidates {
+            let Some((bytes, hash)) = local::needs_upload(c, content_root) else {
+                continue;
+            };
+            let key = format!("{sub}/{}/{}", c.project_key, c.rel_path);
+            let resp = self
+                .client
+                .post(self.object_url(&key))
+                .headers(self.storage_headers())
+                .body(bytes)
+                .send()
+                .await?;
+            let status = resp.status().as_u16();
+            if !resp.status().is_success() {
+                return match classify_status(status) {
+                    // Duplicate = the blob already landed (e.g. a retried pass
+                    // racing x-upsert) — record and continue.
+                    ErrorClass::Duplicate => {
+                        local::record_uploaded(conn, &c.client_id, &key, &hash)?;
+                        uploaded += 1;
+                        continue;
+                    }
+                    ErrorClass::Unauthorized => Err(SyncError::Unauthorized),
+                    ErrorClass::Transient => Err(SyncError::Transient(format!(
+                        "storage {key}: HTTP {status}"
+                    ))),
+                    ErrorClass::Permanent => {
+                        let body = resp.text().await.unwrap_or_default();
+                        Err(SyncError::Permanent(format!(
+                            "storage {key}: HTTP {status}: {body}"
+                        )))
+                    }
+                };
+            }
+            local::record_uploaded(conn, &c.client_id, &key, &hash)?;
+            uploaded += 1;
+        }
+        Ok(uploaded)
+    }
+
+    /// Download one Storage object by key (authenticated; RLS scopes reads to
+    /// the token's subject).
+    pub async fn download_object(&self, key: &str) -> Result<Vec<u8>, SyncError> {
+        let url = format!(
+            "{}/storage/v1/object/authenticated/{}/{}",
+            self.config.api_url, self.config.bucket, key
+        );
+        let resp = self.client.get(url).headers(self.headers()).send().await?;
+        let status = resp.status().as_u16();
+        if !resp.status().is_success() {
+            return match classify_status(status) {
+                ErrorClass::Unauthorized => Err(SyncError::Unauthorized),
+                ErrorClass::Transient => Err(SyncError::Transient(format!(
+                    "storage get {key}: HTTP {status}"
+                ))),
+                _ => Err(SyncError::Permanent(format!(
+                    "storage get {key}: HTTP {status}"
+                ))),
+            };
+        }
+        Ok(resp.bytes().await?.to_vec())
+    }
+
+    /// Lazy-pull one artifact's content (SPEC §5): download `remote_path` from
+    /// Storage, verify it against `expected_hash` when known, and cache it at
+    /// `<content_root>/<project_key>/<rel_path>` so subsequent reads are local.
+    pub async fn hydrate(
+        &self,
+        content_root: &Path,
+        project_key: &str,
+        rel_path: &str,
+        remote_path: &str,
+        expected_hash: Option<&str>,
+    ) -> Result<std::path::PathBuf, SyncError> {
+        let bytes = self.download_object(remote_path).await?;
+        local::write_hydrated(content_root, project_key, rel_path, &bytes, expected_hash)
     }
 
     /// Fetch all remote rows for `table` (full reconcile — no cursor in v1,
@@ -208,13 +330,15 @@ impl SyncEngine {
 
     /// Run one pull pass: fetch the remote snapshot and reconcile it into the
     /// local store (reverse FK translation + revision LWW, all in one
-    /// transaction). Returns what changed locally.
+    /// transaction; stale content caches under `content_root` are invalidated).
+    /// Returns what changed locally.
     pub async fn pull_pass(
         &self,
         conn: &Connection,
+        content_root: &Path,
     ) -> Result<crate::local::ReconcileStats, SyncError> {
         let snapshot = self.pull_remote().await?;
-        crate::local::apply_snapshot(conn, &snapshot)
+        crate::local::apply_snapshot(conn, &snapshot, content_root)
     }
 
     /// Fetch every remote table into a [`RemoteSnapshot`] (full reconcile, no

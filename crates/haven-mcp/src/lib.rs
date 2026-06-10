@@ -361,7 +361,29 @@ fn call_tool(store: &Store, name: &str, a: &Value) -> Result<Value> {
         }
         "haven_get_artifact" => {
             let role = opt_str(a, "role").map(ArtifactRole::parse).transpose()?;
-            to_value(store.get_artifact(project, req_str(a, "ref")?, role, opt_str(a, "path"))?)
+            let reference = req_str(a, "ref")?;
+            let path = opt_str(a, "path");
+            let got = match store.get_artifact(project, reference, role, path) {
+                // Content synced to Storage but not on this machine: lazy-pull
+                // it (SPEC §5), cache it in the content tree, and retry once.
+                Err(HavenError::ContentNotLocal {
+                    project: pkey,
+                    rel_path,
+                    remote_path,
+                    content_hash,
+                }) => {
+                    hydrate_content(
+                        store,
+                        &pkey,
+                        &rel_path,
+                        &remote_path,
+                        content_hash.as_deref(),
+                    )?;
+                    store.get_artifact(project, reference, role, path)?
+                }
+                other => other?,
+            };
+            to_value(got)
         }
         "haven_add_artifact" => {
             let role = ArtifactRole::parse(req_str(a, "role")?)?;
@@ -441,6 +463,76 @@ fn call_tool(store: &Store, name: &str, a: &Value) -> Result<Value> {
         }
         other => Err(HavenError::Invalid(format!("unknown tool {other:?}"))),
     }
+}
+
+/// Resolve a remote setting the same way the CLI does (`haven-cli/config.rs`):
+/// the `meta` table (set via `haven config set`), falling back to an env var.
+fn remote_setting(store: &Store, meta_key: &str, env: &str) -> Result<String> {
+    if let Some(v) = store.meta_get(meta_key)? {
+        return Ok(v);
+    }
+    if let Some(v) = std::env::var_os(env) {
+        return Ok(v.to_string_lossy().into_owned());
+    }
+    Err(HavenError::Invalid(format!(
+        "missing config '{meta_key}': set it with `haven config set {meta_key} <value>` or ${env}"
+    )))
+}
+
+/// Download one artifact's content from cloud Storage into the local content
+/// tree — the lazy-pull half of the content channel (SPEC §5). Mirrors the CLI's
+/// wiring: Supabase settings from `meta`/env, token from `$HAVEN_ACCESS_TOKEN`
+/// or the keyring (auto-refreshing via Auth0). Without sync configured this
+/// errors with the context to fix it, and the artifact read fails as before.
+fn hydrate_content(
+    store: &Store,
+    project_key: &str,
+    rel_path: &str,
+    remote_path: &str,
+    content_hash: Option<&str>,
+) -> Result<()> {
+    let sync_cfg = haven_sync::SyncConfig::new(
+        remote_setting(store, "supabase_url", "HAVEN_SUPABASE_URL").map_err(|e| {
+            HavenError::Invalid(format!(
+                "content file {rel_path} is in cloud Storage but sync isn't configured here: {e}"
+            ))
+        })?,
+        remote_setting(store, "supabase_anon_key", "HAVEN_SUPABASE_ANON_KEY")?,
+    );
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| HavenError::Invalid(format!("async runtime: {e}")))?;
+    rt.block_on(async {
+        let access = match std::env::var("HAVEN_ACCESS_TOKEN")
+            .ok()
+            .filter(|t| !t.is_empty())
+        {
+            Some(t) => t,
+            None => {
+                let cfg = haven_auth::AuthConfig::new(
+                    remote_setting(store, "auth0_domain", "HAVEN_AUTH0_DOMAIN")?,
+                    remote_setting(store, "auth0_client_id", "HAVEN_AUTH0_CLIENT_ID")?,
+                    remote_setting(store, "auth0_audience", "HAVEN_AUTH0_AUDIENCE")?,
+                );
+                haven_auth::current_access_token(&cfg, &haven_auth::TokenStore::new())
+                    .await
+                    .map_err(|e| HavenError::Invalid(format!("auth: {e}")))?
+            }
+        };
+        let engine = haven_sync::SyncEngine::new(sync_cfg, access);
+        engine
+            .hydrate(
+                store.content_root(),
+                project_key,
+                rel_path,
+                remote_path,
+                content_hash,
+            )
+            .await
+            .map_err(|e| HavenError::Invalid(format!("sync: {e}")))?;
+        Ok(())
+    })
 }
 
 fn to_value<T: Serialize>(v: T) -> Result<Value> {

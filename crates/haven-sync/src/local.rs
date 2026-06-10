@@ -11,6 +11,8 @@
 //! unit-tested against a real local database even though the HTTP transport is
 //! exercised only against a live Supabase.
 
+use std::path::{Path, PathBuf};
+
 use rusqlite::{params, Connection, OptionalExtension, Row};
 use serde_json::{json, Value};
 
@@ -233,6 +235,136 @@ pub fn mark_synced(conn: &Connection, table: &str, client_ids: &[String]) -> Res
 }
 
 // ============================================================================
+// Content blobs — the file half of the artifact channel (SPEC §5).
+//
+// Artifact *rows* are typed pointers; the bytes live as files under
+// `<content_root>/<project-key>/<rel_path>`. On push, changed `kind='file'`
+// blobs upload to Storage (object key `<sub>/<project-key>/<rel_path>`) before
+// their rows, so a pushed row's `remote_path`/`content_hash` always name a blob
+// that exists. On read, a missing local file with a `remote_path` downloads
+// lazily and is cached ([`write_hydrated`]).
+//
+// Selection is by **hash comparison**, not `sync_state`: editing a content file
+// directly (the normal local workflow) never touches the DB row, so the only
+// reliable change signal is `sha256(file) != content_hash`.
+// ============================================================================
+
+/// One `kind='file'` artifact row considered for a content upload.
+#[derive(Debug, Clone)]
+pub struct ContentCandidate {
+    pub client_id: String,
+    pub project_key: String,
+    /// `artifacts.path` — relative to `<content_root>/<project_key>/`.
+    pub rel_path: String,
+    /// Hash recorded at creation / last sync; `None` never happens for
+    /// kind=file in practice but is tolerated.
+    pub content_hash: Option<String>,
+    /// Storage object key once uploaded; `None` = never uploaded.
+    pub remote_path: Option<String>,
+}
+
+/// All `kind='file'` artifacts with a local-relative path — every potential
+/// blob upload. The hash check in [`needs_upload`] decides which actually go.
+pub fn collect_content_candidates(conn: &Connection) -> Result<Vec<ContentCandidate>, SyncError> {
+    let mut stmt = conn.prepare(
+        "SELECT a.client_id, p.key, a.path, a.content_hash, a.remote_path
+         FROM artifacts a
+         JOIN nodes n ON n.id = a.node_id
+         JOIN projects p ON p.id = n.project_id
+         WHERE a.kind = 'file' AND a.path IS NOT NULL",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        Ok(ContentCandidate {
+            client_id: r.get(0)?,
+            project_key: r.get(1)?,
+            rel_path: r.get(2)?,
+            content_hash: r.get(3)?,
+            remote_path: r.get(4)?,
+        })
+    })?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+/// Decide whether a candidate's blob needs uploading: read the local file and
+/// hash it; skip when the file is absent (e.g. a pulled row not yet hydrated —
+/// nothing to upload) or when the bytes are unchanged *and* already uploaded.
+/// Returns the bytes + their hash so the caller uploads exactly what was hashed.
+pub fn needs_upload(c: &ContentCandidate, content_root: &Path) -> Option<(Vec<u8>, String)> {
+    let full = content_root.join(&c.project_key).join(&c.rel_path);
+    let bytes = std::fs::read(full).ok()?;
+    let hash = sha256_hex(&bytes);
+    if c.remote_path.is_some() && c.content_hash.as_deref() == Some(hash.as_str()) {
+        return None;
+    }
+    Some((bytes, hash))
+}
+
+/// Record a successful blob upload on its artifact row. Bumps `revision` and
+/// re-flags `sync_state='local'` so the row push (which follows uploads in the
+/// pass) carries the new `remote_path`/`content_hash` — and other devices accept
+/// the change via revision-LWW.
+pub fn record_uploaded(
+    conn: &Connection,
+    client_id: &str,
+    remote_path: &str,
+    content_hash: &str,
+) -> Result<(), SyncError> {
+    conn.execute(
+        "UPDATE artifacts SET remote_path = ?1, content_hash = ?2,
+            revision = revision + 1, sync_state = 'local'
+         WHERE client_id = ?3",
+        params![remote_path, content_hash, client_id],
+    )?;
+    Ok(())
+}
+
+/// Cache downloaded blob bytes at `<content_root>/<project_key>/<rel_path>`,
+/// verifying them against `expected_hash` when one is known (a mismatch means
+/// the blob and the row disagree — fail rather than cache wrong content) and
+/// guarding against path traversal in a remote-supplied `rel_path`.
+pub fn write_hydrated(
+    content_root: &Path,
+    project_key: &str,
+    rel_path: &str,
+    bytes: &[u8],
+    expected_hash: Option<&str>,
+) -> Result<PathBuf, SyncError> {
+    if rel_path.split(['/', '\\']).any(|seg| seg == "..") {
+        return Err(SyncError::Permanent(format!(
+            "refusing to hydrate path-traversing artifact path {rel_path:?}"
+        )));
+    }
+    if let Some(expected) = expected_hash {
+        let actual = sha256_hex(bytes);
+        if actual != expected {
+            return Err(SyncError::Permanent(format!(
+                "downloaded content hash mismatch for {rel_path}: expected {expected}, got {actual}"
+            )));
+        }
+    }
+    let full = content_root.join(project_key).join(rel_path);
+    if let Some(dir) = full.parent() {
+        std::fs::create_dir_all(dir)
+            .map_err(|e| SyncError::Permanent(format!("creating {}: {e}", dir.display())))?;
+    }
+    std::fs::write(&full, bytes)
+        .map_err(|e| SyncError::Permanent(format!("writing {}: {e}", full.display())))?;
+    Ok(full)
+}
+
+/// sha256 → lowercase hex, matching how `haven-core` records `content_hash`.
+pub fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(bytes);
+    let mut s = String::with_capacity(digest.len() * 2);
+    for b in digest {
+        use std::fmt::Write;
+        let _ = write!(s, "{b:02x}");
+    }
+    s
+}
+
+// ============================================================================
 // Pull reconcile — the inverse of `collect_push_batch`.
 //
 // Take remote rows (keyed by `public_id`, with `public_id`-valued foreign keys)
@@ -279,9 +411,12 @@ impl ReconcileStats {
 /// reverse-translate every `public_id` FK to its local id (parents first),
 /// LWW-merge the mutable tables by `revision`, and insert-if-absent the
 /// append-only ones. All-or-nothing — a failure rolls back the whole pull.
+/// `content_root` is used for content-cache invalidation (see
+/// [`apply_artifacts`]'s stale-cache rule).
 pub fn apply_snapshot(
     conn: &Connection,
     snap: &RemoteSnapshot,
+    content_root: &Path,
 ) -> Result<ReconcileStats, SyncError> {
     let tx = conn.unchecked_transaction()?;
     let stats = ReconcileStats {
@@ -308,7 +443,7 @@ pub fn apply_snapshot(
             "group_id",
             "member_id",
         )?,
-        artifacts: apply_artifacts(&tx, &snap.artifacts)?,
+        artifacts: apply_artifacts(&tx, &snap.artifacts, content_root)?,
     };
     tx.commit()?;
     Ok(stats)
@@ -538,7 +673,57 @@ fn apply_edges(
     Ok(n)
 }
 
-fn apply_artifacts(conn: &Connection, rows: &[Value]) -> Result<usize, SyncError> {
+/// The cache-invalidation half of artifact LWW (see [`apply_artifacts`]): when
+/// the incoming row's `content_hash` differs from the local row's, remove the
+/// cached file **iff** its bytes still hash to the old row hash (an unedited
+/// stale cache). Locally-edited files (bytes ≠ old hash) are kept.
+fn invalidate_stale_cache(
+    conn: &Connection,
+    public_id: &str,
+    new_hash: Option<&str>,
+    content_root: &Path,
+) -> Result<(), SyncError> {
+    let row: Option<(Option<String>, Option<String>, String)> = conn
+        .query_row(
+            "SELECT a.content_hash, a.path, p.key
+             FROM artifacts a
+             JOIN nodes n ON n.id = a.node_id
+             JOIN projects p ON p.id = n.project_id
+             WHERE a.public_id = ?1 AND a.kind = 'file'",
+            [public_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .optional()?;
+    let Some((old_hash, Some(rel_path), project_key)) = row else {
+        return Ok(()); // not a file artifact / no path — nothing cached
+    };
+    if old_hash.as_deref() == new_hash {
+        return Ok(()); // content unchanged — cache stays valid
+    }
+    let full = content_root.join(&project_key).join(&rel_path);
+    if let Ok(bytes) = std::fs::read(&full) {
+        if Some(sha256_hex(&bytes).as_str()) == old_hash.as_deref() {
+            // Unedited stale cache: drop it; the next read lazy-downloads the
+            // new content. (A failure to remove is non-fatal — the stale file
+            // would just be served until removed.)
+            let _ = std::fs::remove_file(&full);
+        }
+    }
+    Ok(())
+}
+
+/// Apply remote artifact rows (revision-LWW), with **content-cache
+/// invalidation**: when the remote row carries a different `content_hash` than
+/// the local row, the locally cached file — if its bytes still hash to the *old*
+/// row hash, i.e. an unedited stale cache — is removed so the next read
+/// lazy-downloads the new content. A file whose bytes differ from the old row
+/// hash was edited on this machine; it is kept, and becomes the next version on
+/// this device's next push (file-level last-write-wins).
+fn apply_artifacts(
+    conn: &Connection,
+    rows: &[Value],
+    content_root: &Path,
+) -> Result<usize, SyncError> {
     let mut n = 0;
     for r in rows {
         let pid = vstr_req(r, "public_id")?;
@@ -561,6 +746,7 @@ fn apply_artifacts(conn: &Connection, rows: &[Value]) -> Result<usize, SyncError
         match local_revision(conn, "artifacts", &pid)? {
             Some(local_rev) if rev <= local_rev => {}
             Some(_) => {
+                invalidate_stale_cache(conn, &pid, content_hash.as_deref(), content_root)?;
                 conn.execute(
                     "UPDATE artifacts SET node_id=?2, role=?3, kind=?4, path=?5, uri=?6,
                         title=?7, excerpt=?8, from_owner=?9, to_owner=?10, content_hash=?11,
@@ -829,7 +1015,7 @@ mod tests {
         let _b = Store::open(&db_b, dir_b.path()).unwrap(); // creates the schema
         let conn_b = haven_core::db::open(&db_b).unwrap();
 
-        let stats = apply_snapshot(&conn_b, &snap).unwrap();
+        let stats = apply_snapshot(&conn_b, &snap, dir_b.path()).unwrap();
         assert_eq!(stats.projects, 1);
         assert_eq!(stats.nodes, 3); // parent + child + split product
         assert_eq!(stats.lineage_events, 1);
@@ -887,7 +1073,7 @@ mod tests {
         );
 
         // --- idempotency: re-applying the same snapshot changes nothing ---
-        let again = apply_snapshot(&conn_b, &snap).unwrap();
+        let again = apply_snapshot(&conn_b, &snap, dir_b.path()).unwrap();
         assert_eq!(again.total(), 0);
         assert_eq!(count(&conn_b, "nodes"), 3);
         assert_eq!(
@@ -920,7 +1106,7 @@ mod tests {
         let db_b = dir_b.path().join("haven.db");
         let _b = Store::open(&db_b, dir_b.path()).unwrap();
         let conn_b = haven_core::db::open(&db_b).unwrap();
-        apply_snapshot(&conn_b, &snap).unwrap();
+        apply_snapshot(&conn_b, &snap, dir_b.path()).unwrap();
 
         let node = snap
             .nodes
@@ -932,7 +1118,7 @@ mod tests {
         // A higher remote revision wins (LWW applies).
         node["title"] = json!("Remote wins");
         node["revision"] = json!(base_rev + 1);
-        let s = apply_snapshot(&conn_b, &snap).unwrap();
+        let s = apply_snapshot(&conn_b, &snap, dir_b.path()).unwrap();
         assert_eq!(s.nodes, 1);
         let title: String = conn_b
             .query_row(
@@ -951,7 +1137,7 @@ mod tests {
             .unwrap();
         node["title"] = json!("Stale loser");
         node["revision"] = json!(base_rev); // < the now-applied base_rev + 1
-        let s = apply_snapshot(&conn_b, &snap).unwrap();
+        let s = apply_snapshot(&conn_b, &snap, dir_b.path()).unwrap();
         assert_eq!(s.nodes, 0);
         let title: String = conn_b
             .query_row(
@@ -961,5 +1147,171 @@ mod tests {
             )
             .unwrap();
         assert_eq!(title, "Remote wins");
+    }
+
+    /// A store with one project + one item carrying a `kind='file'` spec
+    /// artifact, for content-upload tests. Returns (tempdir, store, conn, ref).
+    fn store_with_file_artifact() -> (tempfile::TempDir, Store, Connection, String) {
+        use haven_core::{ArtifactRole, NewArtifact};
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("haven.db");
+        let store = Store::open(&db, dir.path()).unwrap();
+        store
+            .add_project("haven", Some("HV"), "Haven", None)
+            .unwrap();
+        store.use_project("haven").unwrap();
+        let item = store
+            .add_item(
+                None,
+                NewItem {
+                    title: "X".into(),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        store
+            .add_artifact(
+                None,
+                &item.reference,
+                NewArtifact {
+                    role: ArtifactRole::Spec,
+                    content: Some("the spec".into()),
+                    name: Some("spec.md".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let conn = haven_core::db::open(&db).unwrap();
+        (dir, store, conn, item.reference)
+    }
+
+    #[test]
+    fn upload_selection_is_by_hash_comparison() {
+        let (dir, _store, conn, item_ref) = store_with_file_artifact();
+        let root = dir.path();
+
+        // Fresh artifact: never uploaded → needs upload, bytes match the file.
+        let cands = collect_content_candidates(&conn).unwrap();
+        assert_eq!(cands.len(), 1);
+        let c = &cands[0];
+        assert_eq!(c.project_key, "haven");
+        assert_eq!(c.rel_path, format!("items/{item_ref}/spec.md"));
+        let (bytes, hash) = needs_upload(c, root).expect("fresh artifact needs upload");
+        assert_eq!(bytes, b"the spec");
+        // The hash matches what haven-core recorded at add time.
+        assert_eq!(c.content_hash.as_deref(), Some(hash.as_str()));
+
+        // Simulate a successful upload.
+        record_uploaded(&conn, &c.client_id, "test-user/haven/spec-key", &hash).unwrap();
+
+        // Unchanged bytes + remote_path set → skip.
+        let c = &collect_content_candidates(&conn).unwrap()[0];
+        assert_eq!(c.remote_path.as_deref(), Some("test-user/haven/spec-key"));
+        assert!(needs_upload(c, root).is_none());
+
+        // Editing the file directly (no DB touch — the normal local workflow)
+        // is detected by the hash compare → re-upload with the new hash.
+        let file = root.join("haven").join(&c.rel_path);
+        std::fs::write(&file, "edited directly").unwrap();
+        let (bytes, new_hash) = needs_upload(c, root).expect("edited file needs re-upload");
+        assert_eq!(bytes, b"edited directly");
+        assert_ne!(Some(new_hash.as_str()), c.content_hash.as_deref());
+
+        // Missing local file (e.g. a pulled, unhydrated row) → nothing to upload.
+        std::fs::remove_file(&file).unwrap();
+        assert!(needs_upload(c, root).is_none());
+    }
+
+    #[test]
+    fn record_uploaded_bumps_revision_and_requeues_the_row() {
+        let (_dir, _store, conn, _ref) = store_with_file_artifact();
+        let c = &collect_content_candidates(&conn).unwrap()[0];
+
+        // Pretend the row already pushed (synced), then a blob upload lands.
+        mark_synced(&conn, "artifacts", std::slice::from_ref(&c.client_id)).unwrap();
+        record_uploaded(&conn, &c.client_id, "u/haven/k", "newhash").unwrap();
+
+        let (remote, hash, rev, state): (String, String, i64, String) = conn
+            .query_row(
+                "SELECT remote_path, content_hash, revision, sync_state
+                 FROM artifacts WHERE client_id = ?1",
+                [&c.client_id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(remote, "u/haven/k");
+        assert_eq!(hash, "newhash");
+        assert_eq!(rev, 2); // bumped so other devices accept it via LWW
+        assert_eq!(state, "local"); // re-queued: the row push carries the new fields
+    }
+
+    #[test]
+    fn write_hydrated_caches_verifies_and_guards() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let bytes = b"downloaded content";
+        let good_hash = sha256_hex(bytes);
+
+        // Writes the file, creating intermediate dirs.
+        let path =
+            write_hydrated(root, "haven", "items/HV-1/spec.md", bytes, Some(&good_hash)).unwrap();
+        assert_eq!(path, root.join("haven/items/HV-1/spec.md"));
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+
+        // A hash mismatch refuses to cache wrong content.
+        let err = write_hydrated(
+            root,
+            "haven",
+            "items/HV-1/other.md",
+            bytes,
+            Some("deadbeef"),
+        )
+        .unwrap_err();
+        assert!(matches!(err, SyncError::Permanent(_)));
+        assert!(!root.join("haven/items/HV-1/other.md").exists());
+
+        // Path traversal in a remote-supplied rel_path is rejected.
+        let err = write_hydrated(root, "haven", "items/../../etc/pwned", bytes, None).unwrap_err();
+        assert!(matches!(err, SyncError::Permanent(_)));
+    }
+
+    #[test]
+    fn pull_invalidates_stale_cache_but_keeps_local_edits() {
+        let (dir, _store, conn, item_ref) = store_with_file_artifact();
+        let root = dir.path();
+        let file = root.join("haven").join(format!("items/{item_ref}/spec.md"));
+
+        // Build a remote artifact row that's one revision ahead with NEW content
+        // (as another device's upload + push would produce).
+        let batch = collect_push_batch(&conn).unwrap();
+        let mut snap = snapshot_from_batch(batch);
+        let art = &mut snap.artifacts[0];
+        let rev = art["revision"].as_i64().unwrap();
+        art["revision"] = json!(rev + 1);
+        art["content_hash"] = json!(sha256_hex(b"new content from device A"));
+        art["remote_path"] = json!("test-user/haven/spec-key");
+
+        // Case 1: the local file is the unedited original ("the spec") — a clean
+        // stale cache. Applying the newer row removes it so the next read
+        // re-hydrates.
+        assert!(file.exists());
+        let stats = apply_snapshot(&conn, &snap, root).unwrap();
+        assert_eq!(stats.artifacts, 1);
+        assert!(!file.exists(), "stale cache should be invalidated");
+
+        // Case 2: the file was edited locally — it must be preserved. Bump the
+        // remote row again with yet another hash.
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, "local edits in progress").unwrap();
+        let art = &mut snap.artifacts[0];
+        art["revision"] = json!(rev + 2);
+        art["content_hash"] = json!(sha256_hex(b"even newer remote content"));
+        let stats = apply_snapshot(&conn, &snap, root).unwrap();
+        assert_eq!(stats.artifacts, 1);
+        assert!(file.exists(), "locally-edited file must be kept");
+        assert_eq!(
+            std::fs::read_to_string(&file).unwrap(),
+            "local edits in progress"
+        );
     }
 }

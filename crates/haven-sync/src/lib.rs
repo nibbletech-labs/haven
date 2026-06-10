@@ -18,7 +18,7 @@ use std::time::Duration;
 use thiserror::Error;
 
 pub use engine::{RemoteSnapshot, SyncConfig, SyncEngine};
-pub use local::ReconcileStats;
+pub use local::{write_hydrated, ReconcileStats};
 
 #[derive(Debug, Error)]
 pub enum SyncError {
@@ -70,6 +70,29 @@ pub fn backoff(attempt: u32) -> Option<Duration> {
         .map(Duration::from_secs)
 }
 
+/// Extract the `sub` claim from a JWT's payload, **without verifying the
+/// signature** — the client only needs the subject to build Storage object keys
+/// (`<sub>/<project>/items/...`); identity is enforced server-side, where
+/// Supabase verifies the same token against Auth0's JWKS and Storage RLS
+/// requires the key's first segment to equal the verified `sub`. A forged claim
+/// here just produces uploads the server rejects.
+pub fn jwt_sub(token: &str) -> Result<String, SyncError> {
+    use base64::Engine;
+    let payload = token
+        .split('.')
+        .nth(1)
+        .ok_or_else(|| SyncError::Permanent("token is not a JWT (no payload segment)".into()))?;
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(payload)
+        .map_err(|e| SyncError::Permanent(format!("token payload is not base64url: {e}")))?;
+    let claims: serde_json::Value = serde_json::from_slice(&bytes)
+        .map_err(|e| SyncError::Permanent(format!("token payload is not JSON: {e}")))?;
+    claims["sub"]
+        .as_str()
+        .map(str::to_owned)
+        .ok_or_else(|| SyncError::Permanent("token has no `sub` claim".into()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -83,6 +106,25 @@ mod tests {
         assert_eq!(classify_status(429), ErrorClass::Transient);
         assert_eq!(classify_status(400), ErrorClass::Permanent);
         assert_eq!(classify_status(422), ErrorClass::Permanent);
+    }
+
+    #[test]
+    fn jwt_sub_reads_the_subject_claim() {
+        use base64::Engine;
+        let enc = |v: &serde_json::Value| {
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(v.to_string())
+        };
+        // Same shape as the hand-built token used for the live push validation.
+        let header = enc(&serde_json::json!({"alg": "HS256", "typ": "JWT"}));
+        let payload = enc(&serde_json::json!({"sub": "test-user", "role": "authenticated"}));
+        let token = format!("{header}.{payload}.fakesig");
+        assert_eq!(jwt_sub(&token).unwrap(), "test-user");
+
+        // Garbage and missing-claim tokens are rejected, not panicked on.
+        assert!(jwt_sub("not-a-jwt").is_err());
+        assert!(jwt_sub("a.%%%.c").is_err());
+        let no_sub = format!("{header}.{}.s", enc(&serde_json::json!({"aud": "x"})));
+        assert!(jwt_sub(&no_sub).is_err());
     }
 
     #[test]

@@ -13,8 +13,11 @@ path = "src/main.rs"
 
 [dependencies]
 haven-core.workspace = true
+haven-sync.workspace = true
+haven-auth.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+tokio.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

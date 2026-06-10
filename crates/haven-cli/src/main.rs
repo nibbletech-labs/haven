@@ -715,20 +715,9 @@ fn cmd_sync(project: Option<&str>, cmd: &Option<SyncCmd>, watch: bool) -> Result
         ));
     }
 
-    // One foreground push pass.
+    // One foreground push (rows + content blobs) + pull pass.
     let sync_cfg = config::sync_config(&store)?;
     let paths = config::resolve()?;
-
-    // Token source: $HAVEN_ACCESS_TOKEN (headless/CI, SPEC §6 paste-a-token)
-    // wins; otherwise load from the keyring, auto-refreshing via Auth0.
-    let env_token = std::env::var("HAVEN_ACCESS_TOKEN")
-        .ok()
-        .filter(|t| !t.is_empty());
-    let auth_cfg = if env_token.is_some() {
-        None
-    } else {
-        Some(config::auth_config(&store)?)
-    };
 
     let pending_before = store
         .store_status(project)
@@ -736,30 +725,26 @@ fn cmd_sync(project: Option<&str>, cmd: &Option<SyncCmd>, watch: bool) -> Result
         .and_then(|v| v.get("sync_pending").and_then(|n| n.as_i64()))
         .unwrap_or(0);
 
-    let stats = block_on(async move {
-        let access = match env_token {
-            Some(t) => t,
-            None => {
-                let token_store = haven_auth::TokenStore::new();
-                let cfg = auth_cfg
-                    .as_ref()
-                    .expect("auth_cfg is Some whenever env_token is None");
-                haven_auth::current_access_token(cfg, &token_store)
-                    .await
-                    .map_err(auth_err)?
-            }
-        };
+    let (uploaded, stats) = block_on(async move {
+        let access = resolve_access_token(&store).await?;
         let engine = haven_sync::SyncEngine::new(sync_cfg, access);
         let conn = haven_core::db::open(&paths.db)?;
         // Push local changes first, then pull + reconcile remote state (so a
         // just-pushed row round-trips cleanly instead of being re-applied).
-        engine.push_pass(&conn).await.map_err(sync_err)?;
-        let stats = engine.pull_pass(&conn).await.map_err(sync_err)?;
-        Ok::<_, HavenError>(stats)
+        let uploaded = engine
+            .push_pass(&conn, &paths.root)
+            .await
+            .map_err(sync_err)?;
+        let stats = engine
+            .pull_pass(&conn, &paths.root)
+            .await
+            .map_err(sync_err)?;
+        Ok::<_, HavenError>((uploaded, stats))
     })??;
 
     Ok(Output::Json(serde_json::json!({
         "pushed": true,
+        "uploaded": uploaded,
         "pending_before": pending_before,
         "pulled": {
             "total": stats.total(),
@@ -771,6 +756,23 @@ fn cmd_sync(project: Option<&str>, cmd: &Option<SyncCmd>, watch: bool) -> Result
             "artifacts": stats.artifacts,
         },
     })))
+}
+
+/// Resolve the access token for remote calls: `$HAVEN_ACCESS_TOKEN` (headless/CI,
+/// SPEC §6 paste-a-token) wins; otherwise load from the keyring, auto-refreshing
+/// via Auth0.
+async fn resolve_access_token(store: &haven_core::Store) -> Result<String> {
+    if let Some(t) = std::env::var("HAVEN_ACCESS_TOKEN")
+        .ok()
+        .filter(|t| !t.is_empty())
+    {
+        return Ok(t);
+    }
+    let cfg = config::auth_config(store)?;
+    let token_store = haven_auth::TokenStore::new();
+    haven_auth::current_access_token(&cfg, &token_store)
+        .await
+        .map_err(auth_err)
 }
 
 fn auth_err(e: haven_auth::AuthError) -> HavenError {
@@ -820,14 +822,57 @@ fn cmd_artifact(project: Option<&str>, cmd: &ArtifactCmd) -> Result<Output> {
         }
         ArtifactCmd::Get(a) => {
             let role = opt_parse(&a.role, ArtifactRole::parse)?;
-            Ok(Output::Json(serde_json::to_value(s.get_artifact(
-                project,
-                &a.reference,
-                role,
-                a.path.as_deref(),
-            )?)?))
+            let got = match s.get_artifact(project, &a.reference, role, a.path.as_deref()) {
+                // Content synced to Storage but not on this machine: lazy-pull
+                // it (SPEC §5), cache it in the content tree, and retry once.
+                Err(HavenError::ContentNotLocal {
+                    project: pkey,
+                    rel_path,
+                    remote_path,
+                    content_hash,
+                }) => {
+                    hydrate_content(&s, &pkey, &rel_path, &remote_path, content_hash.as_deref())?;
+                    s.get_artifact(project, &a.reference, role, a.path.as_deref())?
+                }
+                other => other?,
+            };
+            Ok(Output::Json(serde_json::to_value(got)?))
         }
     }
+}
+
+/// Download one artifact's content from Storage into the local content tree —
+/// the lazy-pull half of the content channel. Needs sync configured + a token;
+/// without them, errors with the context to fix it.
+fn hydrate_content(
+    store: &haven_core::Store,
+    project_key: &str,
+    rel_path: &str,
+    remote_path: &str,
+    content_hash: Option<&str>,
+) -> Result<()> {
+    let sync_cfg = config::sync_config(store).map_err(|e| {
+        HavenError::Invalid(format!(
+            "content file {rel_path} is in cloud Storage but sync isn't configured here: {e}"
+        ))
+    })?;
+    let paths = config::resolve()?;
+    block_on(async move {
+        let access = resolve_access_token(store).await?;
+        let engine = haven_sync::SyncEngine::new(sync_cfg, access);
+        engine
+            .hydrate(
+                &paths.root,
+                project_key,
+                rel_path,
+                remote_path,
+                content_hash,
+            )
+            .await
+            .map_err(sync_err)?;
+        Ok::<(), HavenError>(())
+    })??;
+    Ok(())
 }
 
 /// After a command that changes the work-graph, regenerate `backlog.md` so the
