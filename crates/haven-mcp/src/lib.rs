@@ -256,7 +256,8 @@ fn call_tool(store: &Store, name: &str, a: &Value) -> Result<Value> {
                 group: opt_str(a, "group").map(String::from),
                 metadata: a.get("metadata").cloned(),
             };
-            to_value(store.add_item(project, new)?)
+            let if_absent = opt_bool(a, "if_absent").unwrap_or(false);
+            to_value(store.add_item_checked(project, new, if_absent)?)
         }
         "haven_update_item" => {
             let reference = req_str(a, "ref")?;
@@ -570,8 +571,8 @@ fn tools_list() -> Value {
           "inputSchema": obj(json!({"project":{"type":"string"},"owner":{"type":"string"}}), json!([])) },
         { "name": "haven_rank", "description": "Reorder an item within its priority band: place it immediately before or after another item (exactly one of `before`/`after`). Fine ordering for 'do X before Y' — use `haven_update_item {priority}` for coarse band moves.",
           "inputSchema": obj(json!({"ref":{"type":"string"},"project":{"type":"string"},"before":{"type":"string"},"after":{"type":"string"}}), json!(["ref"])) },
-        { "name": "haven_add_item", "description": "Create a work-graph item (node). `done_looks_like` is the acceptance statement output is verified against; `why` is a one-line provenance trace.",
-          "inputSchema": obj(json!({"title":{"type":"string"},"project":{"type":"string"},"type":{"type":"string"},"body":{"type":"string"},"done_looks_like":{"type":"string"},"why":{"type":"string"},"status":{"type":"string"},"priority":{"type":"integer"},"commit":{"type":"boolean"},"assign":{"type":"string"},"parent":{"type":"string"},"depends_on":{"type":"string"},"group":{"type":"string"}}), json!(["title"])) },
+        { "name": "haven_add_item", "description": "Create a work-graph item (node). `done_looks_like` is the acceptance statement output is verified against; `why` is a one-line provenance trace. Pass `if_absent: true` to return an existing live item with the same normalized title (marked `existing: true`) instead of creating a duplicate; responses may carry `similar` — up to 3 live items with overlapping titles (advisory).",
+          "inputSchema": obj(json!({"title":{"type":"string"},"project":{"type":"string"},"type":{"type":"string"},"body":{"type":"string"},"done_looks_like":{"type":"string"},"why":{"type":"string"},"status":{"type":"string"},"priority":{"type":"integer"},"commit":{"type":"boolean"},"assign":{"type":"string"},"parent":{"type":"string"},"depends_on":{"type":"string"},"group":{"type":"string"},"if_absent":{"type":"boolean"}}), json!(["title"])) },
         { "name": "haven_update_item", "description": "Update maturity/commitment/ownership of an item. Set `done_looks_like` (acceptance) when it becomes ready so dispatch can verify against it.",
           "inputSchema": obj(json!({"ref":{"type":"string"},"title":{"type":"string"},"body":{"type":"string"},"done_looks_like":{"type":"string"},"why":{"type":"string"},"status":{"type":"string"},"priority":{"type":"integer"},"type":{"type":"string"},"wait":{"type":"string"},"commit":{"type":"boolean"},"assign":{"type":"string"},"actor":{"type":"string"},"project":{"type":"string"}}), json!(["ref"])) },
         { "name": "haven_add_edge", "description": "Add/remove a decomposition|dependency|grouping edge.",
@@ -980,5 +981,38 @@ mod tests {
             &[json!({"jsonrpc":"2.0","id":9,"method":"bogus","params":{}})],
         );
         assert_eq!(out[0]["error"]["code"], -32601);
+    }
+
+    #[test]
+    fn add_item_if_absent_dedupes_and_warns_on_similar() {
+        let s = store();
+        let out = session(
+            &s,
+            &[
+                json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{
+                    "name":"haven_add_item","arguments":{"title":"Setup CI"}}}),
+                // Sloppier casing/whitespace/punctuation still hits the guard.
+                json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{
+                    "name":"haven_add_item","arguments":{"title":"  setup  ci.","if_absent":true}}}),
+                // A near-duplicate without the guard creates, with a warning.
+                json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{
+                    "name":"haven_add_item","arguments":{"title":"Setup CI runners"}}}),
+            ],
+        );
+        let first = tool_payload(&out[0]);
+        assert_eq!(first["ref"], "HV-1");
+        assert!(first.get("existing").is_none());
+
+        let second = tool_payload(&out[1]);
+        assert_eq!(second["existing"], true);
+        assert_eq!(second["ref"], "HV-1");
+
+        let third = tool_payload(&out[2]);
+        assert_eq!(third["ref"], "HV-2");
+        assert!(third["similar"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|x| x["ref"] == "HV-1"));
     }
 }

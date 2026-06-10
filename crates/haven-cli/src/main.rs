@@ -69,6 +69,16 @@ enum Command {
         #[command(subcommand)]
         cmd: ItemCmd,
     },
+    /// Bulk-import items from a JSON file: one validated, all-or-nothing
+    /// transaction. Items take the `item add` fields plus a temp `id` and
+    /// ref-or-temp-id edge fields (`parent`, `depends_on` array, `group`).
+    Import {
+        /// Path to a JSON array of item objects.
+        file: std::path::PathBuf,
+        /// Per item: skip creation when a live item's normalized title matches.
+        #[arg(long = "if-absent")]
+        if_absent: bool,
+    },
     /// The ready-to-dispatch query.
     Next(NextArgs),
     /// Decomposition edges: HV-3 is composed of HV-7, HV-8.
@@ -322,6 +332,10 @@ struct ItemAddArgs {
     /// Add this item to a release/phase/gate group.
     #[arg(long)]
     group: Option<String>,
+    /// Return the existing live item (marked `existing: true`) instead of
+    /// creating a duplicate, when a normalized-title match exists.
+    #[arg(long = "if-absent")]
+    if_absent: bool,
 }
 
 #[derive(Args)]
@@ -590,6 +604,7 @@ fn run(cli: &Cli) -> Result<Output> {
         Command::Config { cmd } => cmd_config(cmd),
         Command::Project { cmd } => cmd_project(cmd),
         Command::Item { cmd } => cmd_item(project, cmd),
+        Command::Import { file, if_absent } => cmd_import(project, file, *if_absent),
         Command::Next(a) => {
             let s = config::open_store()?;
             let owner = a.owner.as_deref().map(OwnerKind::parse).transpose()?;
@@ -889,6 +904,7 @@ fn maybe_render(cli: &Cli) {
     let mutates = matches!(
         cli.command,
         Command::Item { .. }
+            | Command::Import { .. }
             | Command::Decompose(_)
             | Command::Depend(_)
             | Command::Group(_)
@@ -1168,6 +1184,20 @@ fn cmd_project(cmd: &ProjectCmd) -> Result<Output> {
     }
 }
 
+fn cmd_import(project: Option<&str>, file: &std::path::Path, if_absent: bool) -> Result<Output> {
+    let raw = std::fs::read_to_string(file)
+        .map_err(|e| HavenError::Invalid(format!("cannot read {}: {e}", file.display())))?;
+    let items: Vec<haven_core::ImportItem> = serde_json::from_str(&raw).map_err(|e| {
+        HavenError::Invalid(format!(
+            "{} is not a valid import file: {e}",
+            file.display()
+        ))
+    })?;
+    let s = config::open_store()?;
+    let outcomes = s.import_items(project, items, if_absent)?;
+    Ok(Output::Json(serde_json::to_value(outcomes)?))
+}
+
 fn cmd_item(project: Option<&str>, cmd: &ItemCmd) -> Result<Output> {
     let s = config::open_store()?;
     match cmd {
@@ -1187,7 +1217,11 @@ fn cmd_item(project: Option<&str>, cmd: &ItemCmd) -> Result<Output> {
                 group: a.group.clone(),
                 metadata: None,
             };
-            Ok(Output::Item(s.add_item(project, new)?))
+            Ok(Output::AddOutcome(s.add_item_checked(
+                project,
+                new,
+                a.if_absent,
+            )?))
         }
         ItemCmd::List(a) => {
             let filter = ItemFilter {

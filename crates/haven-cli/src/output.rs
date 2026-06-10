@@ -2,7 +2,7 @@
 //! `--pretty` renders human tables for the common shapes. Errors go to stderr
 //! as `{"error": {...}}` with a non-zero exit (SPEC §2).
 
-use haven_core::{HavenError, Item, Project};
+use haven_core::{AddOutcome, HavenError, Item, Project};
 use serde_json::Value;
 
 /// The result of a command, tagged so `--pretty` can render a nice table while
@@ -12,6 +12,7 @@ use serde_json::Value;
 #[allow(clippy::large_enum_variant)]
 pub enum Output {
     Item(Item),
+    AddOutcome(AddOutcome),
     Items(Vec<Item>),
     Project(Project),
     Projects(Vec<Project>),
@@ -37,6 +38,7 @@ impl Output {
     fn to_json(&self) -> Value {
         match self {
             Output::Item(i) => serde_json::to_value(i).unwrap_or(Value::Null),
+            Output::AddOutcome(o) => serde_json::to_value(o).unwrap_or(Value::Null),
             Output::Items(v) => serde_json::to_value(v).unwrap_or(Value::Null),
             Output::Project(p) => serde_json::to_value(p).unwrap_or(Value::Null),
             Output::Projects(v) => serde_json::to_value(v).unwrap_or(Value::Null),
@@ -49,6 +51,15 @@ impl Output {
     fn render_pretty(&self) {
         match self {
             Output::Item(i) => print!("{}", item_table(std::slice::from_ref(i))),
+            Output::AddOutcome(o) => {
+                print!("{}", item_table(std::slice::from_ref(&o.item)));
+                if o.existing {
+                    println!("(existing item — nothing created)");
+                }
+                for s in &o.similar {
+                    println!("similar: {}  {}", s.reference, s.title);
+                }
+            }
             Output::Items(v) => print!("{}", item_table(v)),
             Output::Project(p) => print!("{}", project_table(std::slice::from_ref(p))),
             Output::Projects(v) => print!("{}", project_table(v)),

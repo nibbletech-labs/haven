@@ -40,6 +40,53 @@ pub struct NewItem {
     pub metadata: Option<serde_json::Value>,
 }
 
+/// A live item whose title plausibly overlaps a just-created one — advisory
+/// only, surfaced so an agent can merge instead of accumulating duplicates.
+#[derive(Debug, Clone, Serialize)]
+pub struct SimilarItem {
+    #[serde(rename = "ref")]
+    pub reference: String,
+    pub title: String,
+}
+
+/// The result of a guarded add: the item (flattened, so consumers that read
+/// `ref`/`title` off a bare item keep working), whether it was an existing item
+/// returned by `--if-absent` instead of a create, and any similar-title
+/// warnings (absent when empty).
+#[derive(Debug, Serialize)]
+pub struct AddOutcome {
+    #[serde(flatten)]
+    pub item: Item,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub existing: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub similar: Vec<SimilarItem>,
+}
+
+/// Title normalization for `--if-absent` dedupe: collapse whitespace, strip
+/// trailing punctuation, case-fold. An empty result means "never matches".
+pub(crate) fn normalize_title(s: &str) -> String {
+    s.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .trim_end_matches(['.', ',', ';', ':', '!', '?'])
+        .trim_end()
+        .to_lowercase()
+}
+
+/// Build an FTS5 MATCH query over a title's words, scoped to the title column.
+/// Tokens are pure-alphanumeric and double-quoted, which neutralizes FTS5
+/// syntax (`"`, `-`, parens) and bareword operators (AND/OR/NOT/NEAR).
+/// `None` when the title has no alphanumeric tokens — skip the query.
+pub(crate) fn fts_title_query(title: &str) -> Option<String> {
+    let tokens: Vec<String> = title
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|t| !t.is_empty())
+        .map(|t| format!("\"{t}\""))
+        .collect();
+    (!tokens.is_empty()).then(|| format!("title : ({})", tokens.join(" OR ")))
+}
+
 /// How to change a node's `wait_state`: set it, or clear it (`--wait none`).
 #[derive(Debug, Clone, Copy)]
 pub enum WaitUpdate {
@@ -179,6 +226,98 @@ impl Store {
 
         tx.commit()?;
         self.get_item(project, &reference, &[])
+    }
+
+    /// [`Store::add_item`] with capture guards: when `if_absent` and a live
+    /// item's normalized title matches, return it (`existing: true`) instead of
+    /// creating a duplicate; otherwise create and attach up to 3 FTS-backed
+    /// `similar` warnings. The dedupe check and the create are separate
+    /// transactions — acceptable for a single-user local store.
+    pub fn add_item_checked(
+        &self,
+        project: Option<&str>,
+        new: NewItem,
+        if_absent: bool,
+    ) -> Result<AddOutcome> {
+        if if_absent {
+            let (project_id, _key) = self.require_project(project)?;
+            let norm = normalize_title(&new.title);
+            if !norm.is_empty() {
+                if let Some(node_id) = self.find_live_by_norm_title(project_id, &norm)? {
+                    let reference = self.node_ref(node_id)?;
+                    return Ok(AddOutcome {
+                        item: self.get_item(project, &reference, &[])?,
+                        existing: true,
+                        similar: vec![],
+                    });
+                }
+            }
+        }
+        let item = self.add_item(project, new)?;
+        let (project_id, _key) = self.require_project(project)?;
+        let similar = self.similar_live(project_id, item.id, &item.title, 3)?;
+        Ok(AddOutcome {
+            item,
+            existing: false,
+            similar,
+        })
+    }
+
+    /// Find a live (non-archived, non-superseded) node whose normalized title
+    /// equals `norm`. Compares in Rust — fine at Haven scale; an indexed
+    /// normalized column is the upgrade path. Sees in-transaction state when
+    /// called under `unchecked_transaction` (same connection).
+    pub(crate) fn find_live_by_norm_title(
+        &self,
+        project_id: i64,
+        norm: &str,
+    ) -> Result<Option<i64>> {
+        if norm.is_empty() {
+            return Ok(None);
+        }
+        let mut stmt = self.conn.prepare(
+            "SELECT id, title FROM nodes
+             WHERE project_id = ?1 AND status NOT IN ('archived','superseded')
+             ORDER BY id",
+        )?;
+        let rows = stmt.query_map([project_id], |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+        })?;
+        for row in rows {
+            let (id, title) = row?;
+            if normalize_title(&title) == norm {
+                return Ok(Some(id));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Live items whose titles plausibly overlap `title`, best-match first.
+    fn similar_live(
+        &self,
+        project_id: i64,
+        exclude_id: i64,
+        title: &str,
+        cap: i64,
+    ) -> Result<Vec<SimilarItem>> {
+        let Some(query) = fts_title_query(title) else {
+            return Ok(vec![]);
+        };
+        // FTS5's MATCH must reference the virtual table by its real name.
+        let mut stmt = self.conn.prepare(
+            "SELECT n.ref, n.title FROM node_fts
+             JOIN nodes n ON n.id = node_fts.rowid
+             WHERE node_fts MATCH ?1 AND n.project_id = ?2 AND n.id <> ?3
+               AND n.status NOT IN ('archived','superseded')
+             ORDER BY rank LIMIT ?4",
+        )?;
+        let rows = stmt.query_map(params![query, project_id, exclude_id, cap], |r| {
+            Ok(SimilarItem {
+                reference: r.get(0)?,
+                title: r.get(1)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
     /// Fetch one item, optionally hydrating edges/artifacts/lineage.

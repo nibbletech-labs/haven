@@ -1097,3 +1097,239 @@ fn status_counts() {
     // Everything is freshly created and unsynced.
     assert!(st["sync_pending"].as_i64().unwrap() >= 2);
 }
+
+// ---- HV-17: idempotent capture + bulk import -------------------------------
+
+#[test]
+fn normalize_title_folds_case_whitespace_and_trailing_punctuation() {
+    use super::item::normalize_title as norm;
+    assert_eq!(norm("Setup  CI."), "setup ci");
+    assert_eq!(norm("  Setup\tCI  "), "setup ci");
+    assert_eq!(norm("Ship it!?"), "ship it");
+    assert_eq!(norm("Ship it !?"), "ship it");
+    assert_eq!(norm("A.B"), "a.b"); // only trailing punctuation strips
+    assert_eq!(norm("???"), ""); // empty-normalized: never matches
+}
+
+#[test]
+fn fts_title_query_neutralizes_fts_syntax() {
+    use super::item::fts_title_query as q;
+    assert_eq!(
+        q(r#"Fix "auth" — (don't crash)!"#).unwrap(),
+        r#"title : ("Fix" OR "auth" OR "don" OR "t" OR "crash")"#
+    );
+    assert_eq!(
+        q("AND OR NOT").unwrap(),
+        r#"title : ("AND" OR "OR" OR "NOT")"#
+    );
+    assert_eq!(q("?!— ()"), None);
+}
+
+#[test]
+fn add_if_absent_returns_existing_and_ignores_dead_matches() {
+    let s = store();
+    let first = add(&s, "Setup CI");
+
+    // Sloppier casing/whitespace/punctuation still hits.
+    let out = s
+        .add_item_checked(
+            None,
+            NewItem {
+                title: "  setup  ci.".into(),
+                ..Default::default()
+            },
+            true,
+        )
+        .unwrap();
+    assert!(out.existing);
+    assert_eq!(out.item.reference, first.reference);
+    assert_eq!(s.store_status(None).unwrap()["total"], 1);
+
+    // An archived match is dead — a new item is created.
+    s.archive_item(None, "HV-1", Some("rot"), None).unwrap();
+    let out = s
+        .add_item_checked(
+            None,
+            NewItem {
+                title: "Setup CI".into(),
+                ..Default::default()
+            },
+            true,
+        )
+        .unwrap();
+    assert!(!out.existing);
+    assert_ne!(out.item.reference, first.reference);
+}
+
+#[test]
+fn add_reports_similar_titles_capped_and_punctuation_safe() {
+    let s = store();
+    add(&s, "User login flow");
+    let out = s
+        .add_item_checked(
+            None,
+            NewItem {
+                title: "Login flow for users".into(),
+                ..Default::default()
+            },
+            false,
+        )
+        .unwrap();
+    assert!(!out.existing);
+    assert!(out.similar.iter().any(|x| x.reference == "HV-1"));
+    // Never lists itself.
+    assert!(out
+        .similar
+        .iter()
+        .all(|x| x.reference != out.item.reference));
+
+    for i in 0..5 {
+        add(&s, &format!("Login flow variant {i}"));
+    }
+    let out = s
+        .add_item_checked(
+            None,
+            NewItem {
+                title: "Another login flow".into(),
+                ..Default::default()
+            },
+            false,
+        )
+        .unwrap();
+    assert_eq!(out.similar.len(), 3); // capped
+
+    // A punctuation bomb neither errors nor matches anything.
+    let out = s
+        .add_item_checked(
+            None,
+            NewItem {
+                title: "?!— ()".into(),
+                ..Default::default()
+            },
+            false,
+        )
+        .unwrap();
+    assert!(out.similar.is_empty());
+}
+
+fn import_batch(v: serde_json::Value) -> Vec<ImportItem> {
+    serde_json::from_value(v).unwrap()
+}
+
+#[test]
+fn import_wires_temp_id_edges_in_one_batch() {
+    let s = store();
+    add(&s, "Pre-existing"); // HV-1
+
+    let outcomes = s
+        .import_items(
+            None,
+            import_batch(serde_json::json!([
+                // Forward reference: parent "epic" appears later in the file.
+                {"id": "api", "title": "Build API", "parent": "epic",
+                 "depends_on": ["HV-1"], "status": "ready", "commit": true},
+                {"id": "ui", "title": "Build UI", "depends_on": ["api"], "group": "phase1"},
+                {"id": "epic", "title": "Auth epic"},
+                {"id": "phase1", "title": "Phase 1", "type": "phase"}
+            ])),
+            false,
+        )
+        .unwrap();
+
+    assert_eq!(outcomes.len(), 4);
+    assert_eq!(outcomes[0].id.as_deref(), Some("api"));
+    assert_eq!(outcomes[0].item.reference, "HV-2");
+    assert_eq!(outcomes[3].item.reference, "HV-5"); // sequential refs
+    assert!(outcomes.iter().all(|o| !o.existing));
+
+    let g = s.project_graph(None, false).unwrap();
+    let has = |kind: EdgeKind, from: &str, to: &str| {
+        g.edges
+            .iter()
+            .any(|e| e.kind == kind && e.from == from && e.to == to)
+    };
+    assert!(has(EdgeKind::Decomposition, "HV-4", "HV-2")); // epic ⊃ api
+    assert!(has(EdgeKind::Dependency, "HV-2", "HV-1")); // api → pre-existing
+    assert!(has(EdgeKind::Dependency, "HV-3", "HV-2")); // ui → api (temp id)
+    assert!(has(EdgeKind::Grouping, "HV-5", "HV-3")); // phase1 ∋ ui
+}
+
+#[test]
+fn import_is_all_or_nothing_on_edge_failure() {
+    let s = store();
+    add(&s, "Anchor"); // HV-1; ref_counter = 1
+
+    // In-batch dependency cycle: only detectable at edge-wiring time.
+    let err = s
+        .import_items(
+            None,
+            import_batch(serde_json::json!([
+                {"id": "a", "title": "First", "depends_on": ["b"]},
+                {"id": "b", "title": "Second", "depends_on": ["a"]}
+            ])),
+            false,
+        )
+        .unwrap_err();
+    assert!(err.to_string().contains("cycle"), "got: {err}");
+
+    // Nothing persisted: node count AND the minted ref counter rolled back.
+    assert_eq!(s.store_status(None).unwrap()["total"], 1);
+    assert_eq!(s.get_project("haven").unwrap().ref_counter, 1);
+}
+
+#[test]
+fn import_validation_rejects_bad_input_without_writing() {
+    let s = store();
+    add(&s, "Anchor"); // HV-1
+
+    let cases = [
+        // Duplicate temp ids.
+        serde_json::json!([{"id": "x", "title": "One"}, {"id": "x", "title": "Two"}]),
+        // Temp id shadowing a real ref.
+        serde_json::json!([{"id": "HV-1", "title": "Shadow"}]),
+        // Bad enum.
+        serde_json::json!([{"title": "Bad", "status": "wat"}]),
+        // Unknown edge target.
+        serde_json::json!([{"title": "Dangling", "depends_on": ["nope"]}]),
+        // Empty title.
+        serde_json::json!([{"title": "   "}]),
+    ];
+    for case in cases {
+        let err = s.import_items(None, import_batch(case.clone()), false);
+        assert!(err.is_err(), "case should fail: {case}");
+    }
+    assert_eq!(s.store_status(None).unwrap()["total"], 1);
+    assert_eq!(s.get_project("haven").unwrap().ref_counter, 1);
+}
+
+#[test]
+fn import_if_absent_dedupes_against_store_and_batch() {
+    let s = store();
+    add(&s, "Setup CI"); // HV-1
+
+    let outcomes = s
+        .import_items(
+            None,
+            import_batch(serde_json::json!([
+                {"id": "ci", "title": "setup  ci."},
+                {"title": "Run tests", "depends_on": ["ci"]},
+                {"title": "SETUP CI"}
+            ])),
+            true,
+        )
+        .unwrap();
+
+    // Batch item 0 matched the pre-existing node; its temp id resolved there.
+    assert!(outcomes[0].existing);
+    assert_eq!(outcomes[0].item.reference, "HV-1");
+    // Batch item 2 matched within the batch (same normalized title).
+    assert!(outcomes[2].existing);
+    assert_eq!(outcomes[2].item.reference, "HV-1");
+    // Only "Run tests" was created, depending on the matched pre-existing node.
+    assert!(!outcomes[1].existing);
+    assert_eq!(s.store_status(None).unwrap()["total"], 2);
+    let g = s.project_graph(None, false).unwrap();
+    assert!(g.edges.iter().any(|e| e.kind == EdgeKind::Dependency
+        && e.from == outcomes[1].item.reference
+        && e.to == "HV-1"));
+}

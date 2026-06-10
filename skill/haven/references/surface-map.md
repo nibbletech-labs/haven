@@ -50,6 +50,10 @@ haven project list | get <key> | use <key>
 haven item add "<title>" [--type] [--body] [--done-looks-like "…"] [--why "…"]
                          [--status] [--priority N] [--commit] [--assign human|ai]
                          [--parent <ref>] [--depends-on <ref>] [--group <ref>]
+                         [--if-absent]   # normalized-title dedupe: return the existing item
+haven import <file.json> [--if-absent]  # bulk add: one validated, all-or-nothing transaction;
+                                        # items take the add fields + temp `id` and ref-or-temp-id
+                                        # parent / depends_on (array) / group edge fields
 haven item list [--status] [--type] [--owner] [--committed] [--icebox] [--group <ref>]
                 [--wait on_human|on_dependency|on_external] [--stale <days>]
 haven item get <ref> [--include edges,artifacts,lineage]
@@ -107,7 +111,7 @@ haven sync [status] [--watch]
 | `haven_next` | `owner?, limit?` |
 | `haven_next_explain` | `owner?` — diagnose an empty queue (counts by reason + hint) |
 | `haven_rank` | **`ref`**, `before?` \| `after?` (exactly one) — reorder within a priority band (fine ordering) |
-| `haven_add_item` | **`title`**, `type?, body?, done_looks_like?, why?, status?, priority?, commit?, assign?, parent?, depends_on?, group?` |
+| `haven_add_item` | **`title`**, `type?, body?, done_looks_like?, why?, status?, priority?, commit?, assign?, parent?, depends_on?, group?, if_absent?` — with `if_absent` a normalized-title match returns the existing item (`existing: true`); responses may carry advisory `similar` |
 | `haven_update_item` | **`ref`**, `title?, body?, done_looks_like?, why?, status?, priority?, type?, wait?, commit?, assign?, actor?` |
 | `haven_add_edge` | **`kind`** (`decomposition`\|`dependency`\|`grouping`), **`from`**, **`to`**, `remove?` |
 | `haven_evolve` | **`op`** (`split`\|`merge`\|`supersede`), **`refs`**, `into?, with?, title?, rationale?, by?` |
@@ -132,6 +136,7 @@ The collapses that catch people out:
 | CLI | MCP |
 |---|---|
 | `item list` / `get` / `add` | `haven_list_items` / `haven_get_item` / `haven_add_item` |
+| `item add --if-absent` | `haven_add_item {if_absent: true}` — both surfaces return `existing`/`similar` on the add response |
 | `item update` **+** `commit` / `uncommit` / `assign` | **all one tool:** `haven_update_item` (fields `commit: true/false`, `assign`, plus the update fields) |
 | `decompose` / `depend` / `group` | **one tool:** `haven_add_edge {kind: "decomposition"\|"dependency"\|"grouping", from, to}` |
 | `evolve split`/`merge`/`supersede` | `haven_evolve {op, refs, …}` |
@@ -173,6 +178,9 @@ must rely on a local CLI or a pre-arranged state:
   selects per-call, so it never needs `use`.)
 - **`note`**, **`render`** — scratch lines and forced re-render (render happens
   automatically anyway).
+- **`import`** — bulk capture from a JSON file (plan-loading is an
+  at-the-terminal act). Over MCP, loop `haven_add_item` — with
+  `if_absent: true` for dedupe — one call per item.
 - **Lifecycle/admin** — `setup`, `init`, `doctor`, `config`, `auth`, `sync`.
 
 If a remote client genuinely needs to create projects or re-rank, that's a gap to

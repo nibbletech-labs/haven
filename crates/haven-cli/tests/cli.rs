@@ -332,3 +332,101 @@ fn no_project_selected_is_a_clean_error() {
     let err = h.fail(&["item", "add", "orphan"]);
     assert_eq!(err["error"]["code"], "invalid");
 }
+
+// ---- HV-17: idempotent capture + bulk import -------------------------------
+
+#[test]
+fn item_add_if_absent_round_trips() {
+    let h = Haven::new();
+    h.ok(&[
+        "setup",
+        "--no-skill",
+        "--project-key",
+        "demo",
+        "--prefix",
+        "DM",
+    ]);
+
+    let first = h.json(&["item", "add", "Setup CI"]);
+    assert_eq!(first["ref"], "DM-1");
+    // The clean-create response carries neither guard field.
+    assert!(first.get("existing").is_none());
+    assert!(first.get("similar").is_none());
+
+    let second = h.json(&["item", "add", "  setup  ci.", "--if-absent"]);
+    assert_eq!(second["existing"], true);
+    assert_eq!(second["ref"], "DM-1");
+
+    // A near-duplicate created without the guard carries a similar warning.
+    let third = h.json(&["item", "add", "Setup CI runners"]);
+    assert!(third["similar"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|s| s["ref"] == "DM-1"));
+}
+
+#[test]
+fn import_creates_a_wired_batch_in_one_transaction() {
+    let h = Haven::new();
+    h.ok(&[
+        "setup",
+        "--no-skill",
+        "--project-key",
+        "demo",
+        "--prefix",
+        "DM",
+    ]);
+
+    let file = h.home.join("batch.json");
+    std::fs::write(
+        &file,
+        serde_json::json!([
+            {"id": "api", "title": "Build API", "parent": "epic", "status": "ready", "commit": true},
+            {"id": "ui", "title": "Build UI", "depends_on": ["api"]},
+            {"id": "epic", "title": "Auth epic"}
+        ])
+        .to_string(),
+    )
+    .unwrap();
+
+    let out = h.json(&["import", file.to_str().unwrap()]);
+    let outcomes = out.as_array().unwrap();
+    assert_eq!(outcomes.len(), 3);
+    assert_eq!(outcomes[0]["id"], "api");
+    assert_eq!(outcomes[0]["ref"], "DM-1");
+    assert_eq!(outcomes[2]["ref"], "DM-3");
+
+    // Edges round-trip through the graph read; the projection regenerated.
+    let g = h.json(&["graph"]);
+    let edges = g["edges"].as_array().unwrap();
+    let has = |kind: &str, from: &str, to: &str| {
+        edges
+            .iter()
+            .any(|e| e["kind"] == kind && e["from"] == from && e["to"] == to)
+    };
+    assert!(has("decomposition", "DM-3", "DM-1"));
+    assert!(has("dependency", "DM-2", "DM-1"));
+    assert!(h.home.join("demo/backlog.md").exists());
+
+    // A failing batch (in-batch cycle) leaves the store untouched.
+    std::fs::write(
+        &file,
+        serde_json::json!([
+            {"id": "a", "title": "First", "depends_on": ["b"]},
+            {"id": "b", "title": "Second", "depends_on": ["a"]}
+        ])
+        .to_string(),
+    )
+    .unwrap();
+    let err = h.fail(&["import", file.to_str().unwrap()]);
+    assert_eq!(err["error"]["code"], "graph_rule");
+    assert_eq!(h.json(&["item", "list"]).as_array().unwrap().len(), 3);
+
+    // Unreadable / invalid files produce the `invalid` envelope.
+    let err = h.fail(&["import", "/nonexistent/batch.json"]);
+    assert_eq!(err["error"]["code"], "invalid");
+    std::fs::write(&file, "not json").unwrap();
+    let err = h.fail(&["import", file.to_str().unwrap()]);
+    assert_eq!(err["error"]["code"], "invalid");
+}

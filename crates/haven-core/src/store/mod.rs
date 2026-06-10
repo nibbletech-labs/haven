@@ -6,6 +6,7 @@
 mod content;
 mod edge;
 mod evolve;
+mod import;
 mod item;
 mod query;
 #[cfg(test)]
@@ -23,9 +24,10 @@ use crate::model::*;
 pub use content::{ArtifactContent, NewArtifact};
 pub use edge::EdgeKind;
 pub use evolve::EvolveResult;
+pub use import::{ImportItem, ImportOutcome};
 pub use item::{
-    CompleteInput, CompleteResult, HandoffInput, HandoffResult, Include, ItemFilter, ItemUpdate,
-    NewItem, WaitUpdate,
+    AddOutcome, CompleteInput, CompleteResult, HandoffInput, HandoffResult, Include, ItemFilter,
+    ItemUpdate, NewItem, SimilarItem, WaitUpdate,
 };
 pub use query::{GraphEdge, LineageDirection, LineageGraph, LineageLink, ProjectGraph};
 
