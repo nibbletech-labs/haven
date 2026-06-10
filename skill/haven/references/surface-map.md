@@ -2,13 +2,13 @@
 
 The two front-ends drive the **same** store but are **not 1:1**. The CLI has many
 friendly verbs (for a human typing); the MCP is a deliberately smaller, more
-general set of 21 tools (for an agent). When a workflow runs over MCP, translate
+general set of 22 tools (for an agent). When a workflow runs over MCP, translate
 using the mapping below.
 
 ## Contents
 - [Enums (valid values)](#enums)
 - [CLI command surface](#cli-command-surface)
-- [MCP tool catalogue (21 tools)](#mcp-tool-catalogue)
+- [MCP tool catalogue (22 tools)](#mcp-tool-catalogue)
 - [CLI → MCP mapping](#cli--mcp-mapping)
 - [CLI-only operations](#cli-only-operations)
 - [The content channel](#the-content-channel)
@@ -97,7 +97,7 @@ haven sync [status] [--watch]
 
 ## MCP tool catalogue
 
-21 tools, each taking an optional `project` and naming items by `ref` or
+22 tools, each taking an optional `project` and naming items by `ref` or
 `public_id`. Required args in **bold**.
 
 | Tool | Args |
@@ -106,6 +106,7 @@ haven sync [status] [--watch]
 | `haven_get_item` | **`ref`**, `include?: ["edges","artifacts","lineage"]` |
 | `haven_next` | `owner?, limit?` |
 | `haven_next_explain` | `owner?` — diagnose an empty queue (counts by reason + hint) |
+| `haven_rank` | **`ref`**, `before?` \| `after?` (exactly one) — reorder within a priority band (fine ordering) |
 | `haven_add_item` | **`title`**, `type?, body?, done_looks_like?, why?, status?, priority?, commit?, assign?, parent?, depends_on?, group?` |
 | `haven_update_item` | **`ref`**, `title?, body?, done_looks_like?, why?, status?, priority?, type?, wait?, commit?, assign?, actor?` |
 | `haven_add_edge` | **`kind`** (`decomposition`\|`dependency`\|`grouping`), **`from`**, **`to`**, `remove?` |
@@ -139,6 +140,7 @@ The collapses that catch people out:
 | `item handoff` | `haven_handoff` |
 | `item complete` | `haven_complete_item` |
 | `next` / `next --explain` | `haven_next` / `haven_next_explain` |
+| `item rank` | `haven_rank` |
 | `search`, `status`, `artifact get`/`add` | `haven_search`, `haven_status`, `haven_get_artifact`/`haven_add_artifact` |
 | `graph` | `haven_graph` |
 | `project list` / `add` | `haven_list_projects` / `haven_add_project` |
@@ -165,7 +167,6 @@ gateway). `haven_add_project` starts a new backlog remotely.
 These have **no MCP tool** in v1 — a remote/headless client can't do them and
 must rely on a local CLI or a pre-arranged state:
 
-- **`item rank`** — fine ordering within a band (a rare, human-at-laptop op).
 - **`project use` / `get`** — local conveniences. (`project list` / `add` *are*
   available over MCP via `haven_list_projects` / `haven_add_project` — see
   "Selecting a project over MCP" above; a remote client discovers backlogs and

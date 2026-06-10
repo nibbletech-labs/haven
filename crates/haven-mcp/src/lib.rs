@@ -231,6 +231,15 @@ fn call_tool(store: &Store, name: &str, a: &Value) -> Result<Value> {
             project,
             opt_str(a, "owner").map(OwnerKind::parse).transpose()?,
         ),
+        // Fine ordering within a priority band — exposed over MCP so a remote
+        // client (phone/web) can reorder conversationally ("put X before Y"),
+        // not just shuffle priority bands. Same core op as CLI `item rank`.
+        "haven_rank" => to_value(store.rank_item(
+            project,
+            req_str(a, "ref")?,
+            opt_str(a, "before"),
+            opt_str(a, "after"),
+        )?),
         "haven_add_item" => {
             let new = NewItem {
                 title: req_str(a, "title")?.to_string(),
@@ -552,6 +561,8 @@ fn tools_list() -> Value {
           "inputSchema": obj(json!({"project":{"type":"string"},"owner":{"type":"string"},"limit":{"type":"integer"}}), json!([])) },
         { "name": "haven_next_explain", "description": "Diagnose why the dispatch queue is empty: the dispatchable count plus a per-reason breakdown (owner-mismatch, blocked-by-dependency, waiting, committed-not-ready, ready-but-uncommitted) and a hint. Call when haven_next returns nothing — diagnose, don't invent work.",
           "inputSchema": obj(json!({"project":{"type":"string"},"owner":{"type":"string"}}), json!([])) },
+        { "name": "haven_rank", "description": "Reorder an item within its priority band: place it immediately before or after another item (exactly one of `before`/`after`). Fine ordering for 'do X before Y' — use `haven_update_item {priority}` for coarse band moves.",
+          "inputSchema": obj(json!({"ref":{"type":"string"},"project":{"type":"string"},"before":{"type":"string"},"after":{"type":"string"}}), json!(["ref"])) },
         { "name": "haven_add_item", "description": "Create a work-graph item (node). `done_looks_like` is the acceptance statement output is verified against; `why` is a one-line provenance trace.",
           "inputSchema": obj(json!({"title":{"type":"string"},"project":{"type":"string"},"type":{"type":"string"},"body":{"type":"string"},"done_looks_like":{"type":"string"},"why":{"type":"string"},"status":{"type":"string"},"priority":{"type":"integer"},"commit":{"type":"boolean"},"assign":{"type":"string"},"parent":{"type":"string"},"depends_on":{"type":"string"},"group":{"type":"string"}}), json!(["title"])) },
         { "name": "haven_update_item", "description": "Update maturity/commitment/ownership of an item. Set `done_looks_like` (acceptance) when it becomes ready so dispatch can verify against it.",
@@ -643,7 +654,7 @@ mod tests {
         assert_eq!(out.len(), 2);
         assert_eq!(out[0]["result"]["serverInfo"]["name"], "haven");
         let tools = out[1]["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 21);
+        assert_eq!(tools.len(), 22);
         assert!(tools.iter().any(|t| t["name"] == "haven_next"));
         assert!(tools.iter().any(|t| t["name"] == "haven_next_explain"));
         assert!(tools.iter().any(|t| t["name"] == "haven_resolve_live"));
@@ -868,6 +879,45 @@ mod tests {
         let arr = live.as_array().unwrap();
         assert_eq!(arr.len(), 1);
         assert_eq!(arr[0]["ref"], "HV-2");
+    }
+
+    #[test]
+    fn rank_via_tool_reorders_within_a_band() {
+        let s = store();
+        let out = session(
+            &s,
+            &[
+                // Two committed P1 items; HV-1 sorts first by creation.
+                json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{
+                    "name":"haven_add_item","arguments":{"title":"First","status":"ready","commit":true,"priority":1}
+                }}),
+                json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{
+                    "name":"haven_add_item","arguments":{"title":"Second","status":"ready","commit":true,"priority":1}
+                }}),
+                // Conversational reorder: put Second before First.
+                json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{
+                    "name":"haven_rank","arguments":{"ref":"HV-2","before":"HV-1"}
+                }}),
+                json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{
+                    "name":"haven_next","arguments":{}
+                }}),
+                // Exactly one of before/after is required.
+                json!({"jsonrpc":"2.0","id":5,"method":"tools/call","params":{
+                    "name":"haven_rank","arguments":{"ref":"HV-2"}
+                }}),
+            ],
+        );
+        assert_eq!(out[2]["result"]["isError"], false);
+        let next = tool_payload(&out[3]);
+        let refs: Vec<&str> = next
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|i| i["ref"].as_str().unwrap())
+            .collect();
+        assert_eq!(refs, ["HV-2", "HV-1"]);
+        // Missing before/after surfaces as a tool error, not a crash.
+        assert_eq!(out[4]["result"]["isError"], true);
     }
 
     #[test]
