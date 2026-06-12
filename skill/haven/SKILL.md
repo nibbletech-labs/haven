@@ -93,14 +93,18 @@ under `~/.haven/<project>/items/<ref>/`. A local agent reads/edits those files
 is a one-line summary, **never** the content. (A filesystem-less client uses the
 artifact `content` channel instead — see `references/surface-map.md`.)
 
-**Project-level documents belong in the store too.** Vision, architecture, and
-decision docs are artifacts (`--role vision|design|decision`) on a long-lived
-**anchor node** (`--type anchor`, e.g. "Project X — vision & architecture") — not
-loose repo markdown. Discover them with `haven docs` / `haven_docs`; don't
-hard-code a magic ref. They then sync, lazy-download, and back every item's `why`
-trace like all other content. When asked to tidy or restructure a project's
-docs, **migrating the durable ones into the graph is usually the move** — don't
-just reshuffle files.
+**Project-level documents belong in the store too.** Vision, architecture,
+decision, and style docs are artifacts (`--role vision|design|decision|research|source`)
+on long-lived **anchor nodes** (`--type anchor`, e.g. "Project X — vision &
+architecture") — not loose repo markdown. Discover them with `haven docs` /
+`haven_docs`; don't hard-code a magic ref. They then sync, lazy-download, and back
+every item's `why` trace like all other content. **The placement test:** if a
+script, build step, or pipeline reads the file by path, it stays in the repo; if
+it's only read by humans and agents for context (vision, style guides, taste,
+prompt experiments, research, decisions), it belongs in Haven. When asked to tidy
+or restructure a project's docs, **migrating the durable context docs into the
+graph is usually the move** — don't just reshuffle files. The full playbook
+(thematic anchors, roles, `haven link` for in-tree visibility) is workflow 12.
 
 ## Lazy structure: capture is cheap, structure is earned
 
@@ -158,6 +162,7 @@ memory. Each has a trigger, steps, judgment heuristics, and real commands:
 9. **Complete** — `item complete`: evidence + done + what it unblocked
 10. **Artifacts & content** — registering work product; the no-filesystem channel
 11. **Gates & reviews** — review checkpoints as dependency + acceptance
+12. **Project docs & anchors** — repo vs Haven placement; thematic anchor setup
 
 Precise arguments and the **CLI-vs-MCP differences** (they are *not* 1:1) are in
 **`references/surface-map.md`**.

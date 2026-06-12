@@ -24,6 +24,7 @@ this once per session, not per command (see `surface-map.md` for the selection m
 - [9. Complete](#9-complete)
 - [10. Artifacts & content](#10-artifacts--content)
 - [11. Gates & reviews](#11-gates--reviews)
+- [12. Project docs & anchors](#12-project-docs--anchors)
 - [Conventions: acceptance, open questions, test-and-learn](#conventions)
 - [Worked end-to-end example](#worked-example)
 - [Anti-patterns](#anti-patterns)
@@ -361,6 +362,53 @@ you already know:
 - Keep the gate's `done_looks_like` concrete (what must be true to pass), so the
   review is a check, not a vibe.
 
+## 12. Project docs & anchors
+
+**Trigger:** durable project knowledge needs a home — a vision doc, style guide,
+prompt library, research note, decision record — or the user asks "should this
+live in the repo or in Haven?" / "tidy up the project docs".
+
+**The placement test:** *does a script, build step, or pipeline read this file by
+path?*
+- **Yes → repo.** Build inputs, prompts a generator consumes, config docs that
+  tooling validates against. Moving these breaks the pipeline; they ship with the
+  code by necessity.
+- **No → Haven.** Docs read only by humans and agents for context: vision and
+  direction, style guides and taste docs, prompt experiments and clippings,
+  research, decision records. Keeping them in Haven also keeps them out of the
+  repo if it is ever public.
+
+**Steps:**
+1. Check `haven docs` for an existing anchor before creating one.
+2. Create **a few thematic anchors** — not one catch-all, not one per doc:
+   ```bash
+   haven item add "Acme — vision & direction" --type anchor
+   haven item add "Acme — style guides" --type anchor
+   haven item add "Acme — research" --type anchor
+   ```
+3. Attach each doc with the role matching its nature:
+   ```bash
+   haven artifact add HV-50 --role design --file docs/brand-style.md
+   ```
+   `--file` copies it into `~/.haven/<project>/items/HV-50/`; remove the loose
+   repo copy once migrated so there is one source of truth.
+4. Thereafter edit the files under the anchor's item directory **directly** —
+   living docs are updated in place, no re-registration.
+5. Discover, never hard-code: `haven docs` / `haven_docs` lists every anchor with
+   its artifacts.
+
+**Heuristics:**
+- **Anchors are shelving, not work.** Leave them uncommitted and out of the
+  status lifecycle — they never dispatch, never complete.
+- **Grey zone defaults to Haven.** A doc an agent uses mid-task but no script
+  reads (a house-style guide, a prompt scrapbook) goes in Haven; repo docs are
+  for what a stranger cloning the repo needs to build and understand the code.
+- **Need it visible in-tree?** `haven link` projects a git-excluded `Haven/`
+  folder into the repo working tree — docs sit beside the code without being
+  committed.
+- **Doc backs one item?** Attach it to that item, not an anchor. Anchors hold
+  knowledge that outlives any single item.
+
 ## Conventions
 
 Three orchestrate-grade patterns that need no special fields — judgment + the
@@ -475,6 +523,9 @@ nothing was deleted; `next` stayed honest; the two axes were managed independent
   "Part of" = decomposition.
 - **Don't register every scratch file.** `notes/` is free; register only durable,
   queryable products.
+- **Don't migrate pipeline inputs into Haven.** If a script or build reads a file
+  by path it stays in the repo; Haven holds the docs only humans and agents read
+  (workflow 12).
 - **Don't commit speculative work** to make the backlog look active. Keep maybes
   floating.
 - **Don't sync after every mutation.** It's manual and offline-first; one
