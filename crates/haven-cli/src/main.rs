@@ -684,6 +684,12 @@ fn run(cli: &Cli) -> Result<Output> {
         Command::Link { name } => cmd_link(project, name),
         Command::Skill { cmd } => cmd_skill(cmd),
         Command::Mcp => {
+            // Self-heal installed skill snapshots before serving, so a binary
+            // upgrade propagates the skill on the next agent session without a
+            // manual `haven skill install`. stderr only: stdout is the MCP channel.
+            for dir in config::refresh_stale_skill_snapshots() {
+                eprintln!("haven: refreshed skill snapshot at {}", dir.display());
+            }
             // Serve until stdin EOF; stdout is the MCP channel, so exit without
             // printing any Output afterwards.
             let s = config::open_store()?;

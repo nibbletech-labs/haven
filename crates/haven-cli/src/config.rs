@@ -182,6 +182,38 @@ fn write_skill_snapshot(skill_dir: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Refresh previously-installed skill snapshots that have drifted from the one
+/// embedded in this binary — the self-heal that lets a binary upgrade carry the
+/// skill with it (no manual `haven skill install` after e.g. `brew upgrade`).
+/// Only rewrites skill dirs that already exist, so a `--no-skill` or
+/// single-agent setup stays respected. Best-effort by design: a failure is
+/// reported on stderr and must never stop the caller (the MCP server).
+/// Returns the dirs it refreshed.
+pub fn refresh_stale_skill_snapshots() -> Vec<PathBuf> {
+    let candidates = [
+        claude_dir().map(|d| d.join("skills").join("haven")),
+        agents_dir().map(|d| d.join("skills").join("haven")),
+    ];
+    let mut refreshed = Vec::new();
+    for skill_dir in candidates.into_iter().flatten() {
+        if !skill_dir.is_dir() {
+            continue; // never installed here (or opted out) — not ours to create
+        }
+        let (_, current) = skill_snapshot_check(&skill_dir);
+        if current {
+            continue;
+        }
+        match write_skill_snapshot(&skill_dir) {
+            Ok(()) => refreshed.push(skill_dir),
+            Err(e) => eprintln!(
+                "haven: skill refresh skipped ({}): {e}",
+                skill_dir.display()
+            ),
+        }
+    }
+    refreshed
+}
+
 /// What `haven setup` is responsible for wiring on a machine: the MCP server
 /// registration in the Claude config, and the embedded skill snapshot on disk.
 /// `haven doctor` reads this to tell a botched install from a healthy one.

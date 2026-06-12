@@ -118,6 +118,35 @@ fn skill_install_and_setup_write_the_snapshot() {
 }
 
 #[test]
+fn mcp_startup_refreshes_stale_skill_snapshot() {
+    let h = Haven::new();
+    // Claude-only install: the Codex skill dir must stay absent throughout.
+    h.json(&["setup", "--agent", "claude"]);
+    let skill_md = h.home.join(".claude/skills/haven/SKILL.md");
+    let pristine = std::fs::read_to_string(&skill_md).unwrap();
+
+    // Simulate drift (an old binary's snapshot, or a hand-edit).
+    std::fs::write(&skill_md, "stale").unwrap();
+
+    // `haven mcp` with immediate stdin EOF: serves nothing, but self-heals first.
+    let out = h
+        .cmd(&["mcp"])
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "mcp failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    assert_eq!(std::fs::read_to_string(&skill_md).unwrap(), pristine);
+    assert!(String::from_utf8_lossy(&out.stderr).contains("refreshed skill snapshot"));
+    // Respects the single-agent setup: no Codex dir conjured into existence.
+    assert!(!h.home.join(".agents/skills/haven").exists());
+}
+
+#[test]
 fn doctor_reports_install_health() {
     let h = Haven::new();
     let status_of = |report: &Value, name: &str| -> String {
