@@ -57,6 +57,11 @@ agent-readable skill paths, writes/refreshes the Haven stanza in `AGENTS.md`, an
 can create/select your first project with `--project-key`. `haven doctor` reports
 whether each local install piece is wired.
 
+**Updating:** `haven self update` reports how this binary was installed (Homebrew,
+install script, source, or a dev symlink) and the command to update it; for a
+Homebrew install, `haven self update --run` runs `brew upgrade` for you. `haven
+self update --check` just compares your version against the latest release.
+
 Agent-specific setup is available when you only want one integration:
 
 ```sh
@@ -105,6 +110,17 @@ cargo test --workspace
 cargo clippy --workspace --all-targets
 cargo fmt --check
 ```
+
+For a development install that tracks your builds, symlink the binary onto your
+PATH instead of copying it:
+
+```sh
+cargo build --release
+./target/release/haven self install --link   # ~/.local/bin/haven -> target/release/haven
+```
+
+Rebuilds then go live with no reinstall (`haven self install` without `--link`
+copies instead). `haven doctor` verifies the wiring.
 
 ## Status
 
