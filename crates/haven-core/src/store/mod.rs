@@ -143,6 +143,16 @@ impl Store {
         Ok(())
     }
 
+    /// The store's applied schema version (SQLite `PRAGMA user_version`), set by
+    /// the migration runner. After a successful open it equals
+    /// `db::latest_schema_migration()`; exposed so `doctor` can report it.
+    pub fn user_version(&self) -> Result<i64> {
+        let v = self
+            .conn
+            .pragma_query_value(None, "user_version", |r| r.get(0))?;
+        Ok(v)
+    }
+
     // ---- projects ---------------------------------------------------------
 
     /// Create a project. `prefix` defaults to the uppercased first 2 chars of

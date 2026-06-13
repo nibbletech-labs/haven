@@ -491,6 +491,7 @@ dependencies = [
  "haven-mcp",
  "haven-sync",
  "predicates",
+ "reqwest",
  "serde",
  "serde_json",
  "tempfile",

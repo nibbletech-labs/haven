@@ -121,6 +121,12 @@ enum Command {
         #[command(subcommand)]
         cmd: SkillCmd,
     },
+    /// Manage this `haven` binary: install/relink it onto PATH, or update.
+    #[command(name = "self")]
+    Slf {
+        #[command(subcommand)]
+        cmd: SelfCmd,
+    },
     /// Run the MCP server over stdio (the surface builder/app consume).
     Mcp,
     /// Auth0 sign-in / sign-out / status.
@@ -165,6 +171,39 @@ enum SkillCmd {
         #[arg(long, value_enum, default_value_t = AgentTarget::Claude)]
         agent: AgentTarget,
     },
+}
+
+#[derive(Subcommand)]
+enum SelfCmd {
+    /// Promote this build onto your PATH (copy), or --link it for development.
+    Install(SelfInstallArgs),
+    /// Report how to update (install-method aware) and the latest version.
+    Update(SelfUpdateArgs),
+}
+
+#[derive(Args)]
+struct SelfInstallArgs {
+    /// Dev mode: symlink the install dir's `haven` at this build so rebuilds go
+    /// live, instead of copying.
+    #[arg(long)]
+    link: bool,
+    /// Install directory. Defaults to the first writable of $HAVEN_BIN_DIR,
+    /// /usr/local/bin, ~/.local/bin (mirrors install.sh).
+    #[arg(long)]
+    dir: Option<PathBuf>,
+    /// Overwrite an existing binary at the destination (copy mode).
+    #[arg(long)]
+    force: bool,
+}
+
+#[derive(Args)]
+struct SelfUpdateArgs {
+    /// Only check the latest version and report; change nothing.
+    #[arg(long)]
+    check: bool,
+    /// For a Homebrew install, actually run `brew upgrade` (default: print only).
+    #[arg(long)]
+    run: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
@@ -683,6 +722,7 @@ fn run(cli: &Cli) -> Result<Output> {
         }
         Command::Link { name } => cmd_link(project, name),
         Command::Skill { cmd } => cmd_skill(cmd),
+        Command::Slf { cmd } => cmd_self(cmd),
         Command::Mcp => {
             // Self-heal installed skill snapshots before serving, so a binary
             // upgrade propagates the skill on the next agent session without a
@@ -1107,6 +1147,121 @@ fn cmd_skill(cmd: &SkillCmd) -> Result<Output> {
     }
 }
 
+fn cmd_self(cmd: &SelfCmd) -> Result<Output> {
+    match cmd {
+        SelfCmd::Install(a) => cmd_self_install(a),
+        SelfCmd::Update(a) => cmd_self_update(a),
+    }
+}
+
+fn cmd_self_install(a: &SelfInstallArgs) -> Result<Output> {
+    // When invoked *through* the installed symlink, current_exe() can return the
+    // symlink itself; canonicalize resolves it to the real build artifact so
+    // --link never points a link at itself.
+    let raw_exe = std::env::current_exe().map_err(HavenError::Io)?;
+    let source = std::fs::canonicalize(&raw_exe).map_err(HavenError::Io)?;
+
+    let dir = config::resolve_install_dir(a.dir.as_deref())?;
+    let dest = dir.join("haven");
+
+    // Already resolves to this exact build → nothing to do (idempotent re-run).
+    if std::fs::canonicalize(&dest).ok().as_deref() == Some(source.as_path()) {
+        return Ok(Output::Json(serde_json::json!({
+            "installed": dest.display().to_string(),
+            "source": source.display().to_string(),
+            "mode": if a.link { "link" } else { "copy" },
+            "noop": true,
+            "on_path": config::dir_on_path(&dir),
+            "next": "already current",
+        })));
+    }
+
+    // A copy must not silently clobber a different existing binary.
+    if !a.link && !a.force && std::fs::symlink_metadata(&dest).is_ok() {
+        return Err(HavenError::Invalid(format!(
+            "{} already exists — pass --force to overwrite (or --link)",
+            dest.display()
+        )));
+    }
+
+    let mode = if a.link {
+        config::install_link(&source, &dest)?;
+        "link"
+    } else {
+        config::install_copy(&source, &dest)?;
+        "copy"
+    };
+
+    // Best-effort: make the on-disk skill match this freshly built binary.
+    let refreshed: Vec<String> = config::refresh_stale_skill_snapshots()
+        .iter()
+        .map(|p| p.display().to_string())
+        .collect();
+
+    Ok(Output::Json(serde_json::json!({
+        "installed": dest.display().to_string(),
+        "source": source.display().to_string(),
+        "mode": mode,
+        "skill_refreshed": refreshed,
+        "on_path": config::dir_on_path(&dir),
+        "next": "run `haven doctor` to verify wiring",
+    })))
+}
+
+fn cmd_self_update(a: &SelfUpdateArgs) -> Result<Output> {
+    let method = config::detect_install_method()?;
+    let advice = config::update_advice(&method);
+    let current = env!("CARGO_PKG_VERSION");
+
+    // The only network path in the CLI; best-effort and offline-safe.
+    let latest = config::latest_release_version();
+    let up_to_date = latest
+        .as_deref()
+        .map(|l| l.trim_start_matches('v') == current);
+
+    if a.check {
+        return Ok(Output::Json(serde_json::json!({
+            "method": method.tag(),
+            "current": current,
+            "latest": latest,
+            "up_to_date": up_to_date,
+            "advice": advice,
+        })));
+    }
+
+    let mut actions: Vec<String> = Vec::new();
+    match &method {
+        config::InstallMethod::Homebrew if a.run => {
+            let status = std::process::Command::new("brew")
+                .args(["upgrade", "nibbletech-labs/tap/haven"])
+                .status();
+            actions.push(match status {
+                Ok(s) if s.success() => {
+                    "ran `brew upgrade` — run `haven doctor` with the new binary to finish reconcile"
+                        .into()
+                }
+                Ok(s) => format!("`brew upgrade` exited with status {s}"),
+                Err(e) => format!("could not run brew ({e}); upgrade manually"),
+            });
+        }
+        config::InstallMethod::DevSymlink { .. } => {
+            for d in config::refresh_stale_skill_snapshots() {
+                actions.push(format!("refreshed skill snapshot at {}", d.display()));
+            }
+        }
+        _ => {}
+    }
+
+    Ok(Output::Json(serde_json::json!({
+        "method": method.tag(),
+        "current": current,
+        "latest": latest,
+        "up_to_date": up_to_date,
+        "advice": advice,
+        "actions": actions,
+    })))
+}
+
 fn cmd_link(project: Option<&str>, name: &std::path::Path) -> Result<Output> {
     let s = config::open_store()?;
     let linked = config::link_workspace(&s, project, name)?;
@@ -1153,12 +1308,12 @@ fn cmd_doctor() -> Result<Output> {
     let paths = config::resolve()?;
     let mut checks = Vec::new();
 
-    // 1. Database schema — the store opened (migrations ran); confirm the stamp.
+    // 1. Database — the store opened (migrations ran); confirm the seed stamp.
     match s.meta_get("schema_version")? {
-        Some(v) => checks.push(check(
+        Some(_) => checks.push(check(
             "database",
             "ok",
-            format!("schema v{v} at {}", paths.db.display()),
+            format!("store at {}", paths.db.display()),
         )),
         None => checks.push(check(
             "database",
@@ -1166,6 +1321,17 @@ fn cmd_doctor() -> Result<Output> {
             "schema_version missing — run `haven setup`".into(),
         )),
     }
+
+    // 1b. Schema version: the store's applied version vs what this binary
+    // supports. A newer store would have failed open_store() with StoreTooNew,
+    // so reaching here means they match.
+    let store_v = s.user_version()?;
+    let binary_v = haven_core::db::latest_schema_migration();
+    checks.push(check(
+        "schema",
+        "ok",
+        format!("store schema v{store_v}, binary supports v{binary_v}"),
+    ));
 
     // 2–6. Install wiring: MCP stanzas, skill snapshots, AGENTS.md, binary on PATH.
     match config::install_check() {

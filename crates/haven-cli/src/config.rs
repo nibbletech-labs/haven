@@ -594,3 +594,251 @@ fn find_git_dir(mut dir: PathBuf) -> Option<PathBuf> {
         }
     }
 }
+
+// ---- self install / self update ------------------------------------------
+
+/// Resolve the directory to install the `haven` binary into, mirroring
+/// `packaging/install.sh`: an explicit `--dir`, else the first writable of
+/// `$HAVEN_BIN_DIR`, `/usr/local/bin`, `~/.local/bin`.
+pub fn resolve_install_dir(explicit: Option<&Path>) -> Result<PathBuf> {
+    if let Some(dir) = explicit {
+        std::fs::create_dir_all(dir)?;
+        if !is_writable_dir(dir) {
+            return Err(HavenError::Invalid(format!(
+                "{} is not writable",
+                dir.display()
+            )));
+        }
+        return Ok(dir.to_path_buf());
+    }
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Some(d) = std::env::var_os("HAVEN_BIN_DIR") {
+        candidates.push(PathBuf::from(d));
+    }
+    candidates.push(PathBuf::from("/usr/local/bin"));
+    if let Some(b) = directories::BaseDirs::new() {
+        candidates.push(b.home_dir().join(".local/bin"));
+    }
+    for dir in candidates {
+        if std::fs::create_dir_all(&dir).is_ok() && is_writable_dir(&dir) {
+            return Ok(dir);
+        }
+    }
+    Err(HavenError::Invalid(
+        "no writable install dir found — set $HAVEN_BIN_DIR and re-run".into(),
+    ))
+}
+
+/// True if a file can actually be created (and removed) in `dir` — more honest
+/// than inspecting permission bits.
+fn is_writable_dir(dir: &Path) -> bool {
+    let probe = dir.join(".haven-write-probe");
+    match std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .open(&probe)
+    {
+        Ok(_) => {
+            let _ = std::fs::remove_file(&probe);
+            true
+        }
+        Err(_) => false,
+    }
+}
+
+fn temp_sibling(dest: &Path) -> PathBuf {
+    let name = dest.file_name().and_then(|s| s.to_str()).unwrap_or("haven");
+    dest.with_file_name(format!(".{name}.haven-tmp-{}", std::process::id()))
+}
+
+/// Whether `dir` is one of the entries on `$PATH`.
+pub fn dir_on_path(dir: &Path) -> bool {
+    std::env::var_os("PATH")
+        .map(|p| std::env::split_paths(&p).any(|d| d == dir))
+        .unwrap_or(false)
+}
+
+/// Atomically point `dest` at `source` with a symlink (Unix). The link is built
+/// under a temp name in the same directory then renamed over `dest`, so a
+/// concurrent PATH lookup sees the old or the new target, never a missing file
+/// (`haven` is on the execution hot path). A running MCP server keeps executing
+/// its old inode until it exits; the next launch resolves the new link.
+#[cfg(unix)]
+pub fn install_link(source: &Path, dest: &Path) -> Result<()> {
+    use std::os::unix::fs::symlink;
+    let tmp = temp_sibling(dest);
+    let _ = std::fs::remove_file(&tmp);
+    symlink(source, &tmp)?;
+    std::fs::rename(&tmp, dest)?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+pub fn install_link(source: &Path, dest: &Path) -> Result<()> {
+    // No reliable unprivileged symlink on Windows — copy instead.
+    eprintln!("haven: --link is unsupported on this platform; copying instead");
+    install_copy(source, dest)
+}
+
+/// Copy `source` to `dest` as a 0755 executable, atomically (temp sibling, set
+/// mode, rename over `dest`) so `dest` is never a torn binary.
+pub fn install_copy(source: &Path, dest: &Path) -> Result<()> {
+    let tmp = temp_sibling(dest);
+    let _ = std::fs::remove_file(&tmp);
+    std::fs::copy(source, &tmp)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755))?;
+    }
+    std::fs::rename(&tmp, dest)?;
+    Ok(())
+}
+
+/// How this running `haven` was installed — drives the `self update` advice.
+#[derive(Debug, Clone)]
+pub enum InstallMethod {
+    /// Invoked through a symlink (the `self install --link` dev path).
+    DevSymlink { target: PathBuf },
+    /// A Homebrew-installed binary (path under a Cellar).
+    Homebrew,
+    /// A copied binary under `~/.local/bin` / `/usr/local/bin` (install.sh).
+    InstallSh,
+    /// Anything else.
+    Unknown { exe: PathBuf },
+}
+
+impl InstallMethod {
+    pub fn tag(&self) -> &'static str {
+        match self {
+            InstallMethod::DevSymlink { .. } => "dev-symlink",
+            InstallMethod::Homebrew => "homebrew",
+            InstallMethod::InstallSh => "install.sh",
+            InstallMethod::Unknown { .. } => "unknown",
+        }
+    }
+}
+
+pub fn detect_install_method() -> Result<InstallMethod> {
+    let raw = std::env::current_exe().map_err(HavenError::Io)?;
+    // Symlink check first, on the *pre*-canonicalize path — canonicalize would
+    // erase the very link we're trying to detect.
+    if std::fs::symlink_metadata(&raw)
+        .map(|m| m.file_type().is_symlink())
+        .unwrap_or(false)
+    {
+        let target = std::fs::canonicalize(&raw).unwrap_or_else(|_| raw.clone());
+        return Ok(InstallMethod::DevSymlink { target });
+    }
+    let exe = std::fs::canonicalize(&raw).unwrap_or(raw);
+    if brew_prefix_containing(&exe).is_some() {
+        return Ok(InstallMethod::Homebrew);
+    }
+    if under_known_copy_dir(&exe) {
+        return Ok(InstallMethod::InstallSh);
+    }
+    Ok(InstallMethod::Unknown { exe })
+}
+
+/// Detect a Homebrew install by path shape — every prefix (`/opt/homebrew`,
+/// Intel `/usr/local`, Linuxbrew) has a `/Cellar/` segment. Avoids shelling out
+/// to `brew`, which may not be on PATH in an agent/MCP environment.
+fn brew_prefix_containing(exe: &Path) -> Option<PathBuf> {
+    let mut acc = PathBuf::new();
+    for comp in exe.components() {
+        if comp.as_os_str() == "Cellar" {
+            return Some(acc);
+        }
+        acc.push(comp);
+    }
+    std::env::var_os("HOMEBREW_PREFIX")
+        .map(PathBuf::from)
+        .filter(|p| exe.starts_with(p))
+}
+
+fn under_known_copy_dir(exe: &Path) -> bool {
+    if exe.starts_with("/usr/local/bin") {
+        return true;
+    }
+    if let Some(b) = directories::BaseDirs::new() {
+        if exe.starts_with(b.home_dir().join(".local/bin")) {
+            return true;
+        }
+    }
+    std::env::var_os("HAVEN_BIN_DIR")
+        .map(|d| exe.starts_with(PathBuf::from(d)))
+        .unwrap_or(false)
+}
+
+/// Per-method guidance string for `self update`.
+pub fn update_advice(method: &InstallMethod) -> String {
+    match method {
+        InstallMethod::DevSymlink { target, .. } => format!(
+            "Dev install (symlink → {}). Rebuild to update: `cargo build --release` — \
+             the symlink picks it up. Skill snapshots are re-synced for you.",
+            target.display()
+        ),
+        InstallMethod::Homebrew => "Homebrew install. Update with: \
+             `brew upgrade nibbletech-labs/tap/haven` (pass --run to have haven run it)."
+            .into(),
+        InstallMethod::InstallSh => "Installed via install.sh. Update by re-running: \
+             `curl -fsSL https://raw.githubusercontent.com/nibbletech-labs/haven/main/packaging/install.sh | sh`."
+            .into(),
+        InstallMethod::Unknown { exe } => format!(
+            "Couldn't determine how `haven` was installed ({}). Reinstall with your \
+             original method, or use install.sh.",
+            exe.display()
+        ),
+    }
+}
+
+/// Best-effort: ask GitHub for the latest published version. Returns `None` on
+/// any failure (offline, rate-limit, no releases yet) — never an error, so
+/// `self update` works fully offline. The only network path in the CLI.
+pub fn latest_release_version() -> Option<String> {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .ok()?;
+    rt.block_on(fetch_latest_release_version())
+}
+
+async fn fetch_latest_release_version() -> Option<String> {
+    let client = reqwest::Client::builder()
+        .user_agent(concat!("haven/", env!("CARGO_PKG_VERSION")))
+        .timeout(std::time::Duration::from_secs(4))
+        .build()
+        .ok()?;
+    // Prefer the latest release; fall back to the newest tag when there are no
+    // releases yet (the v0.1.0 bootstrap case — best-effort, not semver-sorted).
+    if let Some(tag) = github_json(
+        &client,
+        "https://api.github.com/repos/nibbletech-labs/haven/releases/latest",
+    )
+    .await
+    .and_then(|v| v.get("tag_name").and_then(|t| t.as_str()).map(String::from))
+    {
+        return Some(tag);
+    }
+    github_json(
+        &client,
+        "https://api.github.com/repos/nibbletech-labs/haven/tags",
+    )
+    .await
+    .and_then(|v| v.as_array().and_then(|a| a.first()).cloned())
+    .and_then(|v| v.get("name").and_then(|t| t.as_str()).map(String::from))
+}
+
+async fn github_json(client: &reqwest::Client, url: &str) -> Option<serde_json::Value> {
+    let resp = client
+        .get(url)
+        .header("Accept", "application/vnd.github+json")
+        .send()
+        .await
+        .ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    resp.json::<serde_json::Value>().await.ok()
+}

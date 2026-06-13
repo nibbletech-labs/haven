@@ -166,6 +166,21 @@ fn doctor_reports_install_health() {
     let before = h.json(&["doctor"]);
     assert_eq!(before["ok"], false);
     assert_eq!(status_of(&before, "database"), "ok");
+
+    // Schema line: store's applied version vs what this binary supports (offline).
+    assert_eq!(status_of(&before, "schema"), "ok");
+    let schema_detail = before["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["name"] == "schema")
+        .unwrap()["detail"]
+        .as_str()
+        .unwrap();
+    assert!(
+        schema_detail.contains("binary supports v3"),
+        "schema detail was: {schema_detail}"
+    );
     assert_eq!(status_of(&before, "claude_mcp"), "warn");
     assert_eq!(status_of(&before, "claude_skill"), "warn");
     assert_eq!(status_of(&before, "codex_mcp"), "warn");
@@ -573,4 +588,103 @@ fn import_creates_a_wired_batch_in_one_transaction() {
     std::fs::write(&file, "not json").unwrap();
     let err = h.fail(&["import", file.to_str().unwrap()]);
     assert_eq!(err["error"]["code"], "invalid");
+}
+
+// ---- self install / self update ------------------------------------------
+
+#[cfg(unix)]
+#[test]
+fn self_install_link_creates_symlink_to_build() {
+    let h = Haven::new();
+    let dir = TempDir::new().unwrap();
+    let dir_s = dir.path().to_str().unwrap();
+
+    let out = h.json(&["self", "install", "--link", "--dir", dir_s]);
+    assert_eq!(out["mode"], "link");
+
+    let dest = dir.path().join("haven");
+    let meta = std::fs::symlink_metadata(&dest).unwrap();
+    assert!(
+        meta.file_type().is_symlink(),
+        "expected a symlink at {dest:?}"
+    );
+
+    // The link resolves to the very binary under test (canonicalize the footgun).
+    let target = std::fs::canonicalize(&dest).unwrap();
+    let bin = std::fs::canonicalize(assert_cmd::cargo::cargo_bin("haven")).unwrap();
+    assert_eq!(target, bin);
+}
+
+#[cfg(unix)]
+#[test]
+fn self_install_link_is_idempotent_noop() {
+    let h = Haven::new();
+    let dir = TempDir::new().unwrap();
+    let dir_s = dir.path().to_str().unwrap();
+
+    h.json(&["self", "install", "--link", "--dir", dir_s]);
+    // Re-running through the same dir already resolves to this build → no-op,
+    // not a self-referential link (the canonicalize guard).
+    let again = h.json(&["self", "install", "--link", "--dir", dir_s]);
+    assert_eq!(again["noop"], true);
+}
+
+#[cfg(unix)]
+#[test]
+fn self_install_copy_writes_executable() {
+    use std::os::unix::fs::PermissionsExt;
+    let h = Haven::new();
+    let dir = TempDir::new().unwrap();
+    let dir_s = dir.path().to_str().unwrap();
+
+    let out = h.json(&["self", "install", "--dir", dir_s]);
+    assert_eq!(out["mode"], "copy");
+
+    let dest = dir.path().join("haven");
+    let meta = std::fs::symlink_metadata(&dest).unwrap();
+    assert!(
+        !meta.file_type().is_symlink(),
+        "copy should be a regular file"
+    );
+    assert_eq!(meta.permissions().mode() & 0o777, 0o755);
+}
+
+#[test]
+fn self_install_copy_needs_force_to_clobber() {
+    let h = Haven::new();
+    let dir = TempDir::new().unwrap();
+    let dir_s = dir.path().to_str().unwrap();
+
+    h.json(&["self", "install", "--dir", dir_s]);
+    // A second copy over a different existing binary is refused without --force.
+    let err = h.fail(&["self", "install", "--dir", dir_s]);
+    assert_eq!(err["error"]["code"], "invalid");
+    // --force overwrites.
+    h.ok(&["self", "install", "--dir", dir_s, "--force"]);
+}
+
+#[cfg(unix)]
+#[test]
+fn self_install_non_writable_dir_errors() {
+    use std::os::unix::fs::PermissionsExt;
+    let h = Haven::new();
+    let dir = TempDir::new().unwrap();
+    std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o555)).unwrap();
+    let dir_s = dir.path().to_str().unwrap();
+
+    let err = h.fail(&["self", "install", "--link", "--dir", dir_s]);
+    assert_eq!(err["error"]["code"], "invalid");
+
+    // Restore so the TempDir can clean itself up.
+    std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+#[test]
+fn self_update_check_is_offline_safe() {
+    let h = Haven::new();
+    // No store, possibly no network: must still succeed and report the running
+    // version. `latest` may be null (offline / repo not published yet).
+    let out = h.json(&["self", "update", "--check"]);
+    assert_eq!(out["current"], env!("CARGO_PKG_VERSION"));
+    assert!(out["method"].is_string());
 }
