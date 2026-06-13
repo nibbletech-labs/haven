@@ -16,17 +16,20 @@ use crate::error::{HavenError, Result};
 const MIGRATION_001: &str = include_str!("../../../migrations/001_init.sql");
 const MIGRATION_002: &str = include_str!("../../../migrations/002_acceptance.sql");
 const MIGRATION_003: &str = include_str!("../../../migrations/003_anchor_type.sql");
-pub const LATEST_SCHEMA_MIGRATION: i64 = 3;
+
+/// The ordered migration SQL, embedded at compile time. Adding a migration here
+/// is the only edit needed: the supported schema version is this list's length,
+/// so it can never drift from `migrations()` (no hand-bumped constant to forget).
+const MIGRATION_SQL: &[&str] = &[MIGRATION_001, MIGRATION_002, MIGRATION_003];
+
+/// Highest `user_version` this binary can open, derived from `MIGRATION_SQL`.
+pub fn latest_schema_migration() -> i64 {
+    MIGRATION_SQL.len() as i64
+}
 
 fn migrations() -> &'static Migrations<'static> {
     static MIGRATIONS: OnceLock<Migrations<'static>> = OnceLock::new();
-    MIGRATIONS.get_or_init(|| {
-        Migrations::new(vec![
-            M::up(MIGRATION_001),
-            M::up(MIGRATION_002),
-            M::up(MIGRATION_003),
-        ])
-    })
+    MIGRATIONS.get_or_init(|| Migrations::new(MIGRATION_SQL.iter().copied().map(M::up).collect()))
 }
 
 /// Open (creating if needed) the SQLite database at `path`, apply connection
@@ -53,13 +56,13 @@ pub fn open_in_memory() -> Result<Connection> {
 
 fn ensure_supported_schema_version(conn: &Connection, path: Option<&Path>) -> Result<()> {
     let db_version: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
-    if db_version > LATEST_SCHEMA_MIGRATION {
+    if db_version > latest_schema_migration() {
         return Err(HavenError::StoreTooNew {
             path: path
                 .map(|p| p.display().to_string())
                 .unwrap_or_else(|| "<memory>".into()),
             db_version,
-            supported_version: LATEST_SCHEMA_MIGRATION,
+            supported_version: latest_schema_migration(),
         });
     }
     Ok(())
@@ -99,12 +102,22 @@ mod tests {
     }
 
     #[test]
+    fn supported_version_matches_migration_count() {
+        // The supported schema version is derived from the migration list, so it
+        // cannot silently desync. The literal below is a deliberate tripwire:
+        // adding a migration forces a one-line edit here, a moment to confirm
+        // intent (and to bump the release/version if needed).
+        assert_eq!(latest_schema_migration(), MIGRATION_SQL.len() as i64);
+        assert_eq!(latest_schema_migration(), 3);
+    }
+
+    #[test]
     fn schema_applies_and_seeds_version() {
         let conn = open_in_memory().unwrap();
         let user_version: i64 = conn
             .pragma_query_value(None, "user_version", |r| r.get(0))
             .unwrap();
-        assert_eq!(user_version, LATEST_SCHEMA_MIGRATION);
+        assert_eq!(user_version, latest_schema_migration());
         let v: String = conn
             .query_row(
                 "SELECT value FROM meta WHERE key = 'schema_version'",
@@ -121,7 +134,7 @@ mod tests {
         let path = dir.path().join("haven.db");
         {
             let conn = Connection::open(&path).unwrap();
-            conn.pragma_update(None, "user_version", LATEST_SCHEMA_MIGRATION + 1)
+            conn.pragma_update(None, "user_version", latest_schema_migration() + 1)
                 .unwrap();
         }
 
@@ -133,8 +146,8 @@ mod tests {
                 supported_version,
             } => {
                 assert_eq!(err_path, path.display().to_string());
-                assert_eq!(db_version, LATEST_SCHEMA_MIGRATION + 1);
-                assert_eq!(supported_version, LATEST_SCHEMA_MIGRATION);
+                assert_eq!(db_version, latest_schema_migration() + 1);
+                assert_eq!(supported_version, latest_schema_migration());
             }
             other => panic!("expected StoreTooNew, got {other:?}"),
         }
