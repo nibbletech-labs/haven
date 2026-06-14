@@ -121,7 +121,7 @@ haven sync [status] [--watch]
 | `haven_lineage` | **`ref`**, `direction?, depth?` |
 | `haven_resolve_live` | **`ref`** — follow a stale (superseded/archived) ref to its live descendant(s); compact items |
 | `haven_search` | **`query`**, `limit?` |
-| `haven_graph` | `lineage?` — the whole project graph (all nodes + `{kind,from,to}` edges) in one read |
+| `haven_graph` | `lineage?, all?` — the whole project graph (compact nodes + `{kind,from,to}` edges) in one read; live nodes only unless `all` |
 | `haven_docs` | `project?` — live project-doc anchors and their artifacts |
 | `haven_get_artifact` | **`ref`**, `role?, path?` |
 | `haven_add_artifact` | **`ref`**, **`role`**, `kind?, content?, name?, path?, uri?, title?, from?, to?, by?` |
@@ -147,8 +147,8 @@ To keep context lean, item reads come in two shapes, and internal sync fields
   Returned by `haven_get_item` and `haven_update_item`.
 
 So a list/next tells you *what* exists; reach for `haven_get_item` when you need the
-prose or relationships of a specific item. (`haven_graph`/`haven_docs` still return
-full nodes — they're whole-graph / doc-anchor reads.)
+prose or relationships of a specific item. `haven_graph` nodes are compact too
+(live-only unless `all`); only `haven_docs` returns full anchor nodes (with artifacts).
 
 ## CLI → MCP mapping
 

@@ -194,7 +194,7 @@ haven_add_edge     {"project":"haven","kind":"dependency","from":"HV-2","to":"HV
 haven_resolve_live {"project":"haven","ref":"HV-9"}   // old ref → live descendant
 haven_docs         {"project":"haven"}                // anchor docs + artifacts
 // Whole graph in one read — to render it, or reason over all dependencies at once.
-haven_graph        {"project":"haven"}                // {nodes[], edges[{kind,from,to}]}
+haven_graph        {"project":"haven"}                // compact, live-only nodes + edges[{kind,from,to}]; all:true for dead nodes
 ```
 
 **Reasoning over the whole backlog** (reorganising, fixing dependencies, rendering

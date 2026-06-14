@@ -499,8 +499,35 @@ fn call_tool(store: &Store, name: &str, a: &Value) -> Result<Value> {
         }
         // The whole project graph (all nodes + edges) in one read — for rendering
         // the graph or reasoning over the entire dependency structure at once.
+        // Nodes ride as compact items (the bulk of the payload); live-only by
+        // default (drop superseded/archived nodes + any edge that would dangle
+        // onto one), with `all:true` to include the dead nodes.
         "haven_graph" => {
-            to_value(store.project_graph(project, opt_bool(a, "lineage").unwrap_or(false))?)
+            let g = store.project_graph(project, opt_bool(a, "lineage").unwrap_or(false))?;
+            let all = opt_bool(a, "all").unwrap_or(false);
+            let keep: std::collections::HashSet<&str> = g
+                .nodes
+                .iter()
+                .filter(|n| all || !matches!(n.status, Status::Superseded | Status::Archived))
+                .map(|n| n.reference.as_str())
+                .collect();
+            let nodes: Vec<McpItem> = g
+                .nodes
+                .iter()
+                .filter(|n| keep.contains(n.reference.as_str()))
+                .map(McpItem::compact)
+                .collect();
+            let edges: Vec<_> = g
+                .edges
+                .iter()
+                .filter(|e| keep.contains(e.from.as_str()) && keep.contains(e.to.as_str()))
+                .collect();
+            let mut out = json!({ "project": g.project, "nodes": nodes, "edges": edges });
+            // Preserve the original contract: lineage only when non-empty.
+            if !g.lineage.is_empty() {
+                out["lineage"] = to_value(&g.lineage)?;
+            }
+            Ok(out)
         }
         "haven_docs" => to_value(store.docs(project)?),
         "haven_get_artifact" => {
@@ -727,8 +754,8 @@ fn tools_list() -> Value {
           "inputSchema": obj(json!({"ref":{"type":"string"},"project":{"type":"string"}}), json!(["ref"])) },
         { "name": "haven_search", "description": "Full-text search over item title/body.",
           "inputSchema": obj(json!({"query":{"type":"string"},"project":{"type":"string"},"limit":{"type":"integer"}}), json!(["query"])) },
-        { "name": "haven_graph", "description": "The whole project work-graph in one read: every node plus a flat edge list ({kind, from, to}, same shape as haven_add_edge), and optionally lineage links. Use to render the graph or reason over the entire dependency structure at once, instead of N+1 per-node fetches. Nodes include superseded/archived — filter client-side.",
-          "inputSchema": obj(json!({"project":{"type":"string"},"lineage":{"type":"boolean"}}), json!([])) },
+        { "name": "haven_graph", "description": "The whole project work-graph in one read: every node plus a flat edge list ({kind, from, to}, same shape as haven_add_edge), and optionally lineage links. Use to render the graph or reason over the entire dependency structure at once, instead of N+1 per-node fetches. Nodes are compact (identity + axes; fetch prose for one via haven_get_item) and live-only by default — pass `all:true` to include superseded/archived nodes (edges onto dropped nodes are omitted).",
+          "inputSchema": obj(json!({"project":{"type":"string"},"lineage":{"type":"boolean"},"all":{"type":"boolean"}}), json!([])) },
         { "name": "haven_docs", "description": "List live project living-doc anchors and their artifacts. Use this instead of hard-coding a docs ref.",
           "inputSchema": obj(json!({"project":{"type":"string"}}), json!([])) },
         { "name": "haven_get_artifact", "description": "Read an artifact's content (local or lazy-pulled).",
@@ -1356,5 +1383,50 @@ mod tests {
         assert_eq!(unblocked[0]["ref"], "HV-2");
         assert!(unblocked[0].get("sync_state").is_none());
         assert!(unblocked[0].get("body").is_none());
+    }
+
+    #[test]
+    fn graph_is_live_only_compact_with_all_opt_in() {
+        let s = store();
+        let out = session(
+            &s,
+            &[
+                json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{
+                    "name":"haven_add_item","arguments":{"title":"Keep","body":"prose"}
+                }}),
+                json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{
+                    "name":"haven_add_item","arguments":{"title":"Dead"}
+                }}),
+                // HV-1 depends on HV-2; archiving HV-2 should drop both it and the edge.
+                json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{
+                    "name":"haven_add_edge","arguments":{"kind":"dependency","from":"HV-1","to":"HV-2"}
+                }}),
+                json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{
+                    "name":"haven_archive","arguments":{"ref":"HV-2","rationale":"dead"}
+                }}),
+                json!({"jsonrpc":"2.0","id":5,"method":"tools/call","params":{
+                    "name":"haven_graph","arguments":{}
+                }}),
+                json!({"jsonrpc":"2.0","id":6,"method":"tools/call","params":{
+                    "name":"haven_graph","arguments":{"all":true}
+                }}),
+            ],
+        );
+        // Default: archived HV-2 and the now-dangling edge are gone; node is compact.
+        let live = tool_payload(&out[4]);
+        let live_refs: Vec<&str> = live["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|n| n["ref"].as_str().unwrap())
+            .collect();
+        assert_eq!(live_refs, ["HV-1"]);
+        assert!(live["edges"].as_array().unwrap().is_empty());
+        assert!(live["nodes"][0].get("body").is_none());
+        assert!(live["nodes"][0].get("sync_state").is_none());
+        // all:true: the dead node and its edge come back.
+        let full = tool_payload(&out[5]);
+        assert_eq!(full["nodes"].as_array().unwrap().len(), 2);
+        assert_eq!(full["edges"].as_array().unwrap().len(), 1);
     }
 }
