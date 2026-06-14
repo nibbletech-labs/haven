@@ -10,9 +10,9 @@
 use std::io::{self, BufRead, Write};
 
 use haven_core::{
-    ArtifactKind, ArtifactRole, CompleteInput, EdgeKind, HandoffInput, HavenError, Include,
-    ItemFilter, ItemUpdate, LineageDirection, NewArtifact, NewItem, NodeType, OwnerKind, Result,
-    Status, Store, WaitState, WaitUpdate,
+    Artifact, ArtifactKind, ArtifactRole, CompleteInput, EdgeKind, Edges, HandoffInput, HavenError,
+    Include, Item, ItemFilter, ItemUpdate, LineageDirection, LineageEvent, NewArtifact, NewItem,
+    NodeType, OwnerKind, Result, Status, Store, WaitState, WaitUpdate,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -44,6 +44,113 @@ struct Response {
 struct RpcError {
     code: i64,
     message: String,
+}
+
+/// Default page size for `haven_list_items` when the caller passes no `limit`.
+/// `total` is always returned, so a truncated page is never silent.
+const DEFAULT_LIST_LIMIT: i64 = 100;
+
+/// The MCP projection of an [`Item`] (SPEC §3). Deliberately leaner than the
+/// `Item` the CLI serializes: the machine-only fields (`public_id`, `sync_state`,
+/// `revision`, `sort_key`) are *always* dropped — an agent reasons in `ref`s, not
+/// storage internals — and the `compact` form (list/next/resolve) further omits
+/// the prose fields, timestamps and includes, which an agent pulls on demand via
+/// `haven_get_item`. Borrows from the source `Item`; the enums are `Copy`.
+#[derive(Serialize)]
+struct McpItem<'a> {
+    #[serde(rename = "ref")]
+    reference: &'a str,
+    title: &'a str,
+    #[serde(rename = "type")]
+    node_type: NodeType,
+    status: Status,
+    committed: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    priority: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    owner_kind: Option<OwnerKind>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    wait_state: Option<WaitState>,
+
+    // Full-only fields — all `None` in the compact form.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    body: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    done_looks_like: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    why: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    assignee: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    created_at: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    updated_at: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    archived_at: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    metadata: Option<&'a Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    edges: Option<&'a Edges>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    artifacts: Option<&'a [Artifact]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    lineage: Option<&'a [LineageEvent]>,
+}
+
+impl<'a> McpItem<'a> {
+    /// Navigation view: identity + axes only. For list/next/resolve.
+    fn compact(item: &'a Item) -> Self {
+        McpItem {
+            reference: &item.reference,
+            title: &item.title,
+            node_type: item.node_type,
+            status: item.status,
+            committed: item.committed,
+            priority: item.priority,
+            owner_kind: item.owner_kind,
+            wait_state: item.wait_state,
+            body: None,
+            done_looks_like: None,
+            why: None,
+            assignee: None,
+            created_at: None,
+            updated_at: None,
+            archived_at: None,
+            metadata: None,
+            edges: None,
+            artifacts: None,
+            lineage: None,
+        }
+    }
+
+    /// Detail view: prose, timestamps, non-empty metadata, and any includes that
+    /// were loaded. Still drops the machine-only sync/storage fields.
+    fn full(item: &'a Item) -> Self {
+        McpItem {
+            reference: &item.reference,
+            title: &item.title,
+            node_type: item.node_type,
+            status: item.status,
+            committed: item.committed,
+            priority: item.priority,
+            owner_kind: item.owner_kind,
+            wait_state: item.wait_state,
+            body: item.body.as_deref(),
+            done_looks_like: item.done_looks_like.as_deref(),
+            why: item.why.as_deref(),
+            assignee: item.assignee.as_deref(),
+            created_at: Some(&item.created_at),
+            updated_at: Some(&item.updated_at),
+            archived_at: item.archived_at.as_deref(),
+            metadata: match &item.metadata {
+                Value::Object(m) if !m.is_empty() => Some(&item.metadata),
+                _ => None,
+            },
+            edges: item.edges.as_ref(),
+            artifacts: item.artifacts.as_deref(),
+            lineage: item.lineage.as_deref(),
+        }
+    }
 }
 
 /// Serve over stdin/stdout (blocking until EOF).
@@ -210,20 +317,42 @@ fn call_tool(store: &Store, name: &str, a: &Value) -> Result<Value> {
                 wait: opt_str(a, "wait").map(WaitState::parse).transpose()?,
                 stale_days: opt_i64(a, "stale"),
             };
-            to_value(store.list_items(project, &filter)?)
+            // Compact, paginated view: prose + machine fields stripped, bounded by
+            // `limit` (default 100) from `offset`. `total` is the full match count,
+            // so a truncated page is never silent.
+            let all = store.list_items(project, &filter)?;
+            let total = all.len();
+            let offset = opt_i64(a, "offset").unwrap_or(0).max(0) as usize;
+            let limit = opt_i64(a, "limit").unwrap_or(DEFAULT_LIST_LIMIT).max(0) as usize;
+            let items: Vec<McpItem> = all
+                .iter()
+                .skip(offset)
+                .take(limit)
+                .map(McpItem::compact)
+                .collect();
+            Ok(json!({
+                "total": total,
+                "count": items.len(),
+                "offset": offset,
+                "items": items,
+            }))
         }
         "haven_get_item" => {
             let includes = str_array(a, "include")
                 .iter()
                 .map(|s| Include::parse(s))
                 .collect::<Result<Vec<_>>>()?;
-            to_value(store.get_item(project, req_str(a, "ref")?, &includes)?)
+            let item = store.get_item(project, req_str(a, "ref")?, &includes)?;
+            to_value(McpItem::full(&item))
         }
-        "haven_next" => to_value(store.next(
-            project,
-            opt_str(a, "owner").map(OwnerKind::parse).transpose()?,
-            opt_i64(a, "limit"),
-        )?),
+        "haven_next" => {
+            let items = store.next(
+                project,
+                opt_str(a, "owner").map(OwnerKind::parse).transpose()?,
+                opt_i64(a, "limit"),
+            )?;
+            to_value(items.iter().map(McpItem::compact).collect::<Vec<_>>())
+        }
         // Diagnose an empty queue. Returns the same dispatchable count `haven_next`
         // would, plus a per-reason breakdown — for the "next is empty" branch in
         // autonomous loops, so the agent diagnoses instead of inventing work.
@@ -311,7 +440,8 @@ fn call_tool(store: &Store, name: &str, a: &Value) -> Result<Value> {
                     opt_str(a, "actor"),
                 )?;
             }
-            to_value(store.get_item(project, reference, &[])?)
+            let item = store.get_item(project, reference, &[])?;
+            to_value(McpItem::full(&item))
         }
         "haven_add_edge" => {
             let kind = EdgeKind::parse(req_str(a, "kind")?)?;
@@ -360,7 +490,10 @@ fn call_tool(store: &Store, name: &str, a: &Value) -> Result<Value> {
         // Follow a possibly-stale ref forward through lineage to its live
         // descendant(s) — handoffs and docs often carry superseded refs. A live
         // item resolves to itself.
-        "haven_resolve_live" => to_value(store.resolve_live(project, req_str(a, "ref")?)?),
+        "haven_resolve_live" => {
+            let items = store.resolve_live(project, req_str(a, "ref")?)?;
+            to_value(items.iter().map(McpItem::compact).collect::<Vec<_>>())
+        }
         "haven_search" => {
             to_value(store.search(project, req_str(a, "query")?, opt_i64(a, "limit"))?)
         }
@@ -470,7 +603,15 @@ fn call_tool(store: &Store, name: &str, a: &Value) -> Result<Value> {
                     .transpose()?,
                 by: opt_str(a, "by"),
             };
-            to_value(store.complete_item(project, req_str(a, "ref")?, input)?)
+            // Re-emit so the (potentially long) `unblocked` list rides as compact
+            // items; the completed item itself stays full (minus machine fields).
+            let r = store.complete_item(project, req_str(a, "ref")?, input)?;
+            Ok(json!({
+                "item": McpItem::full(&r.item),
+                "artifact": r.artifact,
+                "unblocked": r.unblocked.iter().map(McpItem::compact).collect::<Vec<_>>(),
+                "warnings": r.warnings,
+            }))
         }
         other => Err(HavenError::Invalid(format!("unknown tool {other:?}"))),
     }
@@ -562,11 +703,11 @@ fn to_value<T: Serialize>(v: T) -> Result<Value> {
 fn tools_list() -> Value {
     let obj = |props: Value, required: Value| json!({"type": "object", "properties": props, "required": required});
     json!([
-        { "name": "haven_list_items", "description": "List items in a project under filters. `wait` (on_human|on_dependency|on_external) answers 'what's waiting on me / stuck on X'; `stale` (days) surfaces items untouched for N+ days.",
-          "inputSchema": obj(json!({"project":{"type":"string"},"status":{"type":"string"},"type":{"type":"string"},"owner":{"type":"string"},"committed":{"type":"boolean"},"icebox":{"type":"boolean"},"group":{"type":"string"},"wait":{"type":"string"},"stale":{"type":"integer"}}), json!([])) },
-        { "name": "haven_get_item", "description": "Fetch one item, optionally with edges/artifacts/lineage.",
+        { "name": "haven_list_items", "description": "List items in a project under filters. Returns a compact, paginated view {total, count, offset, items[]} — each item carries identity + axes only (ref, title, type, status, committed, owner, priority, wait); fetch prose/detail for one item with haven_get_item. Truncated to `limit` (default 100) from `offset`, in (priority, sort_key, created_at) order; `total` is the full match count. `wait` (on_human|on_dependency|on_external) answers 'what's waiting on me / stuck on X'; `stale` (days) surfaces items untouched for N+ days.",
+          "inputSchema": obj(json!({"project":{"type":"string"},"status":{"type":"string"},"type":{"type":"string"},"owner":{"type":"string"},"committed":{"type":"boolean"},"icebox":{"type":"boolean"},"group":{"type":"string"},"wait":{"type":"string"},"stale":{"type":"integer"},"limit":{"type":"integer"},"offset":{"type":"integer"}}), json!([])) },
+        { "name": "haven_get_item", "description": "Fetch one item in full (prose + requested edges/artifacts/lineage); internal sync fields (public_id/sync_state/revision) are omitted. The detail door for an item shown compactly by haven_list_items/haven_next.",
           "inputSchema": obj(json!({"ref":{"type":"string"},"project":{"type":"string"},"include":{"type":"array","items":{"type":"string"}}}), json!(["ref"])) },
-        { "name": "haven_next", "description": "Items ready to dispatch (committed, ready, unblocked).",
+        { "name": "haven_next", "description": "Items ready to dispatch (committed, ready, unblocked). Returns a compact view per item (identity + axes, no prose — fetch full via haven_get_item).",
           "inputSchema": obj(json!({"project":{"type":"string"},"owner":{"type":"string"},"limit":{"type":"integer"}}), json!([])) },
         { "name": "haven_next_explain", "description": "Diagnose why the dispatch queue is empty: the dispatchable count plus a per-reason breakdown (owner-mismatch, blocked-by-dependency, waiting, committed-not-ready, ready-but-uncommitted) and a hint. Call when haven_next returns nothing — diagnose, don't invent work.",
           "inputSchema": obj(json!({"project":{"type":"string"},"owner":{"type":"string"}}), json!([])) },
@@ -574,7 +715,7 @@ fn tools_list() -> Value {
           "inputSchema": obj(json!({"ref":{"type":"string"},"project":{"type":"string"},"before":{"type":"string"},"after":{"type":"string"}}), json!(["ref"])) },
         { "name": "haven_add_item", "description": "Create a work-graph item (node). `done_looks_like` is the acceptance statement output is verified against; `why` is a one-line provenance trace. Pass `if_absent: true` to return an existing live item with the same normalized title (marked `existing: true`) instead of creating a duplicate; responses may carry `similar` — up to 3 live items with overlapping titles (advisory).",
           "inputSchema": obj(json!({"title":{"type":"string"},"project":{"type":"string"},"type":{"type":"string"},"body":{"type":"string"},"done_looks_like":{"type":"string"},"why":{"type":"string"},"status":{"type":"string"},"priority":{"type":"integer"},"commit":{"type":"boolean"},"assign":{"type":"string"},"parent":{"type":"string"},"depends_on":{"type":"string"},"group":{"type":"string"},"if_absent":{"type":"boolean"}}), json!(["title"])) },
-        { "name": "haven_update_item", "description": "Update maturity/commitment/ownership of an item. Set `done_looks_like` (acceptance) when it becomes ready so dispatch can verify against it.",
+        { "name": "haven_update_item", "description": "Update maturity/commitment/ownership of an item. Set `done_looks_like` (acceptance) when it becomes ready so dispatch can verify against it. Returns the updated item in full (same shape as haven_get_item).",
           "inputSchema": obj(json!({"ref":{"type":"string"},"title":{"type":"string"},"body":{"type":"string"},"done_looks_like":{"type":"string"},"why":{"type":"string"},"status":{"type":"string"},"priority":{"type":"integer"},"type":{"type":"string"},"wait":{"type":"string"},"commit":{"type":"boolean"},"assign":{"type":"string"},"actor":{"type":"string"},"project":{"type":"string"}}), json!(["ref"])) },
         { "name": "haven_add_edge", "description": "Add/remove a decomposition|dependency|grouping edge.",
           "inputSchema": obj(json!({"kind":{"type":"string"},"from":{"type":"string"},"to":{"type":"string"},"remove":{"type":"boolean"},"project":{"type":"string"}}), json!(["kind","from","to"])) },
@@ -582,7 +723,7 @@ fn tools_list() -> Value {
           "inputSchema": obj(json!({"op":{"type":"string"},"refs":{"type":"array","items":{"type":"string"}},"into":{"type":"array","items":{"type":"string"}},"with":{"type":"string"},"title":{"type":"string"},"rationale":{"type":"string"},"project":{"type":"string"}}), json!(["op","refs"])) },
         { "name": "haven_lineage", "description": "Lineage graph around an item.",
           "inputSchema": obj(json!({"ref":{"type":"string"},"direction":{"type":"string"},"depth":{"type":"integer"},"project":{"type":"string"}}), json!(["ref"])) },
-        { "name": "haven_resolve_live", "description": "Resolve a possibly superseded/archived item ref forward through lineage to its live descendant(s); a live item resolves to itself. Use to follow stale refs found in handoffs or docs.",
+        { "name": "haven_resolve_live", "description": "Resolve a possibly superseded/archived item ref forward through lineage to its live descendant(s); a live item resolves to itself. Use to follow stale refs found in handoffs or docs. Returns compact items.",
           "inputSchema": obj(json!({"ref":{"type":"string"},"project":{"type":"string"}}), json!(["ref"])) },
         { "name": "haven_search", "description": "Full-text search over item title/body.",
           "inputSchema": obj(json!({"query":{"type":"string"},"project":{"type":"string"},"limit":{"type":"integer"}}), json!(["query"])) },
@@ -606,7 +747,7 @@ fn tools_list() -> Value {
           "inputSchema": obj(json!({"ref":{"type":"string"},"rationale":{"type":"string"},"by":{"type":"string"},"project":{"type":"string"}}), json!(["ref"])) },
         { "name": "haven_handoff", "description": "Atomic baton-pass (ai↔human): records a handoff note (stamped from/to), flips the owner, and sets wait/status in one call. To a human defaults to blocked + on_human; to ai clears the wait and unblocks. Prefer this over doing assign + update + add_artifact separately.",
           "inputSchema": obj(json!({"ref":{"type":"string"},"to":{"type":"string"},"from":{"type":"string"},"note":{"type":"string"},"status":{"type":"string"},"wait":{"type":"string"},"actor":{"type":"string"},"project":{"type":"string"}}), json!(["ref","to"])) },
-        { "name": "haven_complete_item", "description": "Mark an item done: record `evidence` as an artifact (default role delivery), set status=done, and return the items/gates this unblocked (newly dispatchable). Warns if no acceptance (done_looks_like) was set. The reliable 'I finished this' path — prefer over a bare status update.",
+        { "name": "haven_complete_item", "description": "Mark an item done: record `evidence` as an artifact (default role delivery), set status=done, and return the items/gates this unblocked (newly dispatchable, as compact items). Warns if no acceptance (done_looks_like) was set. The reliable 'I finished this' path — prefer over a bare status update.",
           "inputSchema": obj(json!({"ref":{"type":"string"},"evidence":{"type":"string"},"artifact_role":{"type":"string"},"by":{"type":"string"},"project":{"type":"string"}}), json!(["ref"])) },
     ])
 }
@@ -1049,5 +1190,171 @@ mod tests {
             .unwrap()
             .iter()
             .any(|x| x["ref"] == "HV-1"));
+    }
+
+    #[test]
+    fn list_items_compact_view_and_envelope() {
+        let s = store();
+        let out = session(
+            &s,
+            &[
+                json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{
+                    "name":"haven_add_item",
+                    "arguments":{"title":"With prose","type":"task","body":"a long body","why":"because","status":"ready","commit":true,"priority":1,"assign":"ai"}
+                }}),
+                json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{
+                    "name":"haven_add_item","arguments":{"title":"Second"}
+                }}),
+                json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{
+                    "name":"haven_list_items","arguments":{}
+                }}),
+            ],
+        );
+        let res = tool_payload(&out[2]);
+        // Self-describing envelope.
+        assert_eq!(res["total"], 2);
+        assert_eq!(res["count"], 2);
+        assert_eq!(res["offset"], 0);
+        let items = res["items"].as_array().unwrap();
+        assert_eq!(items.len(), 2);
+        // Priority 1 (non-null) sorts ahead of the unprioritised item.
+        let first = &items[0];
+        assert_eq!(first["ref"], "HV-1");
+        assert_eq!(first["title"], "With prose");
+        assert_eq!(first["type"], "task");
+        assert_eq!(first["status"], "ready");
+        assert_eq!(first["committed"], true);
+        assert_eq!(first["owner_kind"], "ai");
+        // Prose + machine-only fields dropped from the compact view.
+        for k in [
+            "body",
+            "why",
+            "done_looks_like",
+            "created_at",
+            "updated_at",
+            "public_id",
+            "sync_state",
+            "revision",
+            "sort_key",
+            "metadata",
+        ] {
+            assert!(first.get(k).is_none(), "compact item should omit {k}");
+        }
+    }
+
+    #[test]
+    fn list_items_limit_and_offset_paginate() {
+        let s = store();
+        let out = session(
+            &s,
+            &[
+                json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"haven_add_item","arguments":{"title":"A"}}}),
+                json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"haven_add_item","arguments":{"title":"B"}}}),
+                json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"haven_add_item","arguments":{"title":"C"}}}),
+                json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"haven_list_items","arguments":{"limit":2}}}),
+                json!({"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"haven_list_items","arguments":{"limit":2,"offset":2}}}),
+            ],
+        );
+        let page1 = tool_payload(&out[3]);
+        assert_eq!(page1["total"], 3);
+        assert_eq!(page1["count"], 2);
+        assert_eq!(page1["offset"], 0);
+        let page2 = tool_payload(&out[4]);
+        assert_eq!(page2["total"], 3);
+        assert_eq!(page2["count"], 1);
+        assert_eq!(page2["offset"], 2);
+        // Pages are disjoint and together cover all three (ordering is deterministic).
+        let refs = |v: &Value| {
+            v["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|i| i["ref"].as_str().unwrap().to_string())
+                .collect::<Vec<_>>()
+        };
+        let mut all = refs(&page1);
+        all.extend(refs(&page2));
+        all.sort();
+        all.dedup();
+        assert_eq!(all, ["HV-1", "HV-2", "HV-3"]);
+    }
+
+    #[test]
+    fn get_item_full_includes_prose_and_drops_machine_fields() {
+        let s = store();
+        let out = session(
+            &s,
+            &[
+                json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{
+                    "name":"haven_add_item",
+                    "arguments":{"title":"Detailed","body":"the body","why":"the why","done_looks_like":"the acceptance"}
+                }}),
+                json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{
+                    "name":"haven_get_item","arguments":{"ref":"HV-1"}
+                }}),
+            ],
+        );
+        let item = tool_payload(&out[1]);
+        // Prose present in the full view.
+        assert_eq!(item["body"], "the body");
+        assert_eq!(item["why"], "the why");
+        assert_eq!(item["done_looks_like"], "the acceptance");
+        assert!(item["created_at"].is_string());
+        // Machine-only fields dropped even in full.
+        for k in ["public_id", "sync_state", "revision", "sort_key"] {
+            assert!(
+                item.get(k).is_none(),
+                "full item should omit machine field {k}"
+            );
+        }
+    }
+
+    #[test]
+    fn next_returns_compact_items() {
+        let s = store();
+        let out = session(
+            &s,
+            &[
+                json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{
+                    "name":"haven_add_item",
+                    "arguments":{"title":"Dispatch","body":"prose","status":"ready","commit":true,"assign":"ai"}
+                }}),
+                json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{
+                    "name":"haven_next","arguments":{"owner":"ai"}
+                }}),
+            ],
+        );
+        let next = tool_payload(&out[1]);
+        let arr = next.as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["ref"], "HV-1");
+        assert!(arr[0].get("body").is_none());
+        assert!(arr[0].get("sync_state").is_none());
+    }
+
+    #[test]
+    fn complete_unblocked_is_compact() {
+        let s = store();
+        let out = session(
+            &s,
+            &[
+                json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{
+                    "name":"haven_add_item","arguments":{"title":"Build","done_looks_like":"tests pass"}
+                }}),
+                json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{
+                    "name":"haven_add_item","arguments":{"title":"Ship","depends_on":"HV-1"}
+                }}),
+                json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{
+                    "name":"haven_complete_item","arguments":{"ref":"HV-1","evidence":"done"}
+                }}),
+            ],
+        );
+        let res = tool_payload(&out[2]);
+        assert_eq!(res["item"]["status"], "done");
+        let unblocked = res["unblocked"].as_array().unwrap();
+        assert_eq!(unblocked.len(), 1);
+        assert_eq!(unblocked[0]["ref"], "HV-2");
+        assert!(unblocked[0].get("sync_state").is_none());
+        assert!(unblocked[0].get("body").is_none());
     }
 }

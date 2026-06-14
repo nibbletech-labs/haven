@@ -352,6 +352,40 @@ fn batch_commit_and_archive_take_multiple_refs() {
 }
 
 #[test]
+fn item_list_limit_and_offset_slice() {
+    let h = Haven::new();
+    h.ok(&["setup"]);
+    h.ok(&[
+        "project", "add", "--key", "haven", "--title", "Haven", "--prefix", "HV",
+    ]);
+    h.ok(&["project", "use", "haven"]);
+    h.json(&["item", "add", "A"]);
+    h.json(&["item", "add", "B"]);
+    h.json(&["item", "add", "C"]);
+
+    let refs = |v: &Value| {
+        v.as_array()
+            .unwrap()
+            .iter()
+            .map(|i| i["ref"].as_str().unwrap().to_string())
+            .collect::<Vec<_>>()
+    };
+
+    // No flags → all three (default is unbounded, unchanged).
+    assert_eq!(h.json(&["item", "list"]).as_array().unwrap().len(), 3);
+    // --limit bounds the result (parity with `next`).
+    assert_eq!(
+        refs(&h.json(&["item", "list", "--limit", "2"])),
+        ["HV-1", "HV-2"]
+    );
+    // --offset paginates.
+    assert_eq!(
+        refs(&h.json(&["item", "list", "--limit", "2", "--offset", "2"])),
+        ["HV-3"]
+    );
+}
+
+#[test]
 fn full_lifecycle() {
     let h = Haven::new();
     h.ok(&["setup"]);

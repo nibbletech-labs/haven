@@ -435,6 +435,12 @@ struct ItemListArgs {
     /// Only items untouched for at least N days (stale/forgotten work).
     #[arg(long)]
     stale: Option<i64>,
+    /// Return at most N items (parity with `next`); applied after ordering.
+    #[arg(long)]
+    limit: Option<usize>,
+    /// Skip the first N items (paginate with --limit).
+    #[arg(long)]
+    offset: Option<usize>,
 }
 
 #[derive(Args)]
@@ -1584,7 +1590,15 @@ fn cmd_item(project: Option<&str>, cmd: &ItemCmd) -> Result<Output> {
                 wait: opt_parse(&a.wait, WaitState::parse)?,
                 stale_days: a.stale,
             };
-            Ok(Output::Items(s.list_items(project, &filter)?))
+            // `--limit`/`--offset` slice the ordered result (parity with `next`).
+            // Default is unbounded so existing CLI/script output is unchanged.
+            let mut items = s.list_items(project, &filter)?;
+            if a.offset.is_some() || a.limit.is_some() {
+                let offset = a.offset.unwrap_or(0);
+                let limit = a.limit.unwrap_or(usize::MAX);
+                items = items.into_iter().skip(offset).take(limit).collect();
+            }
+            Ok(Output::Items(items))
         }
         ItemCmd::Get(a) => {
             let includes = a

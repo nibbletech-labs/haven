@@ -109,9 +109,9 @@ haven sync [status] [--watch]
 
 | Tool | Args |
 |---|---|
-| `haven_list_items` | `status?, type?, owner?, committed?, icebox?, group?, wait?, stale?` |
-| `haven_get_item` | **`ref`**, `include?: ["edges","artifacts","lineage"]` |
-| `haven_next` | `owner?, limit?` |
+| `haven_list_items` | `status?, type?, owner?, committed?, icebox?, group?, wait?, stale?, limit?, offset?` — returns a compact, paginated envelope `{total, count, offset, items[]}` (default `limit` 100) |
+| `haven_get_item` | **`ref`**, `include?: ["edges","artifacts","lineage"]` — the full item (prose + includes); the detail door |
+| `haven_next` | `owner?, limit?` — compact items |
 | `haven_next_explain` | `owner?` — diagnose an empty queue (counts by reason + hint) |
 | `haven_rank` | **`ref`**, `before?` \| `after?` (exactly one) — reorder within a priority band (fine ordering) |
 | `haven_add_item` | **`title`**, `type?, body?, done_looks_like?, why?, status?, priority?, commit?, assign?, parent?, depends_on?, group?, if_absent?` — with `if_absent` a normalized-title match returns the existing item (`existing: true`); responses may carry advisory `similar` |
@@ -119,7 +119,7 @@ haven sync [status] [--watch]
 | `haven_add_edge` | **`kind`** (`decomposition`\|`dependency`\|`grouping`), **`from`**, **`to`**, `remove?` |
 | `haven_evolve` | **`op`** (`split`\|`merge`\|`supersede`), **`refs`**, `into?, with?, title?, rationale?, by?` |
 | `haven_lineage` | **`ref`**, `direction?, depth?` |
-| `haven_resolve_live` | **`ref`** — follow a stale (superseded/archived) ref to its live descendant(s) |
+| `haven_resolve_live` | **`ref`** — follow a stale (superseded/archived) ref to its live descendant(s); compact items |
 | `haven_search` | **`query`**, `limit?` |
 | `haven_graph` | `lineage?` — the whole project graph (all nodes + `{kind,from,to}` edges) in one read |
 | `haven_docs` | `project?` — live project-doc anchors and their artifacts |
@@ -131,7 +131,24 @@ haven sync [status] [--watch]
 | `haven_archive` | **`ref`**, `rationale?, by?` |
 | `haven_reopen` | **`ref`**, `rationale?, by?` |
 | `haven_handoff` | **`ref`**, **`to`** (`human`\|`ai`), `from?, note?, status?, wait?, actor?` — atomic baton-pass |
-| `haven_complete_item` | **`ref`**, `evidence?, artifact_role?, by?` — mark done, record evidence, report what it unblocked |
+| `haven_complete_item` | **`ref`**, `evidence?, artifact_role?, by?` — mark done, record evidence, report what it unblocked (as compact items) |
+
+### Item response shapes (compact vs full)
+
+To keep context lean, item reads come in two shapes, and internal sync fields
+(`public_id`, `sync_state`, `revision`, `sort_key`) are **never** emitted over MCP:
+
+- **Compact** — navigation only: `ref, title, type, status, committed, owner_kind?,
+  priority?, wait_state?`. Used by `haven_list_items` (inside the `{total, count,
+  offset, items[]}` envelope), `haven_next`, `haven_resolve_live`, and the
+  `unblocked[]` list of `haven_complete_item`.
+- **Full** — compact **+** prose (`body, done_looks_like, why`), `assignee?`,
+  timestamps, non-empty `metadata`, and any requested `edges`/`artifacts`/`lineage`.
+  Returned by `haven_get_item` and `haven_update_item`.
+
+So a list/next tells you *what* exists; reach for `haven_get_item` when you need the
+prose or relationships of a specific item. (`haven_graph`/`haven_docs` still return
+full nodes — they're whole-graph / doc-anchor reads.)
 
 ## CLI → MCP mapping
 

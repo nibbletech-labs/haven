@@ -43,7 +43,9 @@ Run every Haven interaction through these five steps:
 3. **Use the smallest safe operation** — and prefer the *atomic* tool when one
    exists (`handoff`, `complete`) over hand-assembling the steps.
 4. **Confirm the result** from the returned JSON: the `ref`, `status`, `committed`,
-   `owner`, `wait_state`. Don't assume — read it back.
+   `owner`, `wait_state`. Don't assume — read it back. (`haven_list_items`/`next`
+   return a *compact* view — those axes, no prose; pull `body`/`why`/`done_looks_like`
+   for one item with `haven_get_item`.)
 5. **Never touch structure or `backlog.md` by hand.** Mutate the graph *only*
    through tools; edit *content* as files. (The one rule, below.)
 
@@ -177,6 +179,9 @@ haven_add_item   {"project":"haven","title":"Cache the JWKS lookup"}
 // Make it dispatchable: commit + ready + acceptance, in one update.
 haven_update_item{"project":"haven","ref":"HV-1","status":"ready","commit":true,
                   "priority":1,"done_looks_like":"p95 verify < 5ms"}
+// List is compact + paginated: {total, count, offset, items[]}, default limit 100.
+haven_list_items   {"project":"haven","status":"ready","limit":20,"offset":0}
+haven_get_item     {"project":"haven","ref":"HV-1"}    // full item (prose + includes)
 // Dispatch, and diagnose if empty.
 haven_next         {"project":"haven","owner":"ai"}
 haven_next_explain {"project":"haven","owner":"ai"}   // when next is empty
