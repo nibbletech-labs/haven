@@ -1,35 +1,51 @@
 # Haven
 
-A **local-first, cloud-synced store for a long-lived work-graph** — the backlog
-substrate behind an AI-assisted development pipeline, and a future phone/web app.
+Haven is a local-first backlog for work that spans humans, AI agents, and real
+life.
 
-Nodes of dependent work, each owned by a **human** or an **AI**, long-lived (a
-node can stay open for days, blocked on a real-world event), with lineage
-tracking and sync that lets you ask "what's next?" or report "done" from
-anywhere. A single `haven` binary is the local SQLite + files store, a CLI, and a
-stdio MCP server — with an opt-in remote half (Supabase + Auth0).
+It keeps track of what needs doing, who owns it, what is blocked, what changed,
+and what is ready to pick up next. You can use it from the `haven` CLI, through
+an MCP server in tools like Codex and Claude, or later through synced apps.
 
-```
+Haven is useful when a normal TODO list is too flat:
+
+- Work can depend on other work.
+- A task can wait on a person, an agent, another task, or an outside event.
+- Decisions, specs, research, and evidence can stay attached to the work they
+  belong to.
+- Agents can ask for the next ready item instead of guessing from stale notes.
+- Finished work can include proof, so handoffs do not rely on memory.
+
+Under the hood, Haven is one `haven` binary with a local SQLite store, a CLI, and
+a stdio MCP server. Sync through Supabase/Auth0 is optional.
+
+```sh
 haven setup --project-key haven --project-title "Haven" --prefix HV
 haven item add "Draft the spec" --status ready --commit --assign ai \
   --done-looks-like "approved by review"
-haven next                          # what should I do next?
+haven next                          # show ready, unblocked work
 haven item get HV-1 --include edges,artifacts,lineage
 haven item assign HV-1 --to human
-haven docs                          # project vision/architecture/spec anchors
+haven docs                          # project vision, architecture, and spec anchors
 ```
 
-- **Structure** (the work-graph) lives in local SQLite, exposed over CLI + MCP,
-  optionally synced to the cloud.
-- **Content** (specs, research, notes) lives as files under `~/.haven/`, edited
-  directly by local agents.
-- **Project docs** (vision, architecture, decisions) attach to `anchor` nodes and
-  are discoverable with `haven docs` / `haven_docs`.
-- Your tools and apps are *clients* of Haven; Haven doesn't depend on them.
+## How It Fits Together
+
+Haven separates the shape of the work from the documents around it:
+
+- The work graph lives in local SQLite and is exposed through the CLI and MCP.
+- Specs, research, notes, and other artifacts live as files under `~/.haven/`.
+- Project docs attach to `anchor` items and are discoverable with `haven docs`
+  or `haven_docs`.
+- Repo-local `Haven/` folders are just visible workspaces. The durable data
+  stays under `~/.haven/`.
+
+Your editor, shell, agents, and future apps are clients of Haven. Haven does not
+depend on any one of them.
 
 ## Install
 
-**Homebrew** (once the tap is published):
+**Homebrew:**
 
 ```sh
 brew install nibbletech-labs/tap/haven
@@ -51,18 +67,29 @@ cargo build --release
 ./target/release/haven setup --project-key haven --project-title "Haven"
 ```
 
-`haven setup` is idempotent: it creates `~/.haven`, runs migrations, registers the
-`haven` MCP server for Claude and Codex, installs the bundled skill into the
-agent-readable skill paths, writes/refreshes the Haven stanza in `AGENTS.md`, and
-can create/select your first project with `--project-key`. `haven doctor` reports
-whether each local install piece is wired.
+`haven setup` is safe to run more than once. It creates `~/.haven`, runs
+migrations, registers the `haven` MCP server for Claude and Codex, installs the
+bundled skill into agent-readable skill paths, writes or refreshes the Haven
+stanza in `AGENTS.md`, and can create or select your first project with
+`--project-key`.
 
-**Updating:** `haven self update` reports how this binary was installed (Homebrew,
-install script, source, or a dev symlink) and the command to update it; for a
-Homebrew install, `haven self update --run` runs `brew upgrade` for you. `haven
-self update --check` just compares your version against the latest release.
+Use `haven doctor` to check whether the local pieces are wired correctly.
 
-Agent-specific setup is available when you only want one integration:
+## Updating
+
+```sh
+haven self update --check
+haven self update --run
+```
+
+`haven self update` reports how this binary was installed and which command to
+use to update it. For a Homebrew install, `haven self update --run` runs
+`brew upgrade` for you.
+
+## Agent Setup
+
+`haven setup` wires the default local integrations, but you can target one agent
+when that is all you need:
 
 ```sh
 haven setup --agent codex
@@ -79,31 +106,36 @@ command = "haven"
 args = ["mcp"]
 ```
 
-Codex/Open Agent Skills are installed to `~/.agents/skills/haven` by default
-(`.agents/skills`, `~/.agents/skills`, and `/etc/codex/skills` are readable by
-Codex). Claude keeps using `~/.claude/skills/haven`; Codex does not read that
-Claude path.
+Codex/Open Agent Skills are installed to `~/.agents/skills/haven` by default.
+Codex can read `.agents/skills`, `~/.agents/skills`, and `/etc/codex/skills`.
+Claude keeps using `~/.claude/skills/haven`; Codex does not read that Claude
+path.
 
-To expose a human/agent-friendly project entry point inside a repo:
+## Repo Workspace
+
+To add a human- and agent-readable project entry point inside a repo:
 
 ```sh
 haven link
 ```
 
 This creates a visible `Haven/` workspace containing a generated `backlog.md`
-projection and room for docs. The canonical graph and content remain under
-`~/.haven`; `Haven/` is a disposable alias and is added to `.git/info/exclude`
-when the current directory is inside a Git repo.
+view and room for docs. The real graph and content remain under `~/.haven/`, so
+the `Haven/` directory can be regenerated. When run inside a Git repo, Haven adds
+`/Haven/` to `.git/info/exclude`.
+
+Do not hand-edit `backlog.md`; it is generated from Haven's store.
 
 ## Develop
 
-Rust workspace, single binary:
+Haven is a Rust workspace with one shipped binary:
 
-- `crates/haven-core` — the `Store` service (db / model / store / sortkey)
-- `crates/haven-cli` — the `haven` binary
-- `crates/haven-mcp` — the stdio JSON-RPC MCP server
-- `crates/haven-sync`, `crates/haven-auth` — the opt-in remote half
-- `migrations/` — local SQLite DDL · `supabase/` — the remote mirror
+- `crates/haven-core` - the shared store, data model, and ordering logic
+- `crates/haven-cli` - the `haven` command
+- `crates/haven-mcp` - the stdio JSON-RPC MCP server
+- `crates/haven-sync` and `crates/haven-auth` - optional sync and auth support
+- `migrations/` - local SQLite schema
+- `supabase/` - remote mirror schema and policies
 
 ```sh
 cargo test --workspace
@@ -111,25 +143,28 @@ cargo clippy --workspace --all-targets
 cargo fmt --check
 ```
 
-For a development install that tracks your builds, symlink the binary onto your
-PATH instead of copying it:
+For a development install that follows your local builds, symlink the binary
+onto your PATH:
 
 ```sh
 cargo build --release
 ./target/release/haven self install --link   # ~/.local/bin/haven -> target/release/haven
 ```
 
-Rebuilds then go live with no reinstall (`haven self install` without `--link`
-copies instead). `haven doctor` verifies the wiring.
+After that, rebuilds are picked up automatically. Without `--link`,
+`haven self install` copies the binary instead. `haven doctor` verifies the
+local wiring.
 
 ## Status
 
-The local slice runs end-to-end on one machine: items, four edge layers,
-evolve/lineage, `next`, full-text search, artifacts, `backlog.md` projection, and
-the MCP server. The remote half (Supabase schema + RLS, sync push) is validated
-against a local Supabase stack; two-way pull and live Auth0 wiring are in
-progress.
+The local workflow runs end to end on one machine: items, dependency layers,
+handoffs, lineage, `haven next`, full-text search, artifacts, the generated
+`backlog.md` view, and the MCP server.
+
+The sync path is partly built. The Supabase schema, RLS, and push flow are
+validated against a local Supabase stack. Two-way pull and live Auth0 wiring are
+still in progress.
 
 ## License
 
-MIT — see [`LICENSE`](LICENSE).
+MIT - see [`LICENSE`](LICENSE).
