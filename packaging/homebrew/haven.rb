@@ -1,21 +1,41 @@
-# Homebrew formula for Haven (build from source).
+# Homebrew formula for Haven — prebuilt binary, no Rust toolchain needed.
 #
-# To serve `brew install nibbletech-labs/tap/haven`, copy this file into a tap
-# repo named `homebrew-tap` (i.e. nibbletech-labs/homebrew-tap) as
-# `Formula/haven.rb`. The `url`/`sha256` below track the v0.1.0 source tarball;
-# bump both on each release (`brew fetch` prints the sha, or shasum the tarball).
+# This is the template/reference copy. The release workflow
+# (.github/workflows/release.yml) renders a ready-to-paste `haven.rb` with the
+# real version + per-arch sha256s on every tag and attaches it to the Release
+# (and prints it to the job summary). To serve `brew install
+# nibbletech-labs/tap/haven`, copy that generated file into the tap repo
+# (nibbletech-labs/homebrew-tap) as `Formula/haven.rb` on each release.
 class Haven < Formula
   desc "Local-first, cloud-synced store for a long-lived work-graph"
   homepage "https://github.com/nibbletech-labs/haven"
-  url "https://github.com/nibbletech-labs/haven/archive/refs/tags/v0.1.0.tar.gz"
-  sha256 "REPLACE_WITH_TARBALL_SHA256"
+  version "0.1.1"
   license "MIT"
-  head "https://github.com/nibbletech-labs/haven.git", branch: "main"
 
-  depends_on "rust" => :build
+  on_macos do
+    on_arm do
+      url "https://github.com/nibbletech-labs/haven/releases/download/v0.1.1/haven-0.1.1-aarch64-apple-darwin.tar.gz"
+      sha256 "REPLACE_WITH_AARCH64_APPLE_DARWIN_SHA256"
+    end
+    on_intel do
+      url "https://github.com/nibbletech-labs/haven/releases/download/v0.1.1/haven-0.1.1-x86_64-apple-darwin.tar.gz"
+      sha256 "REPLACE_WITH_X86_64_APPLE_DARWIN_SHA256"
+    end
+  end
+
+  on_linux do
+    on_arm do
+      url "https://github.com/nibbletech-labs/haven/releases/download/v0.1.1/haven-0.1.1-aarch64-unknown-linux-musl.tar.gz"
+      sha256 "REPLACE_WITH_AARCH64_UNKNOWN_LINUX_MUSL_SHA256"
+    end
+    on_intel do
+      url "https://github.com/nibbletech-labs/haven/releases/download/v0.1.1/haven-0.1.1-x86_64-unknown-linux-musl.tar.gz"
+      sha256 "REPLACE_WITH_X86_64_UNKNOWN_LINUX_MUSL_SHA256"
+    end
+  end
 
   def install
-    system "cargo", "install", *std_cargo_args(path: "crates/haven-cli")
+    bin.install "haven"
   end
 
   def caveats
@@ -28,6 +48,6 @@ class Haven < Formula
   end
 
   test do
-    assert_match "haven #{version}", shell_output("#{bin}/haven --version")
+    assert_match "haven", shell_output("#{bin}/haven --version")
   end
 end

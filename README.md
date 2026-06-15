@@ -53,11 +53,18 @@ haven setup --project-key haven --project-title "Haven"
 haven doctor       # verify the install
 ```
 
-**Install script** (builds from source; needs a [Rust toolchain](https://rustup.rs)):
+**Install script** (downloads a prebuilt binary — no Rust toolchain; macOS
+arm64/x64, Linux arm64/x64):
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/nibbletech-labs/haven/main/packaging/install.sh | sh
 ```
+
+It downloads the matching release tarball, verifies its sha256, and installs to
+the first writable of `$HAVEN_BIN_DIR`, `/usr/local/bin`, `~/.local/bin`. Pin a
+version with `HAVEN_VERSION=v0.1.1`. On a platform without a prebuilt binary it
+falls back to building from source (needs cargo); force that with
+`--from-source` or `HAVEN_BUILD_FROM_SOURCE=1`.
 
 **From source:**
 
@@ -66,6 +73,11 @@ git clone https://github.com/nibbletech-labs/haven && cd haven
 cargo build --release
 ./target/release/haven setup --project-key haven --project-title "Haven"
 ```
+
+> **macOS Gatekeeper:** binaries from `brew` or `curl` run from a terminal are
+> not quarantined. If you download a release tarball with a browser and macOS
+> refuses to run it ("cannot verify the developer"), clear the quarantine flag
+> once: `xattr -d com.apple.quarantine "$(which haven)"`.
 
 `haven setup` is safe to run more than once. It creates `~/.haven`, runs
 migrations, registers the `haven` MCP server for Claude and Codex, installs the
@@ -78,13 +90,16 @@ Use `haven doctor` to check whether the local pieces are wired correctly.
 ## Updating
 
 ```sh
-haven self update --check
-haven self update --run
+haven self update --check     # report current vs latest, change nothing
+haven self update             # apply the right update for how haven was installed
 ```
 
-`haven self update` reports how this binary was installed and which command to
-use to update it. For a Homebrew install, `haven self update --run` runs
-`brew upgrade` for you.
+`haven self update` is install-method aware. For an `install.sh` install it
+downloads the latest prebuilt binary, verifies its sha256, and atomically swaps
+it in place (`--binary` forces this for an unrecognized install location). For a
+Homebrew install, `haven self update --run` runs `brew upgrade` for you. A dev
+symlink just needs a rebuild. Use `--tag v0.1.1-rc.1` to install a specific
+release (e.g. to try a pre-release).
 
 ## Agent Setup
 

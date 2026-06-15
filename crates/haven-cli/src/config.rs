@@ -684,9 +684,18 @@ pub fn install_link(source: &Path, dest: &Path) -> Result<()> {
 /// Copy `source` to `dest` as a 0755 executable, atomically (temp sibling, set
 /// mode, rename over `dest`) so `dest` is never a torn binary.
 pub fn install_copy(source: &Path, dest: &Path) -> Result<()> {
+    let bytes = std::fs::read(source)?;
+    atomic_write_executable(dest, &bytes)
+}
+
+/// Write `bytes` to `dest` as a 0755 executable, atomically (temp sibling in the
+/// same dir, set mode, rename over `dest`). Shared by `install_copy` and the
+/// binary self-update swap: renaming over a *running* binary is safe on Unix —
+/// the live process keeps its old inode, and the next exec resolves the new one.
+pub fn atomic_write_executable(dest: &Path, bytes: &[u8]) -> Result<()> {
     let tmp = temp_sibling(dest);
     let _ = std::fs::remove_file(&tmp);
-    std::fs::copy(source, &tmp)?;
+    std::fs::write(&tmp, bytes)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -841,4 +850,234 @@ async fn github_json(client: &reqwest::Client, url: &str) -> Option<serde_json::
         return None;
     }
     resp.json::<serde_json::Value>().await.ok()
+}
+
+/// Semver-aware "is `latest` strictly newer than `current`?". Both may carry a
+/// leading `v`. Returns `None` if either fails to parse — the caller treats an
+/// unparseable comparison as "don't claim an update" (offline-/garbage-safe).
+pub fn is_newer(current: &str, latest: &str) -> Option<bool> {
+    let c = semver::Version::parse(current.trim_start_matches('v')).ok()?;
+    let l = semver::Version::parse(latest.trim_start_matches('v')).ok()?;
+    Some(l > c)
+}
+
+/// The Rust target triple this running binary corresponds to, used to select the
+/// matching release asset. `None` on a platform we don't publish prebuilts for
+/// (the caller falls back to install-method advice). Mirrors the `uname`→triple
+/// mapping in `packaging/install.sh` and the release workflow's build matrix.
+pub fn current_target_triple() -> Option<&'static str> {
+    Some(match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("macos", "aarch64") => "aarch64-apple-darwin",
+        ("macos", "x86_64") => "x86_64-apple-darwin",
+        ("linux", "x86_64") => "x86_64-unknown-linux-musl",
+        ("linux", "aarch64") => "aarch64-unknown-linux-musl",
+        _ => return None,
+    })
+}
+
+/// Download the prebuilt release tarball for `tag`/`target`, verify it against
+/// the published `.sha256` sidecar, and return the extracted `haven` binary
+/// bytes. Network and checksum failures are hard errors — we never hand back an
+/// unverified binary to swap. `version` is `tag` with any leading `v` stripped
+/// (the asset filename embeds it). Synchronous wrapper over a one-shot runtime,
+/// matching `latest_release_version`.
+pub fn fetch_release_binary(tag: &str, version: &str, target: &str) -> Result<Vec<u8>> {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(HavenError::Io)?;
+    rt.block_on(fetch_release_binary_async(tag, version, target))
+}
+
+async fn fetch_release_binary_async(tag: &str, version: &str, target: &str) -> Result<Vec<u8>> {
+    let asset = format!("haven-{version}-{target}.tar.gz");
+    let url = format!("https://github.com/nibbletech-labs/haven/releases/download/{tag}/{asset}");
+    // Generous timeout: this pulls a ~10–20 MB tarball, not a JSON blob.
+    let client = reqwest::Client::builder()
+        .user_agent(concat!("haven/", env!("CARGO_PKG_VERSION")))
+        .timeout(std::time::Duration::from_secs(120))
+        .build()
+        .map_err(|e| HavenError::Invalid(format!("http client: {e}")))?;
+
+    // Checksum sidecar is "<hex>  <filename>" (shasum -c form); take the hash.
+    let sha_text = http_get_text(&client, &format!("{url}.sha256"))
+        .await
+        .map_err(|e| HavenError::Invalid(format!("fetch checksum for {asset}: {e}")))?;
+    let expected = sha_text
+        .split_whitespace()
+        .next()
+        .ok_or_else(|| HavenError::Invalid(format!("empty checksum for {asset}")))?
+        .to_ascii_lowercase();
+
+    let tarball = http_get_bytes(&client, &url)
+        .await
+        .map_err(|e| HavenError::Invalid(format!("download {asset}: {e}")))?;
+
+    let actual = sha256_hex(&tarball);
+    if actual != expected {
+        return Err(HavenError::Invalid(format!(
+            "checksum mismatch for {asset}: expected {expected}, got {actual}"
+        )));
+    }
+
+    extract_haven_binary(&tarball)
+        .ok_or_else(|| HavenError::Invalid(format!("no `haven` binary inside {asset}")))
+}
+
+async fn http_get_text(client: &reqwest::Client, url: &str) -> std::result::Result<String, String> {
+    let resp = client.get(url).send().await.map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("HTTP {}", resp.status()));
+    }
+    resp.text().await.map_err(|e| e.to_string())
+}
+
+async fn http_get_bytes(
+    client: &reqwest::Client,
+    url: &str,
+) -> std::result::Result<Vec<u8>, String> {
+    let resp = client.get(url).send().await.map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("HTTP {}", resp.status()));
+    }
+    Ok(resp.bytes().await.map_err(|e| e.to_string())?.to_vec())
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(bytes)
+        .iter()
+        .fold(String::with_capacity(64), |mut s, b| {
+            use std::fmt::Write;
+            let _ = write!(s, "{b:02x}");
+            s
+        })
+}
+
+/// Pull the top-level regular file `haven` out of a gzip-compressed tar archive,
+/// returning its bytes. `None` if the archive is unreadable or has no such file.
+/// Matches only the root entry (`haven` or `./haven`, as our `tar -C dir .`
+/// tarballs store it) — never a nested `sub/haven` — so a crafted archive can't
+/// smuggle the binary out of a decoy path.
+fn extract_haven_binary(tar_gz: &[u8]) -> Option<Vec<u8>> {
+    use std::io::Read;
+    let dec = flate2::read::GzDecoder::new(std::io::Cursor::new(tar_gz));
+    let mut archive = tar::Archive::new(dec);
+    for entry in archive.entries().ok()? {
+        let mut entry = entry.ok()?;
+        if !entry.header().entry_type().is_file() {
+            continue;
+        }
+        let is_haven = match entry.path() {
+            Ok(p) => {
+                let rel = p.strip_prefix("./").unwrap_or(&p);
+                rel == Path::new("haven")
+            }
+            Err(_) => false,
+        };
+        if is_haven {
+            let mut buf = Vec::new();
+            entry.read_to_end(&mut buf).ok()?;
+            return Some(buf);
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod update_tests {
+    use super::*;
+
+    #[test]
+    fn is_newer_is_semver_aware() {
+        assert_eq!(is_newer("0.1.0", "0.1.1"), Some(true));
+        assert_eq!(is_newer("0.1.0", "v0.1.1"), Some(true)); // leading v tolerated
+        assert_eq!(is_newer("0.1.1", "0.1.1"), Some(false)); // equal
+        assert_eq!(is_newer("0.2.0", "0.1.9"), Some(false)); // ahead of release
+        assert_eq!(is_newer("0.1.9", "0.1.10"), Some(true)); // numeric, not lexical
+                                                             // prerelease precedence: rc sorts before its release, after the prior one.
+        assert_eq!(is_newer("0.1.0", "0.1.1-rc.1"), Some(true));
+        assert_eq!(is_newer("0.1.1", "0.1.1-rc.1"), Some(false));
+        // unparseable → None, so callers never claim a bogus update.
+        assert_eq!(is_newer("0.1.0", "not-a-version"), None);
+    }
+
+    #[test]
+    fn sha256_hex_matches_known_vectors() {
+        // `printf '' | shasum -a 256` and `printf 'abc' | shasum -a 256`.
+        assert_eq!(
+            sha256_hex(b""),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+        assert_eq!(
+            sha256_hex(b"abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
+
+    fn tar_gz(entries: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut out = Vec::new();
+        {
+            let enc = flate2::write::GzEncoder::new(&mut out, flate2::Compression::fast());
+            let mut builder = tar::Builder::new(enc);
+            for (name, data) in entries {
+                let mut header = tar::Header::new_gnu();
+                header.set_size(data.len() as u64);
+                header.set_mode(0o755);
+                header.set_cksum();
+                builder.append_data(&mut header, name, *data).unwrap();
+            }
+            builder.into_inner().unwrap().finish().unwrap();
+        }
+        out
+    }
+
+    #[test]
+    fn extract_haven_binary_finds_the_binary_past_decoys() {
+        let payload = b"\x7fELF not-really-but-close";
+        let archive = tar_gz(&[("README.md", b"readme"), ("haven", payload)]);
+        assert_eq!(
+            extract_haven_binary(&archive).as_deref(),
+            Some(&payload[..])
+        );
+    }
+
+    #[test]
+    fn extract_haven_binary_handles_dot_slash_prefix() {
+        // Real tarballs are built with `tar -C stage .`, so the entry is ./haven.
+        let payload = b"binary-bytes";
+        let archive = tar_gz(&[("./haven", payload)]);
+        assert_eq!(
+            extract_haven_binary(&archive).as_deref(),
+            Some(&payload[..])
+        );
+    }
+
+    #[test]
+    fn extract_haven_binary_ignores_nested_haven() {
+        // A nested `decoy/haven` shares the file_name "haven" but is not the
+        // top-level entry — it must not be extracted (defense in depth; the real
+        // gate is the upstream sha256 check).
+        let archive = tar_gz(&[("decoy/haven", b"evil"), ("README.md", b"r")]);
+        assert!(extract_haven_binary(&archive).is_none());
+    }
+
+    #[test]
+    fn extract_haven_binary_absent_is_none() {
+        let archive = tar_gz(&[("LICENSE", b"mit"), ("README.md", b"readme")]);
+        assert!(extract_haven_binary(&archive).is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_write_executable_swaps_content_and_sets_mode() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("haven");
+        std::fs::write(&dest, b"old-binary").unwrap(); // simulate an in-place swap
+        atomic_write_executable(&dest, b"new-binary").unwrap();
+        assert_eq!(std::fs::read(&dest).unwrap(), b"new-binary");
+        let mode = std::fs::metadata(&dest).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o755);
+    }
 }

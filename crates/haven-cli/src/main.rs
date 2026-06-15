@@ -204,6 +204,16 @@ struct SelfUpdateArgs {
     /// For a Homebrew install, actually run `brew upgrade` (default: print only).
     #[arg(long)]
     run: bool,
+    /// Download + verify + swap the prebuilt release binary in place. The default
+    /// for copied (install.sh) installs; required to force it for an unrecognized
+    /// install location. Has no effect on Homebrew (use `--run`) or dev symlinks.
+    #[arg(long)]
+    binary: bool,
+    /// Install this exact release tag instead of the latest (e.g. `v0.1.1-rc.1`).
+    /// Implies the binary path and bypasses the newer-than-current check — handy
+    /// for testing a pre-release.
+    #[arg(long)]
+    tag: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
@@ -230,6 +240,8 @@ impl AgentTarget {
 enum ArtifactCmd {
     Add(ArtifactAddArgs),
     List(ArtifactListArgs),
+    /// Get one artifact by ref and role.
+    #[command(alias = "show")]
     Get(ArtifactGetArgs),
 }
 
@@ -299,7 +311,8 @@ enum ProjectCmd {
     Add(ProjectAddArgs),
     /// List project namespaces/backlogs.
     List,
-    /// Show one project by key.
+    /// Get one project by key.
+    #[command(alias = "show")]
     Get { key: String },
     /// Set the default project for later commands.
     Use { key: String },
@@ -327,7 +340,8 @@ enum ItemCmd {
     Add(ItemAddArgs),
     /// List items with optional filters.
     List(ItemListArgs),
-    /// Show one item by ref or public_id.
+    /// Get one item by ref or public_id.
+    #[command(alias = "show")]
     Get(ItemGetArgs),
     /// Update item fields such as status, type, acceptance, wait-state, and priority.
     Update(ItemUpdateArgs),
@@ -1221,9 +1235,9 @@ fn cmd_self_update(a: &SelfUpdateArgs) -> Result<Output> {
 
     // The only network path in the CLI; best-effort and offline-safe.
     let latest = config::latest_release_version();
-    let up_to_date = latest
-        .as_deref()
-        .map(|l| l.trim_start_matches('v') == current);
+    // semver-aware so "newer" is a real comparison, not string inequality.
+    let newer = latest.as_deref().and_then(|l| config::is_newer(current, l));
+    let up_to_date = newer.map(|n| !n);
 
     if a.check {
         return Ok(Output::Json(serde_json::json!({
@@ -1237,25 +1251,43 @@ fn cmd_self_update(a: &SelfUpdateArgs) -> Result<Output> {
 
     let mut actions: Vec<String> = Vec::new();
     match &method {
-        config::InstallMethod::Homebrew if a.run => {
-            let status = std::process::Command::new("brew")
-                .args(["upgrade", "nibbletech-labs/tap/haven"])
-                .status();
-            actions.push(match status {
-                Ok(s) if s.success() => {
-                    "ran `brew upgrade` — run `haven doctor` with the new binary to finish reconcile"
-                        .into()
-                }
-                Ok(s) => format!("`brew upgrade` exited with status {s}"),
-                Err(e) => format!("could not run brew ({e}); upgrade manually"),
-            });
+        config::InstallMethod::Homebrew => {
+            if a.run {
+                let status = std::process::Command::new("brew")
+                    .args(["upgrade", "nibbletech-labs/tap/haven"])
+                    .status();
+                actions.push(match status {
+                    Ok(s) if s.success() => {
+                        "ran `brew upgrade` — run `haven doctor` with the new binary to finish reconcile"
+                            .into()
+                    }
+                    Ok(s) => format!("`brew upgrade` exited with status {s}"),
+                    Err(e) => format!("could not run brew ({e}); upgrade manually"),
+                });
+            } else if a.binary || a.tag.is_some() {
+                // Don't fight the package manager — Homebrew owns this binary.
+                actions.push(
+                    "Homebrew install — `--binary` doesn't apply; update with \
+                     `brew upgrade nibbletech-labs/tap/haven` (or pass --run)."
+                        .into(),
+                );
+            }
         }
         config::InstallMethod::DevSymlink { .. } => {
             for d in config::refresh_stale_skill_snapshots() {
                 actions.push(format!("refreshed skill snapshot at {}", d.display()));
             }
         }
-        _ => {}
+        // Copied install (install.sh) — swap the prebuilt binary by default.
+        config::InstallMethod::InstallSh => {
+            actions.extend(binary_update(a, current, latest.as_deref(), newer)?);
+        }
+        // Unrecognized location — only swap when explicitly asked (safety).
+        config::InstallMethod::Unknown { .. } => {
+            if a.binary || a.tag.is_some() {
+                actions.extend(binary_update(a, current, latest.as_deref(), newer)?);
+            }
+        }
     }
 
     Ok(Output::Json(serde_json::json!({
@@ -1266,6 +1298,65 @@ fn cmd_self_update(a: &SelfUpdateArgs) -> Result<Output> {
         "advice": advice,
         "actions": actions,
     })))
+}
+
+/// Download + verify + atomically swap the prebuilt release binary for a copied
+/// install. Returns human-readable action strings (never partially swaps: the
+/// rename only happens after a verified extract). `--tag` targets an exact
+/// release and bypasses the newer-than-current gate; otherwise we only act when
+/// the published release is semver-newer than this build.
+fn binary_update(
+    a: &SelfUpdateArgs,
+    current: &str,
+    latest: Option<&str>,
+    newer: Option<bool>,
+) -> Result<Vec<String>> {
+    let mut actions = Vec::new();
+
+    // The tag to install: an explicit --tag, else the discovered latest release.
+    let tag = match a.tag.as_deref().or(latest) {
+        Some(t) => t.to_string(),
+        None => {
+            actions.push("no release to install (offline, or none published yet)".into());
+            return Ok(actions);
+        }
+    };
+
+    // Without an explicit --tag, only swap when the release is actually newer.
+    if a.tag.is_none() && newer != Some(true) {
+        actions.push(format!(
+            "already up to date (v{current}); nothing to install"
+        ));
+        return Ok(actions);
+    }
+
+    let target = match config::current_target_triple() {
+        Some(t) => t,
+        None => {
+            actions.push(format!(
+                "no prebuilt binary for this platform ({}/{}); reinstall from source",
+                std::env::consts::OS,
+                std::env::consts::ARCH
+            ));
+            return Ok(actions);
+        }
+    };
+    let version = tag.trim_start_matches('v').to_string();
+
+    // Swap the *real* running binary (resolve a symlink to its target, though a
+    // copied install is already a regular file). Old inode stays live until exit.
+    let raw_exe = std::env::current_exe().map_err(HavenError::Io)?;
+    let dest = std::fs::canonicalize(&raw_exe).map_err(HavenError::Io)?;
+
+    let bytes = config::fetch_release_binary(&tag, &version, target)?;
+    config::atomic_write_executable(&dest, &bytes)?;
+
+    actions.push(format!(
+        "downloaded haven {version} ({target}), verified sha256, swapped {} — \
+         re-run `haven doctor` to finish reconcile",
+        dest.display()
+    ));
+    Ok(actions)
 }
 
 fn cmd_link(project: Option<&str>, name: &std::path::Path) -> Result<Output> {
