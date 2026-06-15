@@ -23,7 +23,7 @@ jobs:
           - target: aarch64-apple-darwin
             os: macos-14 # Apple Silicon runner
           - target: x86_64-apple-darwin
-            os: macos-13 # Intel runner
+            os: macos-14 # cross-compiled on Apple Silicon (Intel macos-13 runners are queue-starved)
           - target: x86_64-unknown-linux-musl
             os: ubuntu-latest
             musl: true
