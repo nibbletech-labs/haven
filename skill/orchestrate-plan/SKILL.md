@@ -58,7 +58,10 @@ The full per-step ops (CLI **and** MCP) are in `references/tick-ops.md`. The
 loop:
 
 0. **REORIENT.** Read the whole graph in one call (`haven graph` / `haven_graph`).
-   This is the only tick state. Resolve the project first if unknown.
+   This is the only tick state. Resolve the project first if unknown. If the read
+   carries a **`grooming_nudge`** (untriaged/stale work has piled up), surface it
+   and offer the groom workflow (`haven` skill, workflow 3) before planning —
+   don't plan on top of a backlog that needs triage.
 1. **ENSURE ROOT.** A fresh goal with no root → create the decomposition root as
    an `anchor`, idempotently (`if_absent` is safe for the unique goal title). An
    existing root (e.g. you were handed a project mid-plan) → skip.

@@ -36,7 +36,27 @@ pub struct ProjectGraph {
     pub edges: Vec<GraphEdge>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub lineage: Vec<LineageLink>,
+    /// A grooming nudge (HV-82) when untriaged/stale work has piled up — present
+    /// only above threshold so lean reads stay lean. A planner reorienting via
+    /// `haven graph` is then prompted to groom before planning.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub grooming_nudge: Option<String>,
 }
+
+/// Grooming pressure for a project (HV-82): counts of untriaged + stale work and
+/// a ready-made `nudge` emitted once either crosses [`GROOMING_NUDGE_THRESHOLD`].
+#[derive(Debug, Clone, Serialize)]
+pub struct GroomingPressure {
+    pub untriaged: usize,
+    pub stale: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nudge: Option<String>,
+}
+
+/// At or above this many untriaged floaters OR stale items, grooming is nudged.
+pub const GROOMING_NUDGE_THRESHOLD: usize = 5;
+/// Items untouched for this many days count as stale for grooming pressure.
+const GROOMING_STALE_DAYS: i64 = 14;
 
 /// Classify a container from the statuses of its LIVE committed descendants.
 /// Total over the input: empty → Dormant; any `in_progress` → Active; all `done`
@@ -279,6 +299,42 @@ impl Store {
     /// app uses to render the graph, or an agent uses to reason over the entire
     /// dependency structure at once (vs. N+1 per-node fetches). `nodes` is the
     /// faithful set — including `superseded`/`archived`; filter client-side.
+    /// Grooming pressure (HV-82): untriaged inbox floaters + stale items, with a
+    /// nudge string once either crosses [`GROOMING_NUDGE_THRESHOLD`]. Triggers
+    /// grooming rather than waiting to be remembered — surfaced on
+    /// [`Store::project_graph`] (where a planner reorients).
+    pub fn grooming_pressure(&self, project: Option<&str>) -> Result<GroomingPressure> {
+        let untriaged = self
+            .list_items(
+                project,
+                &ItemFilter {
+                    inbox: true,
+                    ..Default::default()
+                },
+            )?
+            .len();
+        let stale = self
+            .list_items(
+                project,
+                &ItemFilter {
+                    stale_days: Some(GROOMING_STALE_DAYS),
+                    ..Default::default()
+                },
+            )?
+            .len();
+        let nudge = (untriaged >= GROOMING_NUDGE_THRESHOLD || stale >= GROOMING_NUDGE_THRESHOLD)
+            .then(|| {
+                format!(
+                    "{untriaged} untriaged floater(s), {stale} stale item(s) — groom (workflow 3) before planning"
+                )
+            });
+        Ok(GroomingPressure {
+            untriaged,
+            stale,
+            nudge,
+        })
+    }
+
     pub fn project_graph(&self, project: Option<&str>, lineage: bool) -> Result<ProjectGraph> {
         let (project_id, key) = self.require_project(project)?;
         let mut nodes = self.list_items(project, &ItemFilter::default())?;
@@ -324,11 +380,13 @@ impl Store {
                 node.context_pack_clash = clash;
             }
         }
+        let grooming_nudge = self.grooming_pressure(project)?.nudge;
         Ok(ProjectGraph {
             project: key,
             nodes,
             edges,
             lineage,
+            grooming_nudge,
         })
     }
 

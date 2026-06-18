@@ -552,6 +552,37 @@ fn ready_requires_acceptance() {
 }
 
 #[test]
+fn grooming_pressure_nudges_above_threshold() {
+    // HV-82: grooming is triggered, not just surfaced — once untriaged work
+    // piles up, the nudge appears (and rides the graph a planner reorients on).
+    let s = store();
+
+    // Below threshold: counts climb but no nudge yet.
+    for i in 0..(GROOMING_NUDGE_THRESHOLD - 1) {
+        add(&s, &format!("floater {i}"));
+    }
+    let p = s.grooming_pressure(None).unwrap();
+    assert_eq!(p.untriaged, GROOMING_NUDGE_THRESHOLD - 1);
+    assert!(p.nudge.is_none());
+    assert!(s
+        .project_graph(None, false)
+        .unwrap()
+        .grooming_nudge
+        .is_none());
+
+    // Crossing the threshold emits the nudge, surfaced on the graph too.
+    add(&s, "one more floater");
+    let p = s.grooming_pressure(None).unwrap();
+    assert_eq!(p.untriaged, GROOMING_NUDGE_THRESHOLD);
+    assert!(p.nudge.is_some());
+    assert!(s
+        .project_graph(None, false)
+        .unwrap()
+        .grooming_nudge
+        .is_some());
+}
+
+#[test]
 fn done_looks_like_and_why_round_trip() {
     let s = store();
     // Set acceptance + provenance on create.

@@ -589,6 +589,11 @@ fn call_tool(store: &Store, name: &str, a: &Value) -> Result<Value> {
             if !g.lineage.is_empty() {
                 out["lineage"] = to_value(&g.lineage)?;
             }
+            // Grooming nudge (HV-82) rides along only when work has piled up, so
+            // a planner reorienting via the graph is prompted to groom first.
+            if let Some(nudge) = &g.grooming_nudge {
+                out["grooming_nudge"] = json!(nudge);
+            }
             Ok(out)
         }
         "haven_docs" => to_value(store.docs(project)?),
