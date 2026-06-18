@@ -955,7 +955,7 @@ mod tests {
             &[
                 json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{
                     "name":"haven_add_item",
-                    "arguments":{"title":"Dispatch me","status":"ready","commit":true,"assign":"ai"}
+                    "arguments":{"title":"Dispatch me","status":"ready","commit":true,"assign":"ai","done_looks_like":"it works"}
                 }}),
                 json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{
                     "name":"haven_next","arguments":{"owner":"ai"}
@@ -1004,7 +1004,7 @@ mod tests {
             &[
                 json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{
                     "name":"haven_add_item",
-                    "arguments":{"title":"Build API","assign":"ai","status":"ready"}
+                    "arguments":{"title":"Build API","assign":"ai","status":"ready","done_looks_like":"it works"}
                 }}),
                 json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{
                     "name":"haven_handoff",
@@ -1097,7 +1097,7 @@ mod tests {
             &[
                 json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{
                     "name":"haven_add_item",
-                    "arguments":{"title":"Haven docs","type":"anchor","status":"ready","commit":true}
+                    "arguments":{"title":"Haven docs","type":"anchor","status":"ready","commit":true,"done_looks_like":"docs landed"}
                 }}),
                 json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{
                     "name":"haven_add_artifact",
@@ -1128,7 +1128,7 @@ mod tests {
             &[
                 // Ready but uncommitted: nothing is dispatchable yet.
                 json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{
-                    "name":"haven_add_item","arguments":{"title":"Ready, not committed","status":"ready"}
+                    "name":"haven_add_item","arguments":{"title":"Ready, not committed","status":"ready","done_looks_like":"it works"}
                 }}),
                 json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{
                     "name":"haven_next_explain","arguments":{}
@@ -1165,10 +1165,10 @@ mod tests {
             &[
                 // Two committed P1 items; HV-1 sorts first by creation.
                 json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{
-                    "name":"haven_add_item","arguments":{"title":"First","status":"ready","commit":true,"priority":1}
+                    "name":"haven_add_item","arguments":{"title":"First","status":"ready","commit":true,"priority":1,"done_looks_like":"it works"}
                 }}),
                 json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{
-                    "name":"haven_add_item","arguments":{"title":"Second","status":"ready","commit":true,"priority":1}
+                    "name":"haven_add_item","arguments":{"title":"Second","status":"ready","commit":true,"priority":1,"done_looks_like":"it works"}
                 }}),
                 // Conversational reorder: put Second before First.
                 json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{
@@ -1292,7 +1292,7 @@ mod tests {
             &[
                 json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{
                     "name":"haven_add_item",
-                    "arguments":{"title":"With prose","type":"task","body":"a long body","why":"because","status":"ready","commit":true,"priority":1,"assign":"ai"}
+                    "arguments":{"title":"With prose","type":"task","body":"a long body","why":"because","status":"ready","commit":true,"priority":1,"assign":"ai","done_looks_like":"it works"}
                 }}),
                 json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{
                     "name":"haven_add_item","arguments":{"title":"Second"}
@@ -1426,7 +1426,7 @@ mod tests {
                 // A build-batch container that will carry the pack.
                 json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"haven_add_item","arguments":{"title":"Checkout — dev batch","type":"phase"}}}),
                 // A grouped, dispatchable leaf, plus an unrelated ungrouped one.
-                json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"haven_add_item","arguments":{"title":"cart endpoint","commit":true,"status":"ready","assign":"ai"}}}),
+                json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"haven_add_item","arguments":{"title":"cart endpoint","commit":true,"status":"ready","assign":"ai","done_looks_like":"it works"}}}),
                 json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"haven_add_item","arguments":{"title":"unrelated"}}}),
                 json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"haven_add_edge","arguments":{"kind":"grouping","from":"HV-1","to":"HV-2"}}}),
                 json!({"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"haven_add_artifact","arguments":{"ref":"HV-1","role":"spec","name":"context-pack.md","content":"# pack"}}}),
@@ -1535,7 +1535,7 @@ mod tests {
             &[
                 json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{
                     "name":"haven_add_item",
-                    "arguments":{"title":"Dispatch","body":"prose","status":"ready","commit":true,"assign":"ai"}
+                    "arguments":{"title":"Dispatch","body":"prose","status":"ready","commit":true,"assign":"ai","done_looks_like":"it works"}
                 }}),
                 json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{
                     "name":"haven_next","arguments":{"owner":"ai"}

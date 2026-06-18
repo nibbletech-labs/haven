@@ -37,6 +37,7 @@ fn handoff_records_artifact_flips_owner_and_sets_state() {
                 title: "Build API".into(),
                 assign: Some(OwnerKind::Ai),
                 status: Some(Status::Ready),
+                done_looks_like: Some("API returns 200".into()),
                 ..Default::default()
             },
         )
@@ -166,6 +167,7 @@ fn anchors_are_living_docs_not_dispatch_work() {
                 title: "Haven docs".into(),
                 node_type: Some(NodeType::Anchor),
                 status: Some(Status::Ready),
+                done_looks_like: Some("docs landed".into()),
                 commit: true,
                 assign: Some(OwnerKind::Ai),
                 ..Default::default()
@@ -178,6 +180,7 @@ fn anchors_are_living_docs_not_dispatch_work() {
             NewItem {
                 title: "Build feature".into(),
                 status: Some(Status::Ready),
+                done_looks_like: Some("feature works".into()),
                 commit: true,
                 assign: Some(OwnerKind::Ai),
                 ..Default::default()
@@ -473,6 +476,82 @@ fn add_mints_sequential_refs_and_defaults() {
 }
 
 #[test]
+fn ready_requires_acceptance() {
+    // HV-80: `ready` requires `done_looks_like` — enforced at the store, not
+    // just asserted by the skill. Covers both creation and the transition.
+    let s = store();
+
+    // add_item: an item cannot be born `ready` without acceptance.
+    let err = s
+        .add_item(
+            None,
+            NewItem {
+                title: "naked ready".into(),
+                status: Some(Status::Ready),
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+    assert_eq!(err.code(), "invalid");
+    assert!(err.to_string().contains("done_looks_like"));
+
+    // update_item: status→ready without acceptance is refused...
+    let item = add(&s, "groom me");
+    let err = s
+        .update_item(
+            None,
+            &item.reference,
+            ItemUpdate {
+                status: Some(Status::Ready),
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+    assert_eq!(err.code(), "invalid");
+    assert!(err.to_string().contains("done_looks_like"));
+
+    // ...and succeeds once acceptance is supplied in the same op.
+    let ok = s
+        .update_item(
+            None,
+            &item.reference,
+            ItemUpdate {
+                status: Some(Status::Ready),
+                done_looks_like: Some("it works".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(ok.status, Status::Ready);
+
+    // Clearing acceptance (whitespace) on an already-ready item is refused.
+    let err = s
+        .update_item(
+            None,
+            &item.reference,
+            ItemUpdate {
+                done_looks_like: Some("   ".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+    assert_eq!(err.code(), "invalid");
+
+    // Unrelated edits to a ready item are unaffected by the guard.
+    let ok = s
+        .update_item(
+            None,
+            &item.reference,
+            ItemUpdate {
+                priority: Some(1),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(ok.priority, Some(1));
+}
+
+#[test]
 fn done_looks_like_and_why_round_trip() {
     let s = store();
     // Set acceptance + provenance on create.
@@ -537,6 +616,7 @@ fn add_with_axes_and_edges() {
             NewItem {
                 title: "Child".into(),
                 status: Some(Status::Ready),
+                done_looks_like: Some("child done".into()),
                 priority: Some(1),
                 commit: true,
                 assign: Some(OwnerKind::Ai),
@@ -636,6 +716,7 @@ fn next_respects_ready_committed_wait_and_dependencies() {
             NewItem {
                 title: "parked".into(),
                 status: Some(Status::Ready),
+                done_looks_like: Some("parked done".into()),
                 ..Default::default()
             },
         )
@@ -647,6 +728,7 @@ fn next_respects_ready_committed_wait_and_dependencies() {
             NewItem {
                 title: "waiting".into(),
                 status: Some(Status::Ready),
+                done_looks_like: Some("waiting done".into()),
                 commit: true,
                 ..Default::default()
             },
@@ -670,6 +752,7 @@ fn next_respects_ready_committed_wait_and_dependencies() {
             NewItem {
                 title: "blocked".into(),
                 status: Some(Status::Ready),
+                done_looks_like: Some("blocked done".into()),
                 commit: true,
                 depends_on: Some(prereq.reference.clone()),
                 ..Default::default()
@@ -684,6 +767,7 @@ fn next_respects_ready_committed_wait_and_dependencies() {
             NewItem {
                 title: "go".into(),
                 status: Some(Status::Ready),
+                done_looks_like: Some("go done".into()),
                 commit: true,
                 priority: Some(0),
                 ..Default::default()
@@ -726,6 +810,7 @@ fn next_owner_filter() {
             NewItem {
                 title: "ai work".into(),
                 status: Some(Status::Ready),
+                done_looks_like: Some("ai work done".into()),
                 commit: true,
                 assign: Some(OwnerKind::Ai),
                 ..Default::default()
@@ -738,6 +823,7 @@ fn next_owner_filter() {
             NewItem {
                 title: "human work".into(),
                 status: Some(Status::Ready),
+                done_looks_like: Some("human work done".into()),
                 commit: true,
                 assign: Some(OwnerKind::Human),
                 ..Default::default()

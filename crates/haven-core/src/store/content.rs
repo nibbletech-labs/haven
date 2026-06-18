@@ -875,6 +875,7 @@ mod tests {
                 commit: true,
                 priority: Some(0),
                 status: Some(Status::Ready),
+                done_looks_like: Some("shipped".into()),
                 ..Default::default()
             },
         )

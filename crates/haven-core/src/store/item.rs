@@ -181,12 +181,33 @@ pub struct ItemFilter {
     pub stale_days: Option<i64>,
 }
 
+/// True when an acceptance statement is absent or only whitespace. The
+/// `ready`-requires-`done_looks_like` guard (HV-80) treats both as "no
+/// acceptance".
+fn acceptance_blank(done: Option<&str>) -> bool {
+    match done {
+        None => true,
+        Some(s) => s.trim().is_empty(),
+    }
+}
+
 impl Store {
     /// Create a node. Mints a `ref` from the project counter, applies the
     /// requested axes, and wires any parent/dependency/group edges given.
     pub fn add_item(&self, project: Option<&str>, new: NewItem) -> Result<Item> {
         if new.title.trim().is_empty() {
             return Err(HavenError::Invalid("item title must not be empty".into()));
+        }
+        // HV-80: an item cannot be born `ready` without acceptance either —
+        // keeps the backstop airtight so no `ready`-without-`done_looks_like`
+        // node can ever be created.
+        if matches!(new.status, Some(Status::Ready))
+            && acceptance_blank(new.done_looks_like.as_deref())
+        {
+            return Err(HavenError::Invalid(
+                "cannot create an item as ready without acceptance — set done_looks_like first"
+                    .into(),
+            ));
         }
         let (project_id, _key) = self.require_project(project)?;
         let tx = self.conn.unchecked_transaction()?;
@@ -430,6 +451,31 @@ impl Store {
     ) -> Result<Item> {
         let (project_id, _key) = self.require_project(project)?;
         let node_id = self.resolve_node_id(project_id, selector)?;
+
+        // HV-80: `ready` requires acceptance. This is the single chokepoint for
+        // status→ready (CLI `item update` and MCP `haven_update_item` both route
+        // here). Refuse the ready-transition without `done_looks_like`, and
+        // refuse clearing acceptance on an already-`ready` item. The check fires
+        // only on those two moves, so unrelated edits to a grandfathered
+        // ready-without-acceptance item are left untouched.
+        let setting_ready = matches!(upd.status, Some(Status::Ready));
+        let clearing_done = upd
+            .done_looks_like
+            .as_deref()
+            .is_some_and(|s| s.trim().is_empty());
+        if setting_ready || clearing_done {
+            let current = self.get_item(project, selector, &[])?;
+            let effective_done = match upd.done_looks_like.as_deref() {
+                Some(s) => Some(s),
+                None => current.done_looks_like.as_deref(),
+            };
+            let effective_ready = setting_ready || matches!(current.status, Status::Ready);
+            if effective_ready && acceptance_blank(effective_done) {
+                return Err(HavenError::Invalid(format!(
+                    "cannot mark {selector} ready without acceptance — set done_looks_like (what success looks like) first"
+                )));
+            }
+        }
 
         let mut sets: Vec<String> = Vec::new();
         let mut args: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();

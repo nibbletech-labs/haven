@@ -336,6 +336,8 @@ fn docs_lists_anchor_artifacts_without_dispatching_them() {
         "anchor",
         "--status",
         "ready",
+        "--done-looks-like",
+        "docs landed",
         "--commit",
         "--assign",
         "ai",
@@ -482,6 +484,8 @@ fn full_lifecycle() {
         "Draft the spec",
         "--status",
         "ready",
+        "--done-looks-like",
+        "spec drafted",
         "--commit",
         "--priority",
         "1",
@@ -563,7 +567,16 @@ fn content_layer_artifact_note_render() {
         "project", "add", "--key", "haven", "--title", "Haven", "--prefix", "HV",
     ]);
     h.ok(&["project", "use", "haven"]);
-    h.json(&["item", "add", "Write spec", "--commit", "--status", "ready"]);
+    h.json(&[
+        "item",
+        "add",
+        "Write spec",
+        "--commit",
+        "--status",
+        "ready",
+        "--done-looks-like",
+        "spec written",
+    ]);
 
     // Register a file artifact and read it back.
     let src = h.home.join("spec.md");
@@ -656,7 +669,7 @@ fn import_creates_a_wired_batch_in_one_transaction() {
     std::fs::write(
         &file,
         serde_json::json!([
-            {"id": "api", "title": "Build API", "parent": "epic", "status": "ready", "commit": true},
+            {"id": "api", "title": "Build API", "parent": "epic", "status": "ready", "commit": true, "done_looks_like": "it works"},
             {"id": "ui", "title": "Build UI", "depends_on": ["api"]},
             {"id": "epic", "title": "Auth epic"}
         ])
