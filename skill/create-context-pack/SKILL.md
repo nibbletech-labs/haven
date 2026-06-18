@@ -10,10 +10,12 @@ description: >-
   have a set of planned leaves you're about to build together and want one brief —
   e.g. "spec out phase 1 of the build", "write the build spec for this phase",
   "create a context pack for HV-3 and HV-4", "ready these items for dev", "prepare
-  HV-3 and HV-4 for development". Sits on the GROUPING axis, above the `haven`
-  skill and after `orchestrate-plan`: it does NOT decompose a goal (use
-  `orchestrate-plan`) and it does NOT execute or write code (that's plan mode).
-  Not for single ad-hoc captures or for coarse/un-planned items.
+  HV-3 and HV-4 for development". Run on a single item it degenerates to grooming
+  that one leaf (firm its acceptance + write a spec); run on several it grooms each
+  member, then synthesises the cross-cutting brief over them. Sits on the GROUPING
+  axis, above the `haven` skill and after `orchestrate-plan`: it does NOT decompose
+  a goal (use `orchestrate-plan`) and it does NOT execute or write code (that's
+  plan mode). Not for coarse items that still need decomposition.
 ---
 
 # create-context-pack — the build-prep (spec) half of orchestrate
@@ -52,8 +54,12 @@ detail — don't restate arguments from memory. The gotchas that bite here:
 - **Structure only through ops; content as files/artifacts.** Mutate nodes/edges
   only via `haven …` / `haven_*`. The pack is artifact **content**; `body` is a
   one-line summary, never the pack.
-- **`ready` requires `done_looks_like`.** Sharpen each member's acceptance; never
-  leave a member you've prepped without concrete, testable acceptance.
+- **Per member, groom — don't invent a parallel check.** Readying a member *is*
+  the `haven` skill's **groom** workflow (wf 3): firm its `done_looks_like` to a
+  concrete, testable bar and write/firm its own `spec` artifact (wf 10) when it
+  warrants one. Never leave a prepped member without concrete acceptance. Only a
+  member that needs **decomposition** (structurally too big) bounces to
+  `orchestrate-plan`; mere under-specification you groom in place.
 - **Defer-all corrections.** This skill *does not apply fixes*. When the brief is
   wrong, the correction is plan mode's first **human-approved** step (see the
   verify-first pack). You only *enrich and prepare* — the human gate stays
@@ -81,8 +87,10 @@ pack's section layout + the verbatim preamble are in `references/pack-template.m
      must land on this batch container: a phase holds **one** `context-pack.md`, so writing
      a subset's pack onto the broad phase mis-scopes it (a pack covering 2 of 7 members)
      **and** a later batch from the same phase would **clobber** it.
-   A single item is a degenerate group (just enrich that one leaf; usually no
-   shared-behaviour pack is warranted). What groups a batch is simply that **you intend to
+   A single item is a **degenerate group**: there is nothing cross-cutting to
+   synthesise, so just **groom that one leaf** (wf 3 — firm acceptance + write a
+   `spec` via wf 10 where warranted) and stop. **No container, no pack artifact.**
+   What groups a batch is simply that **you intend to
    build the members together** — neither a dependency between them nor shared architecture
    is required. Shared architecture is the *bonus*: when members touch the same code,
    contracts, or data model, the pack captures that write-once context; when they don't,
@@ -93,10 +101,13 @@ pack's section layout + the verbatim preamble are in `references/pack-template.m
    output/acceptance into the pack's foundation as **read-only context**; if `d` is
    unbuilt, **surface it as a scope boundary** ("`b` depends on `d` [status] — pull
    `d` in, or it blocks `b`") and let the human decide. **Never auto-expand scope.**
-3. **PRECONDITION CHECK.** Members must be already-sealed planned leaves (`ready`
-   with `done_looks_like`, or close). If any are coarse/un-planned → **STOP and route
-   to `orchestrate-plan`**. This skill fleshes out a planned group; it does not
-   decompose. **Single active pack per leaf:** a member that already carries a
+3. **GROOM EACH MEMBER (precondition).** Bring every member to a sealed leaf via
+   the `haven` **groom** workflow (wf 3): firm its `done_looks_like` to a concrete,
+   testable bar and write/firm its `spec` (wf 10) where it warrants one. Under-
+   specified-but-coherent members you groom **in place**; only a member that needs
+   **decomposition** (structurally too big) → **STOP and route to
+   `orchestrate-plan`** (this skill fleshes out a planned group; it does not
+   decompose). **Single active pack per leaf:** a member that already carries a
    `context_pack` pointer for a *different* container (or a `context_pack_clash`) is
    governed by another pack — **STOP and surface the clash**, never auto-pick or merge
    (`references/verify-ops.md` step 3).
@@ -107,11 +118,13 @@ pack's section layout + the verbatim preamble are in `references/pack-template.m
    record a one-line "no pack needed" `decision` artifact on the container and exit.
 6. **SYNTHESISE THE PACK** following `references/pack-template.md`: the verify-first
    preamble, foundation/why, cross-cutting requirements & shared behaviour (the
-   write-once material), the external-dependency boundary, and a dated per-leaf
-   acceptance index. **Tag every code-level claim `[VERIFY]`** with an explicit
+   write-once material), the external-dependency boundary, and a per-leaf
+   acceptance **reference** (pointers to each member's `spec` + its live
+   `done_looks_like` — never a frozen copy). **Tag every code-level claim `[VERIFY]`** with an explicit
    assumption tied to a code location — you are asserting, not confirming.
 7. **WRITE TO THE GRAPH** (additive):
-   - sharpen each member's `done_looks_like` (`haven item update` / `haven_update_item`);
+   - groom each member — firm `done_looks_like` and write/firm its `spec` where
+     warranted (`haven item update` / `haven_update_item`; wf 3 + wf 10);
    - add **dependency edges** for any real ordering you found (`haven depend` /
      `haven_add_edge {kind:"grouping"|"dependency"}`);
    - write the pack as a `spec` artifact `context-pack.md` on the **container**

@@ -10,9 +10,9 @@ Conventions:
   and tie it to a concrete code location/assumption. You are asserting, not confirming —
   the verify step (against live code in a brownfield build, or human sign-off in a
   greenfield one) is plan mode's job.
-- The **canonical** acceptance for each leaf is its node `done_looks_like`. The acceptance
-  index below is a **dated snapshot** for reading convenience; if they disagree, the node
-  wins.
+- The **canonical** acceptance for each leaf is its node `done_looks_like`, read live.
+  Section 4 below is a **reference** to each member (ref + spec pointer), **not** a frozen
+  copy of its acceptance — so re-grooming a leaf can never make this pack drift.
 - Refer to members by **Haven ref** (e.g. `HV-3`), never by a pack-local id — there is no
   second backlog.
 
@@ -45,7 +45,8 @@ This pack describes work that does **not exist yet**. Treat every statement belo
    lineage), then regenerate this pack.
 4. This same pack is your **doneness yardstick**: a leaf is done when its `done_looks_like`
    — plus any shared requirement it inherits from section 2 — is demonstrably met. The
-   canonical acceptance is the node's field, not the snapshot in section 4.
+   canonical acceptance is the node's live `done_looks_like` (read it from `haven graph` or
+   the member's `spec`), which section 4 points at rather than copies.
 
 ## 1. Foundation — why this group exists
 <the shared purpose / why, in a few lines. What is this batch delivering and for whom.>
@@ -62,8 +63,11 @@ Tag code-level claims [VERIFY].>
 - UNBUILT deps: name them + status + "pull into the group, or it blocks <ref>". A decision
   for the human — this pack does not auto-expand scope.>
 
-## 4. Per-leaf acceptance index  (snapshot of <DATE> — node `done_looks_like` is canonical)
-- **<REF>** — <title>: <done_looks_like>. Depends on: <refs or none>. [VERIFY: <assumption>]
+## 4. Per-leaf acceptance — reference (LIVE; not frozen)
+Canonical acceptance is each member's live `done_looks_like` + its own `spec` — read them
+now (`haven graph` / `haven_get_item`), don't trust a copy. This is just the index of
+members and where to look:
+- **<REF>** — <title>. Acceptance: node `done_looks_like` (live). Spec: `<REF>`'s `spec` artifact, if any. Depends on: <refs or none>. [VERIFY: <assumption>]
 - **<REF>** — …
 ```
 

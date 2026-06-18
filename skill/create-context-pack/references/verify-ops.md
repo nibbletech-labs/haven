@@ -56,12 +56,13 @@ For each member, read its `depends_on` (from step 0 / step 4). For a dependency 
 
 No mutation here — it shapes pack sections 3 and the dependency edges you wire in step 7.
 
-## 3. Precondition check
+## 3. Groom each member (precondition)
 
-A member is prep-ready if it's a sealed leaf (has `done_looks_like`; `ready` or close)
-and not a container. If any targeted member is coarse/un-planned (no acceptance, or still
-needs decomposing): **STOP** and tell the user to run `orchestrate-plan` on it first.
-Don't decompose here.
+Bring every member to a sealed leaf via the `haven` **groom** workflow (wf 3): firm its
+`done_looks_like` to a concrete, testable bar, and write/firm its `spec` (wf 10) where it
+warrants one. Groom under-specified-but-coherent members **in place**; only a member that
+needs **decomposition** (structurally too big) → **STOP** and run `orchestrate-plan` on it
+first. Don't decompose here.
 
 **Clash check — single active pack per leaf.** `haven_get_item` returns a derived
 `context_pack` pointer (and `context_pack_clash`) on each leaf. Before claiming a member
@@ -95,14 +96,19 @@ sequencing / risky parallelism?). If **none** apply → simple batch, no pack:
 ## 6. Synthesise the pack
 
 Build the `context-pack.md` body per `references/pack-template.md` — section 0 verbatim,
-sections 1–4 synthesised, every code-level claim tagged `[VERIFY]`. This is reasoning,
-not an op.
+sections 1–3 synthesised and section 4 a live **reference** to each member's `spec` +
+`done_looks_like` (not a frozen copy), every code-level claim tagged `[VERIFY]`. This is
+reasoning, not an op.
 
 ## 7. Write to the graph (all additive)
 
-**a. Sharpen each member's acceptance** (one call per member):
+**a. Groom each member — acceptance + spec** (one call per member; this is `haven`
+workflow 3 applied per leaf): firm `done_looks_like` to a concrete, testable bar, and
+write/firm a `spec` artifact on the member where it warrants one (workflow 10).
 - CLI: `haven item update <ref> --done-looks-like "<concrete, testable>" -p <P>`
+  (+ `haven artifact add <ref> --role spec --name spec.md --content "<…>" -p <P>` if it needs a spec)
 - MCP: `haven_update_item {"project":"<P>","ref":"<ref>","done_looks_like":"<…>"}`
+  (+ `haven_add_artifact {"project":"<P>","ref":"<ref>","role":"spec","name":"spec.md","content":"<…>"}` if needed)
 
 **b. Wire real ordering** found in step 2 (one edge per call; `from`=blocked/consumer,
 `to`=blocker/producer; the store rejects cycles — don't pre-check):
