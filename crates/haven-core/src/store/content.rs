@@ -16,7 +16,7 @@ use crate::model::*;
 
 use super::{new_uuid, ItemFilter, Store};
 
-/// The canonical filename of a context-pack artifact. `prepare-for-dev` writes
+/// The canonical filename of a context-pack artifact. `create-context-pack` writes
 /// it as a `spec` artifact on a group's container; the pack-pointer derivation
 /// (HV-75) reads it. This string is the contract between the skill and the store
 /// — keep them in sync.
@@ -119,7 +119,7 @@ impl Store {
     }
 
     /// Public entry to [`Self::context_pack_for_node`] by selector — used by the
-    /// CLI and by `prepare-for-dev`'s clash precondition.
+    /// CLI and by `create-context-pack`'s clash precondition.
     pub fn context_pack_for(
         &self,
         project: Option<&str>,

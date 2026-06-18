@@ -1,7 +1,7 @@
 # Verify-ops — the exact CLI and MCP call for each flow step
 
 The canonical argument reference is the `haven` skill's `references/surface-map.md`
-(CLI⇄MCP differences). This file is `prepare-for-dev`'s per-step cheat-sheet. `<P>` =
+(CLI⇄MCP differences). This file is `create-context-pack`'s per-step cheat-sheet. `<P>` =
 the project key.
 
 > **Two surfaces, one contract.** Locally use the `haven` CLI; remotely use the
@@ -135,4 +135,4 @@ pointer instead of walking `edges.groups` and guessing which container holds the
 > a leaf MUST read its `context_pack` and load that container's `spec` `context-pack.md`
 > (`haven_get_artifact {ref: container, role:"spec"}`) **before building** — never build a
 > member naked. If the leaf carries `context_pack_clash` instead of `context_pack`, do
-> **not** build: route back to prepare-for-dev to resolve the clash first.
+> **not** build: route back to create-context-pack to resolve the clash first.

@@ -191,7 +191,7 @@ membership record.
 
 If any apply, **do not silently dispatch the items in isolation.** The group needs
 an integrated execution view first:
-1. If the `prepare-for-dev` skill is available, use it: it writes the integrated pack
+1. If the `create-context-pack` skill is available, use it: it writes the integrated pack
    (with a verify-first preamble) as a `spec` artifact on the release/phase node and
    sharpens each member's acceptance.
 2. If that workflow is unavailable or unknown, pause and clarify the integrated

@@ -1,0 +1,14 @@
+name: create-context-pack
+agent: codex
+skill: create-context-pack
+mcp:
+  server: haven
+  command: haven
+  args:
+    - mcp
+discovery:
+  agents_md: AGENTS.md
+  skill_paths:
+    - .agents/skills/create-context-pack
+    - ~/.agents/skills/create-context-pack
+    - /etc/codex/skills/create-context-pack

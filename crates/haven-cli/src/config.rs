@@ -174,22 +174,22 @@ const ORCHESTRATE_PLAN_SKILL_FILES: &[(&str, &str)] = &[
     ),
 ];
 
-const PREPARE_FOR_DEV_SKILL_FILES: &[(&str, &str)] = &[
+const CREATE_CONTEXT_PACK_SKILL_FILES: &[(&str, &str)] = &[
     (
         "SKILL.md",
-        include_str!("../../../skill/prepare-for-dev/SKILL.md"),
+        include_str!("../../../skill/create-context-pack/SKILL.md"),
     ),
     (
         "references/pack-template.md",
-        include_str!("../../../skill/prepare-for-dev/references/pack-template.md"),
+        include_str!("../../../skill/create-context-pack/references/pack-template.md"),
     ),
     (
         "references/verify-ops.md",
-        include_str!("../../../skill/prepare-for-dev/references/verify-ops.md"),
+        include_str!("../../../skill/create-context-pack/references/verify-ops.md"),
     ),
     (
         "agents/openai.yaml",
-        include_str!("../../../skill/prepare-for-dev/agents/openai.yaml"),
+        include_str!("../../../skill/create-context-pack/agents/openai.yaml"),
     ),
 ];
 
@@ -206,8 +206,8 @@ const SKILL_REGISTRY: &[Skill] = &[
         files: ORCHESTRATE_PLAN_SKILL_FILES,
     },
     Skill {
-        name: "prepare-for-dev",
-        files: PREPARE_FOR_DEV_SKILL_FILES,
+        name: "create-context-pack",
+        files: CREATE_CONTEXT_PACK_SKILL_FILES,
     },
 ];
 

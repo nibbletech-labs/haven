@@ -1,23 +1,25 @@
 ---
-name: prepare-for-dev
+name: create-context-pack
 description: >-
-  Prepare an already-planned group of Haven items for development: enrich them
-  into a build-ready "context pack" — shared foundation, cross-cutting
-  requirements, sharpened acceptance, and a verify-first preamble — written onto
-  the group's top node, ready to hand to plan mode. Use when you have a set of
-  planned leaves you're about to build together and want one integrated brief —
-  e.g. "ready these items for dev", "prepare HV-3 and HV-4 for development",
-  "build a context pack for this release/phase", "create a build brief for these
-  items". Sits on the GROUPING axis, above the `haven` skill and after
-  `orchestrate-plan`: it does NOT decompose a goal (use `orchestrate-plan`) and
-  it does NOT execute or write code (that's plan mode). Not for single ad-hoc
-  captures or for coarse/un-planned items.
+  Create a build-ready spec (a "context pack") for an already-planned group of
+  Haven items: enrich them into one integrated brief — shared foundation,
+  cross-cutting requirements, sharpened acceptance, and a verify-first preamble —
+  written as a `spec` artifact onto the group's top node, ready to hand to plan
+  mode. The headline case is a greenfield build: one large spec for the whole of
+  a phase-1 build, establishing the contracts the leaves conform to. Use when you
+  have a set of planned leaves you're about to build together and want one brief —
+  e.g. "spec out phase 1 of the build", "write the build spec for this phase",
+  "create a context pack for HV-3 and HV-4", "ready these items for dev", "prepare
+  HV-3 and HV-4 for development". Sits on the GROUPING axis, above the `haven`
+  skill and after `orchestrate-plan`: it does NOT decompose a goal (use
+  `orchestrate-plan`) and it does NOT execute or write code (that's plan mode).
+  Not for single ad-hoc captures or for coarse/un-planned items.
 ---
 
-# prepare-for-dev — the build-prep half of orchestrate
+# create-context-pack — the build-prep (spec) half of orchestrate
 
 You take a **chosen set of already-planned Haven leaves you're about to build
-together** and turn them into a single, verify-first **context pack** on the
+together** and turn them into a single, verify-first **spec (context pack)** on the
 group's top node — shared foundation, cross-cutting requirements, sharpened
 per-leaf acceptance, and an explicit boundary of what the group depends on.
 You build the brief; **you execute nothing** — no code, no agents dispatched,
@@ -27,12 +29,12 @@ belong to native **plan mode**, which reads this pack as its input.
 ## Where it sits (the planner family — meet only at the graph)
 
 `orchestrate-plan` (decompose a goal → graph, **decomposition** axis) →
-**`prepare-for-dev`** (enrich + verify-prep a chosen group, **grouping** axis) →
+**`create-context-pack`** (enrich + verify-prep a chosen group, **grouping** axis) →
 native **plan mode** (the code-level plan + the human "go").
 
 - `orchestrate-plan` stops at **work-grain** leaves (what / why / done, deliberately
   *above* the code). It reasons over decomposition and never touches grouping.
-- `prepare-for-dev` runs **after** planning, over the **grouping** axis the planner
+- `create-context-pack` runs **after** planning, over the **grouping** axis the planner
   ignores, and writes a cross-cutting synthesis for one group you're about to build.
 - Plan mode does the **code-grain** layer (which files, what approach) that goes
   stale the instant code moves — so it's never frozen into the graph.
@@ -144,6 +146,15 @@ Because corrections are Haven ops on the canonical fields, the brief and the gra
 never diverge. The same pack is the **doneness yardstick** on the way out (a leaf is
 done when its `done_looks_like` + any inherited shared requirement is met).
 
+**Greenfield vs brownfield — what `[VERIFY]` checks against.** In a **brownfield**
+batch the members touch existing code, so `[VERIFY]` means *reality-check this
+assumption against the live code* before building. In a **greenfield** phase-1 build
+there's little or no code yet — the spec is the **primary design artifact**,
+establishing the contracts the leaves will conform to — so its `[VERIFY]` items are
+**design decisions to lock down with the human**, not facts to confirm against code.
+The verify-first discipline is identical (nothing is assumed silently); only what you
+check *against* differs — live code, or human sign-off.
+
 ## Convergence / fresh-session handoff
 
 Done when the targeted group has a `context-pack.md` on its container (or a "no pack
@@ -151,7 +162,7 @@ needed" decision), every member carries concrete `done_looks_like`, and real ord
 is wired. Because all state is in the graph, a cold session re-runs step 0, re-reads
 the container + members, and continues — re-running is idempotent (it overwrites its
 own `context-pack.md` and grouping/edge inserts are no-ops). v1 ships a manual resume:
-`/prepare-for-dev <container-ref-or-item-refs>`.
+`/create-context-pack <container-ref-or-item-refs>`.
 
 ## Deferred to v2 / not in this skill
 
