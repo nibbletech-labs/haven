@@ -59,7 +59,13 @@ The mistakes that actually bite — internalise these:
 - **Capture ≠ commit.** "Add to the backlog" creates a floating, uncommitted
   `discovery` node. Don't commit, prioritise, or wire it unless the user engages.
 - **`ready` requires `done_looks_like`.** An item with no acceptance can't be
-  verified or cleanly dispatched. Set it when you mark something `ready`.
+  verified or cleanly dispatched. Set it when you mark something `ready` — the
+  store now **enforces** this: a status→`ready` transition (or clearing
+  acceptance on a `ready` item) is refused without it.
+- **Don't build an ungroomed item.** Before dispatching work to a builder
+  (workflow 4), confirm it's `ready` with concrete `done_looks_like`; if not,
+  groom it first (workflow 3) or bounce to planning. Building an unverifiable
+  target is the mistake the acceptance contract exists to prevent.
 - **Empty `next` → diagnose, don't invent.** Call `next --explain` /
   `haven_next_explain`; it tells you *why* (uncommitted / not-ready / blocked /
   waiting / owner-mismatch). Never fabricate work.

@@ -141,6 +141,14 @@ ordered plan.
 
 **Trigger:** the user (or an orchestrator) asks what to work on.
 
+**Preflight — groom before you build (never build an ungroomed item).** Before
+handing any item to a builder — a named ref *or* one pulled from `haven next` —
+confirm it is **`ready` with a non-empty `done_looks_like`**. If it's still
+`discovery`/`definition`, or has no acceptance, **groom it to ready first**
+(workflow 3) or bounce it to planning — never build against a target you can't
+verify. The store enforces this (`ready` requires `done_looks_like`), but treat
+it as deliberate intent, not something to discover by tripping the guard.
+
 ```bash
 haven next --pretty                 # top of the dispatch queue
 haven next --owner human --limit 3  # what the human could pick up
