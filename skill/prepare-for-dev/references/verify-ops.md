@@ -1,0 +1,113 @@
+# Verify-ops — the exact CLI and MCP call for each flow step
+
+The canonical argument reference is the `haven` skill's `references/surface-map.md`
+(CLI⇄MCP differences). This file is `prepare-for-dev`'s per-step cheat-sheet. `<P>` =
+the project key.
+
+> **Two surfaces, one contract.** Locally use the `haven` CLI; remotely use the
+> `haven_*` MCP tools. **Over MCP there is no sticky session — pass `project` on every
+> call.** **No batch over MCP:** `haven_add_edge` / `haven_update_item` /
+> `haven_add_artifact` are one entity per call; loop. The CLI can pack (`haven group <g>
+> --add a --add b`); the skill never depends on that.
+
+## 0. Reorient — the whole graph in one read
+
+- CLI: `haven graph -p <P>`
+- MCP: `haven_graph {"project":"<P>"}`
+
+Returns live nodes (compact: ref, title, type, status, committed, owner, priority, wait,
+**and `done_looks_like`**) + a flat edge list `{kind, from, to}`. Resolve the project
+first if unknown: CLI `haven project list`; MCP `haven_list_projects`.
+
+## 1. Resolve the target — find or create the grouping container
+
+The input is a **single item or an explicit set of refs**. Determine their common
+container from step-0's grouping edges (a `release`/`phase` node they all belong to).
+
+- **If a container already exists** (members share one `release`/`phase` group): use it.
+- **If not, create one and group the members in:**
+  - CLI: `haven item add "<group title> — dev batch" --type phase -p <P>` → returns
+    `<CONTAINER>`; then `haven group <CONTAINER> --add <ref> --add <ref> … -p <P>`.
+  - MCP: `haven_add_item {"project":"<P>","title":"…","type":"phase"}` → `<CONTAINER>`;
+    then **one call per member** `haven_add_edge {"project":"<P>","kind":"grouping",
+    "from":"<CONTAINER>","to":"<ref>"}`.
+
+> **Grouping direction:** `from` / the group arg is the **container**; `to` /
+> `--add <ref>` is the **member** (`group_id`, `member_id`). Container type **must** be
+> `release`/`phase`/`gate` or the store rejects it; this skill uses `phase` (or an
+> existing `release`). Grouping is **additive and idempotent** — a member keeps its
+> decomposition parent and any other groups; re-adding is a no-op.
+
+## 2. Dependency-closure check (pure reasoning on step-0 edges, then context)
+
+For each member, read its `depends_on` (from step 0 / step 4). For a dependency `d`
+**outside** the target set:
+- `d` is `done` → record its output as read-only context in pack section 3 (read it via
+  step 4 if you need its acceptance/artifacts).
+- `d` is not done → list it in pack section 3 as a boundary/blocker for the human. **Do
+  not** add `d` to the group yourself.
+
+No mutation here — it shapes pack sections 3 and the dependency edges you wire in step 7.
+
+## 3. Precondition check
+
+A member is prep-ready if it's a sealed leaf (has `done_looks_like`; `ready` or close)
+and not a container. If any targeted member is coarse/un-planned (no acceptance, or still
+needs decomposing): **STOP** and tell the user to run `orchestrate-plan` on it first.
+Don't decompose here.
+
+## 4. Read each member's detail
+
+- CLI: `haven item get <ref> --include edges,artifacts -p <P>`
+- MCP: `haven_get_item {"project":"<P>","ref":"<ref>","include":["edges","artifacts"]}`
+
+Read `body`/`why`/`done_looks_like` + edges. From a member, `edges.groups` shows the
+container; `edges.depends_on` drives step 2.
+
+## 5. Shared-context assessment
+
+Apply the `haven` workflow-5 heuristic (shared architecture / contracts / data model /
+sequencing / risky parallelism?). If **none** apply → simple batch, no pack:
+
+- CLI: `haven artifact add <CONTAINER> --role decision --name batch-decision.md --content "Simple batch — no shared architecture; dispatch members individually." -p <P>`
+- MCP: `haven_add_artifact {"project":"<P>","ref":"<CONTAINER>","role":"decision","name":"batch-decision.md","content":"…"}`
+
+…then stop. Otherwise continue to 6.
+
+## 6. Synthesise the pack
+
+Build the `context-pack.md` body per `references/pack-template.md` — section 0 verbatim,
+sections 1–4 synthesised, every code-level claim tagged `[VERIFY]`. This is reasoning,
+not an op.
+
+## 7. Write to the graph (all additive)
+
+**a. Sharpen each member's acceptance** (one call per member):
+- CLI: `haven item update <ref> --done-looks-like "<concrete, testable>" -p <P>`
+- MCP: `haven_update_item {"project":"<P>","ref":"<ref>","done_looks_like":"<…>"}`
+
+**b. Wire real ordering** found in step 2 (one edge per call; `from`=blocked/consumer,
+`to`=blocker/producer; the store rejects cycles — don't pre-check):
+- CLI: `haven depend <consumer> --on <producer> -p <P>`
+- MCP: `haven_add_edge {"project":"<P>","kind":"dependency","from":"<consumer>","to":"<producer>"}`
+
+**c. Write the pack onto the container** (the content channel writes the bytes):
+- CLI: `haven artifact add <CONTAINER> --role spec --name context-pack.md --content "<pack>" -p <P>`
+  (or `--file <path>` if you wrote it to disk under the item dir)
+- MCP: `haven_add_artifact {"project":"<P>","ref":"<CONTAINER>","role":"spec","name":"context-pack.md","content":"<pack>"}`
+
+**d. Point the container's `why` at the pack:**
+- CLI: `haven item update <CONTAINER> --why "Context pack: see spec artifact context-pack.md" -p <P>`
+- MCP: `haven_update_item {"project":"<P>","ref":"<CONTAINER>","why":"Context pack: see spec artifact context-pack.md"}`
+
+> **No status flips.** Do **not** set any member `in_progress` and do **not** complete
+> anything — execution is plan mode's, not this skill's.
+
+## 8. Hand off + read-back
+
+Report the container ref. The next session / plan mode takes the pack as input:
+- CLI: `haven artifact get <CONTAINER> --role spec --path context-pack.md -p <P>`
+- MCP: `haven_get_artifact {"project":"<P>","ref":"<CONTAINER>","role":"spec"}` → `{path, role, content}`
+
+A leaf inherits the pack by reading **up** one hop: `haven_get_item {ref, include:["edges"]}`
+→ `edges.groups` → `haven_get_artifact` on that container.

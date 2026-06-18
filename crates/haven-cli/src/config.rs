@@ -174,6 +174,25 @@ const ORCHESTRATE_PLAN_SKILL_FILES: &[(&str, &str)] = &[
     ),
 ];
 
+const PREPARE_FOR_DEV_SKILL_FILES: &[(&str, &str)] = &[
+    (
+        "SKILL.md",
+        include_str!("../../../skill/prepare-for-dev/SKILL.md"),
+    ),
+    (
+        "references/pack-template.md",
+        include_str!("../../../skill/prepare-for-dev/references/pack-template.md"),
+    ),
+    (
+        "references/verify-ops.md",
+        include_str!("../../../skill/prepare-for-dev/references/verify-ops.md"),
+    ),
+    (
+        "agents/openai.yaml",
+        include_str!("../../../skill/prepare-for-dev/agents/openai.yaml"),
+    ),
+];
+
 /// Every skill `haven setup` / `haven skill install` lay down. Add a skill by
 /// adding its files const + an entry here; install / refresh / doctor all
 /// iterate this registry.
@@ -185,6 +204,10 @@ const SKILL_REGISTRY: &[Skill] = &[
     Skill {
         name: "orchestrate-plan",
         files: ORCHESTRATE_PLAN_SKILL_FILES,
+    },
+    Skill {
+        name: "prepare-for-dev",
+        files: PREPARE_FOR_DEV_SKILL_FILES,
     },
 ];
 

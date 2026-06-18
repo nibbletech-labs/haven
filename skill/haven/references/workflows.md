@@ -191,8 +191,9 @@ membership record.
 
 If any apply, **do not silently dispatch the items in isolation.** The group needs
 an integrated execution view first:
-1. If a Context Pack / execution-pack workflow is available, recommend using it and
-   attach the resulting pack as a `spec` artifact on the release/phase node.
+1. If the `prepare-for-dev` skill is available, use it: it writes the integrated pack
+   (with a verify-first preamble) as a `spec` artifact on the release/phase node and
+   sharpens each member's acceptance.
 2. If that workflow is unavailable or unknown, pause and clarify the integrated
    architecture with the user. Capture the result as a short `spec` or `decision`
    artifact on the release/phase node before dispatch.

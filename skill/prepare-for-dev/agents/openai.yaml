@@ -1,0 +1,14 @@
+name: prepare-for-dev
+agent: codex
+skill: prepare-for-dev
+mcp:
+  server: haven
+  command: haven
+  args:
+    - mcp
+discovery:
+  agents_md: AGENTS.md
+  skill_paths:
+    - .agents/skills/prepare-for-dev
+    - ~/.agents/skills/prepare-for-dev
+    - /etc/codex/skills/prepare-for-dev

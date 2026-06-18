@@ -105,6 +105,20 @@ fn skill_install_and_setup_write_the_snapshot() {
         .unwrap()
         .contains("name: orchestrate-plan"));
 
+    // …and the third skill, prepare-for-dev.
+    assert!(out["installed"]["claude_prepare-for-dev"]
+        .as_str()
+        .unwrap()
+        .ends_with("skills/prepare-for-dev"));
+    let pfd_dir = h.home.join(".claude/skills/prepare-for-dev");
+    assert!(pfd_dir.join("SKILL.md").exists());
+    assert!(pfd_dir.join("references/pack-template.md").exists());
+    assert!(pfd_dir.join("references/verify-ops.md").exists());
+    assert!(pfd_dir.join("agents/openai.yaml").exists());
+    assert!(std::fs::read_to_string(pfd_dir.join("SKILL.md"))
+        .unwrap()
+        .contains("name: prepare-for-dev"));
+
     let codex = h.json(&["skill", "install", "--agent", "codex"]);
     assert!(codex["installed"]["codex_haven"]
         .as_str()
@@ -114,10 +128,18 @@ fn skill_install_and_setup_write_the_snapshot() {
         .as_str()
         .unwrap()
         .ends_with("skills/orchestrate-plan"));
+    assert!(codex["installed"]["codex_prepare-for-dev"]
+        .as_str()
+        .unwrap()
+        .ends_with("skills/prepare-for-dev"));
     assert!(h.home.join(".agents/skills/haven/SKILL.md").exists());
     assert!(h
         .home
         .join(".agents/skills/orchestrate-plan/SKILL.md")
+        .exists());
+    assert!(h
+        .home
+        .join(".agents/skills/prepare-for-dev/SKILL.md")
         .exists());
 
     // `setup` installs both default agent skills (alongside MCP wiring) — unless --no-skill.
@@ -147,13 +169,15 @@ fn skill_install_can_target_one_skill() {
         .as_str()
         .unwrap()
         .ends_with("skills/orchestrate-plan"));
-    // --skill scopes the install: haven is NOT touched.
+    // --skill scopes the install: the other skills are NOT touched.
     assert!(out["installed"].get("claude_haven").is_none());
+    assert!(out["installed"].get("claude_prepare-for-dev").is_none());
     assert!(h
         .home
         .join(".claude/skills/orchestrate-plan/SKILL.md")
         .exists());
     assert!(!h.home.join(".claude/skills/haven").exists());
+    assert!(!h.home.join(".claude/skills/prepare-for-dev").exists());
 
     // An unknown skill name is a clean error envelope, not a panic.
     let err = h.fail(&["skill", "install", "--skill", "nope"]);
@@ -227,9 +251,11 @@ fn doctor_reports_install_health() {
     assert_eq!(status_of(&before, "claude_mcp"), "warn");
     assert_eq!(status_of(&before, "claude_skill_haven"), "warn");
     assert_eq!(status_of(&before, "claude_skill_orchestrate-plan"), "warn");
+    assert_eq!(status_of(&before, "claude_skill_prepare-for-dev"), "warn");
     assert_eq!(status_of(&before, "codex_mcp"), "warn");
     assert_eq!(status_of(&before, "codex_skill_haven"), "warn");
     assert_eq!(status_of(&before, "codex_skill_orchestrate-plan"), "warn");
+    assert_eq!(status_of(&before, "codex_skill_prepare-for-dev"), "warn");
     assert_eq!(status_of(&before, "agents_md"), "warn");
 
     // After setup, MCP + skill are green. Put the built binary on $PATH so the
@@ -252,9 +278,11 @@ fn doctor_reports_install_health() {
     assert_eq!(status_of(&after, "claude_mcp"), "ok");
     assert_eq!(status_of(&after, "claude_skill_haven"), "ok");
     assert_eq!(status_of(&after, "claude_skill_orchestrate-plan"), "ok");
+    assert_eq!(status_of(&after, "claude_skill_prepare-for-dev"), "ok");
     assert_eq!(status_of(&after, "codex_mcp"), "ok");
     assert_eq!(status_of(&after, "codex_skill_haven"), "ok");
     assert_eq!(status_of(&after, "codex_skill_orchestrate-plan"), "ok");
+    assert_eq!(status_of(&after, "codex_skill_prepare-for-dev"), "ok");
     assert_eq!(status_of(&after, "agents_md"), "ok");
     assert_eq!(status_of(&after, "path"), "ok");
     assert_eq!(
