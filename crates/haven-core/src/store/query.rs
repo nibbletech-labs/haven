@@ -38,6 +38,22 @@ pub struct ProjectGraph {
     pub lineage: Vec<LineageLink>,
 }
 
+/// Classify a container from the statuses of its LIVE committed descendants.
+/// Total over the input: empty → Dormant; any `in_progress` → Active; all `done`
+/// → Done; otherwise Queued. The caller supplies only committed, non-dead statuses.
+pub(crate) fn rollup_from_statuses(statuses: &[Status]) -> RollupState {
+    if statuses.is_empty() {
+        return RollupState::Dormant;
+    }
+    if statuses.contains(&Status::InProgress) {
+        return RollupState::Active;
+    }
+    if statuses.iter().all(|s| *s == Status::Done) {
+        return RollupState::Done;
+    }
+    RollupState::Queued
+}
+
 /// One living-doc anchor and the artifacts attached to it.
 #[derive(Debug, Clone, Serialize)]
 pub struct DocAnchor {
@@ -265,7 +281,7 @@ impl Store {
     /// faithful set — including `superseded`/`archived`; filter client-side.
     pub fn project_graph(&self, project: Option<&str>, lineage: bool) -> Result<ProjectGraph> {
         let (project_id, key) = self.require_project(project)?;
-        let nodes = self.list_items(project, &ItemFilter::default())?;
+        let mut nodes = self.list_items(project, &ItemFilter::default())?;
         let mut edges = Vec::new();
         edges.extend(self.edges_of_kind(
             project_id,
@@ -296,12 +312,53 @@ impl Store {
         } else {
             Vec::new()
         };
+        // Hydrate the derived rollup for every container, and the context-pack
+        // pointer for every leaf — read-only projections so a whole-graph read
+        // can triage which ready leaves carry a pack (HV-75).
+        for node in &mut nodes {
+            if node.node_type.is_container() {
+                node.rollup_state = Some(self.rollup_state_for(node.id)?);
+            } else {
+                let (pack, clash) = self.context_pack_for_node(node.id)?;
+                node.context_pack = pack;
+                node.context_pack_clash = clash;
+            }
+        }
         Ok(ProjectGraph {
             project: key,
             nodes,
             edges,
             lineage,
         })
+    }
+
+    /// Statuses of a container's LIVE committed descendants, walking the union of
+    /// decomposition (parent→child) and grouping (group→member) edges. The
+    /// recursive set dedups ids, so a node reachable via both edge kinds is counted
+    /// once; dead nodes (superseded/archived) are excluded so the rollup stays a
+    /// total function over live committed work.
+    pub(crate) fn committed_descendant_statuses(&self, node_id: i64) -> Result<Vec<Status>> {
+        let mut stmt = self.conn.prepare(
+            "WITH RECURSIVE sub(id) AS (
+                 SELECT ?1
+                 UNION
+                 SELECT e.child_id FROM decomposition_edges e JOIN sub ON e.parent_id = sub.id
+                 UNION
+                 SELECT e.member_id FROM grouping_edges e JOIN sub ON e.group_id = sub.id
+             )
+             SELECT n.status FROM nodes n
+             WHERE n.id IN (SELECT id FROM sub) AND n.id <> ?1
+               AND n.committed = 1 AND n.status NOT IN ('superseded','archived')",
+        )?;
+        let rows = stmt.query_map([node_id], |r| r.get::<_, Status>(0))?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// The derived [`RollupState`] for one container node.
+    pub(crate) fn rollup_state_for(&self, node_id: i64) -> Result<RollupState> {
+        Ok(rollup_from_statuses(
+            &self.committed_descendant_statuses(node_id)?,
+        ))
     }
 
     /// Project-level living docs: all live anchor nodes plus their artifacts.

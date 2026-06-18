@@ -94,7 +94,10 @@ pack's section layout + the verbatim preamble are in `references/pack-template.m
 3. **PRECONDITION CHECK.** Members must be already-sealed planned leaves (`ready`
    with `done_looks_like`, or close). If any are coarse/un-planned → **STOP and route
    to `orchestrate-plan`**. This skill fleshes out a planned group; it does not
-   decompose.
+   decompose. **Single active pack per leaf:** a member that already carries a
+   `context_pack` pointer for a *different* container (or a `context_pack_clash`) is
+   governed by another pack — **STOP and surface the clash**, never auto-pick or merge
+   (`references/verify-ops.md` step 3).
 4. **READ MEMBERS.** `haven item get <ref> --include edges,artifacts` /
    `haven_get_item` per member — read `body`/`why`/`done_looks_like` + edges.
 5. **SHARED-CONTEXT ASSESSMENT** (the `haven` workflow-5 heuristic). If members share
@@ -114,6 +117,10 @@ pack's section layout + the verbatim preamble are in `references/pack-template.m
    - set the container's `why` to a one-line pointer at the pack.
 8. **HAND OFF.** Report the container ref and tell the next session / plan mode to
    take its `spec` `context-pack.md` as input. The two skills meet only at the graph.
+   Each prepped leaf now **advertises** its pack: `haven_get_item` / `haven_graph` return a
+   derived `context_pack {container, artifact}` pointer, so a dispatcher loads the pack
+   *before* building rather than building the member naked. A leaf surfacing a
+   `context_pack_clash` must not be built until the clash is resolved.
 
 ## Safety — every write is additive
 

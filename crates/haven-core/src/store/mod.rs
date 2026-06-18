@@ -70,9 +70,12 @@ pub(crate) fn item_from_row(row: &Row<'_>) -> rusqlite::Result<Item> {
         archived_at: row.get(17)?,
         revision: row.get(18)?,
         sync_state: row.get(19)?,
+        rollup_state: None,
         edges: None,
         artifacts: None,
         lineage: None,
+        context_pack: None,
+        context_pack_clash: None,
     })
 }
 

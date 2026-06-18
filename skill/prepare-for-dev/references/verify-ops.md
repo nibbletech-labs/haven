@@ -63,6 +63,17 @@ and not a container. If any targeted member is coarse/un-planned (no acceptance,
 needs decomposing): **STOP** and tell the user to run `orchestrate-plan` on it first.
 Don't decompose here.
 
+**Clash check — single active pack per leaf.** `haven_get_item` returns a derived
+`context_pack` pointer (and `context_pack_clash`) on each leaf. Before claiming a member
+into this build batch, inspect it: if it already carries a `context_pack` pointing at a
+**different** container — or a `context_pack_clash` — it's already governed by another
+pack. **STOP and surface it**; never auto-pick or merge. Resolve by pulling the member out
+of the other batch, or re-prepping the existing container. (Re-prepping the **same**
+container is fine — it overwrites its own pack, and dedup-by-container means that isn't a
+clash.)
+- CLI: `haven item get <ref> --include edges -p <P>` → inspect `context_pack`
+- MCP: `haven_get_item {"project":"<P>","ref":"<ref>","include":["edges"]}` → inspect `context_pack`
+
 ## 4. Read each member's detail
 
 - CLI: `haven item get <ref> --include edges,artifacts -p <P>`
@@ -116,5 +127,12 @@ Report the container ref. The next session / plan mode takes the pack as input:
 - CLI: `haven artifact get <CONTAINER> --role spec --path context-pack.md -p <P>`
 - MCP: `haven_get_artifact {"project":"<P>","ref":"<CONTAINER>","role":"spec"}` → `{path, role, content}`
 
-A leaf inherits the pack by reading **up** one hop: `haven_get_item {ref, include:["edges"]}`
-→ `edges.groups` → `haven_get_artifact` on that container.
+A leaf now **advertises** its pack: `haven_get_item {ref}` returns a derived `context_pack`
+`{container, artifact}` (and `haven_graph` carries it per leaf), so a dispatcher reads one
+pointer instead of walking `edges.groups` and guessing which container holds the pack.
+
+> **Consumer rule — load the pack before building.** Any dev / plan-mode session that pulls
+> a leaf MUST read its `context_pack` and load that container's `spec` `context-pack.md`
+> (`haven_get_artifact {ref: container, role:"spec"}`) **before building** — never build a
+> member naked. If the leaf carries `context_pack_clash` instead of `context_pack`, do
+> **not** build: route back to prepare-for-dev to resolve the clash first.

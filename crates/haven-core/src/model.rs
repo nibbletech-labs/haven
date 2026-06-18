@@ -66,6 +66,16 @@ sql_enum! {
     }
 }
 
+impl NodeType {
+    /// Container nodes that own a subtree and carry a derived [`RollupState`].
+    pub fn is_container(self) -> bool {
+        matches!(
+            self,
+            NodeType::Anchor | NodeType::Release | NodeType::Phase | NodeType::Gate
+        )
+    }
+}
+
 sql_enum! {
     /// Maturity axis — how well-defined a node is.
     Status {
@@ -123,6 +133,22 @@ sql_enum! {
 sql_enum! {
     /// Per-row sync status (servo pattern).
     SyncState { Local => "local", Synced => "synced", Failed => "failed" }
+}
+
+/// A container's effective state, derived ON READ from its committed subtree —
+/// never stored, never parsed back (so no `sql_enum!`): a pure read projection.
+/// Computed for container nodes only; leaves carry `None`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RollupState {
+    /// No live committed descendants — nothing has been committed to yet.
+    Dormant,
+    /// Committed work exists, but none has started.
+    Queued,
+    /// At least one committed descendant is `in_progress`.
+    Active,
+    /// Every live committed descendant is `done`.
+    Done,
 }
 
 /// A project — namespace for a backlog, one per product/repo.
@@ -210,6 +236,20 @@ pub struct LineageEvent {
     pub to: Vec<String>,
 }
 
+/// The context pack that governs building a leaf: the grouping container that
+/// carries it, plus the pack artifact's name. Derived on read from
+/// `member --grouping--> container` where the container holds a `spec`
+/// `context-pack.md` artifact — never stored, so there is no second source of
+/// truth. A leaf claimed by more than one packed container surfaces a clash
+/// instead (see `Item::context_pack_clash`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ContextPack {
+    /// The release/phase container whose `spec` artifact is the pack.
+    pub container: String,
+    /// The pack artifact's name (always `context-pack.md`).
+    pub artifact: String,
+}
+
 /// The serialized view of a node row — the unit the CLI and MCP return.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Item {
@@ -252,6 +292,12 @@ pub struct Item {
     pub revision: i64,
     pub sync_state: SyncState,
 
+    /// Derived container rollup, computed on read (never stored, never parsed
+    /// back). `Some` only for container nodes; `None` for leaves and wherever it
+    /// hasn't been hydrated. Serializes out but is ignored on deserialize.
+    #[serde(skip_serializing_if = "Option::is_none", skip_deserializing)]
+    pub rollup_state: Option<RollupState>,
+
     // Optional includes (SPEC §2 `item get --include`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub edges: Option<Edges>,
@@ -259,6 +305,17 @@ pub struct Item {
     pub artifacts: Option<Vec<Artifact>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lineage: Option<Vec<LineageEvent>>,
+
+    /// The context pack governing this leaf's build, derived on read (never
+    /// stored). `Some` only when exactly one grouping container carries the
+    /// pack; `None` when zero — or when there's a clash (see below).
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub context_pack: Option<ContextPack>,
+    /// Set *instead of* `context_pack` when the leaf is claimed by more than one
+    /// packed container — the conflicting container refs. A dispatcher must not
+    /// build against a guessed pack; the clash is resolved (re-prepped) first.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub context_pack_clash: Option<Vec<String>>,
 }
 
 #[cfg(test)]

@@ -84,6 +84,8 @@ enum Command {
     },
     /// The ready-to-dispatch query.
     Next(NextArgs),
+    /// Untriaged floaters: uncommitted, live, no acceptance yet — the triage queue.
+    Inbox(InboxArgs),
     /// Decomposition edges: HV-3 is composed of HV-7, HV-8.
     Decompose(DecomposeArgs),
     /// Dependency edges: HV-5 depends on (is blocked by) HV-4.
@@ -570,6 +572,19 @@ struct NextArgs {
 }
 
 #[derive(Args)]
+struct InboxArgs {
+    /// Filter by owner kind: human | ai.
+    #[arg(long)]
+    owner: Option<String>,
+    /// Return at most N items.
+    #[arg(long)]
+    limit: Option<usize>,
+    /// Skip the first N items.
+    #[arg(long)]
+    offset: Option<usize>,
+}
+
+#[derive(Args)]
 struct DecomposeArgs {
     parent: String,
     #[arg(long = "into")]
@@ -709,6 +724,24 @@ fn run(cli: &Cli) -> Result<Output> {
             } else {
                 Ok(Output::Items(s.next(project, owner, a.limit)?))
             }
+        }
+        Command::Inbox(a) => {
+            let s = config::open_store()?;
+            let owner = a.owner.as_deref().map(OwnerKind::parse).transpose()?;
+            let filter = ItemFilter {
+                inbox: true,
+                owner,
+                ..Default::default()
+            };
+            let mut items = s.list_items(project, &filter)?;
+            if a.offset.is_some() || a.limit.is_some() {
+                items = items
+                    .into_iter()
+                    .skip(a.offset.unwrap_or(0))
+                    .take(a.limit.unwrap_or(usize::MAX))
+                    .collect();
+            }
+            Ok(Output::Items(items))
         }
         Command::Decompose(a) => cmd_decompose(project, a),
         Command::Depend(a) => cmd_depend(project, a),
@@ -1701,6 +1734,7 @@ fn cmd_item(project: Option<&str>, cmd: &ItemCmd) -> Result<Output> {
                 owner: opt_parse(&a.owner, OwnerKind::parse)?,
                 committed: if a.committed { Some(true) } else { None },
                 icebox: a.icebox,
+                inbox: false,
                 group: a.group.clone(),
                 wait: opt_parse(&a.wait, WaitState::parse)?,
                 stale_days: a.stale,

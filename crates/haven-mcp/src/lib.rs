@@ -10,9 +10,10 @@
 use std::io::{self, BufRead, Write};
 
 use haven_core::{
-    Artifact, ArtifactKind, ArtifactRole, CompleteInput, EdgeKind, Edges, HandoffInput, HavenError,
-    Include, Item, ItemFilter, ItemUpdate, LineageDirection, LineageEvent, NewArtifact, NewItem,
-    NodeType, OwnerKind, Result, Status, Store, WaitState, WaitUpdate,
+    Artifact, ArtifactKind, ArtifactRole, CompleteInput, ContextPack, EdgeKind, Edges,
+    HandoffInput, HavenError, Include, Item, ItemFilter, ItemUpdate, LineageDirection,
+    LineageEvent, NewArtifact, NewItem, NodeType, OwnerKind, Result, RollupState, Status, Store,
+    WaitState, WaitUpdate,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -81,6 +82,9 @@ struct McpItem<'a> {
     body: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     done_looks_like: Option<&'a str>,
+    // Graph + full views only: the derived container rollup (containers only).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    rollup_state: Option<RollupState>,
     #[serde(skip_serializing_if = "Option::is_none")]
     why: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -99,6 +103,14 @@ struct McpItem<'a> {
     artifacts: Option<&'a [Artifact]>,
     #[serde(skip_serializing_if = "Option::is_none")]
     lineage: Option<&'a [LineageEvent]>,
+
+    // Graph + full views only: the context pack governing a leaf's build, so a
+    // dispatcher reading a ready leaf sees its pack instead of building naked
+    // (HV-75). Absent from compact (list/next) to keep it lean.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    context_pack: Option<&'a ContextPack>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    context_pack_clash: Option<&'a [String]>,
 }
 
 impl<'a> McpItem<'a> {
@@ -115,6 +127,7 @@ impl<'a> McpItem<'a> {
             wait_state: item.wait_state,
             body: None,
             done_looks_like: None,
+            rollup_state: None,
             why: None,
             assignee: None,
             created_at: None,
@@ -124,6 +137,8 @@ impl<'a> McpItem<'a> {
             edges: None,
             artifacts: None,
             lineage: None,
+            context_pack: None,
+            context_pack_clash: None,
         }
     }
 
@@ -133,6 +148,9 @@ impl<'a> McpItem<'a> {
     fn graph_node(item: &'a Item) -> Self {
         McpItem {
             done_looks_like: item.done_looks_like.as_deref(),
+            rollup_state: item.rollup_state,
+            context_pack: item.context_pack.as_ref(),
+            context_pack_clash: item.context_pack_clash.as_deref(),
             ..McpItem::compact(item)
         }
     }
@@ -151,6 +169,7 @@ impl<'a> McpItem<'a> {
             wait_state: item.wait_state,
             body: item.body.as_deref(),
             done_looks_like: item.done_looks_like.as_deref(),
+            rollup_state: item.rollup_state,
             why: item.why.as_deref(),
             assignee: item.assignee.as_deref(),
             created_at: Some(&item.created_at),
@@ -163,6 +182,8 @@ impl<'a> McpItem<'a> {
             edges: item.edges.as_ref(),
             artifacts: item.artifacts.as_deref(),
             lineage: item.lineage.as_deref(),
+            context_pack: item.context_pack.as_ref(),
+            context_pack_clash: item.context_pack_clash.as_deref(),
         }
     }
 }
@@ -327,6 +348,7 @@ fn call_tool(store: &Store, name: &str, a: &Value) -> Result<Value> {
                 owner: opt_str(a, "owner").map(OwnerKind::parse).transpose()?,
                 committed: opt_bool(a, "committed"),
                 icebox: opt_bool(a, "icebox").unwrap_or(false),
+                inbox: false,
                 group: opt_str(a, "group").map(String::from),
                 wait: opt_str(a, "wait").map(WaitState::parse).transpose()?,
                 stale_days: opt_i64(a, "stale"),
@@ -334,6 +356,31 @@ fn call_tool(store: &Store, name: &str, a: &Value) -> Result<Value> {
             // Compact, paginated view: prose + machine fields stripped, bounded by
             // `limit` (default 100) from `offset`. `total` is the full match count,
             // so a truncated page is never silent.
+            let all = store.list_items(project, &filter)?;
+            let total = all.len();
+            let offset = opt_i64(a, "offset").unwrap_or(0).max(0) as usize;
+            let limit = opt_i64(a, "limit").unwrap_or(DEFAULT_LIST_LIMIT).max(0) as usize;
+            let items: Vec<McpItem> = all
+                .iter()
+                .skip(offset)
+                .take(limit)
+                .map(McpItem::compact)
+                .collect();
+            Ok(json!({
+                "total": total,
+                "count": items.len(),
+                "offset": offset,
+                "items": items,
+            }))
+        }
+        "haven_inbox" => {
+            // Untriaged floaters: uncommitted, live, no acceptance yet — the
+            // triage queue. Same compact, paginated envelope as haven_list_items.
+            let filter = ItemFilter {
+                owner: opt_str(a, "owner").map(OwnerKind::parse).transpose()?,
+                inbox: true,
+                ..Default::default()
+            };
             let all = store.list_items(project, &filter)?;
             let total = all.len();
             let offset = opt_i64(a, "offset").unwrap_or(0).max(0) as usize;
@@ -747,6 +794,8 @@ fn tools_list() -> Value {
     json!([
         { "name": "haven_list_items", "description": "List items in a project under filters. Returns a compact, paginated view {total, count, offset, items[]} — each item carries identity + axes only (ref, title, type, status, committed, owner, priority, wait); fetch prose/detail for one item with haven_get_item. Truncated to `limit` (default 100) from `offset`, in (priority, sort_key, created_at) order; `total` is the full match count. `wait` (on_human|on_dependency|on_external) answers 'what's waiting on me / stuck on X'; `stale` (days) surfaces items untouched for N+ days.",
           "inputSchema": obj(json!({"project":{"type":"string"},"status":{"type":"string"},"type":{"type":"string"},"owner":{"type":"string"},"committed":{"type":"boolean"},"icebox":{"type":"boolean"},"group":{"type":"string"},"wait":{"type":"string"},"stale":{"type":"integer"},"limit":{"type":"integer"},"offset":{"type":"integer"}}), json!([])) },
+        { "name": "haven_inbox", "description": "Untriaged floaters: uncommitted, live (not archived/superseded), with no acceptance (done_looks_like) set yet — the triage queue behind capture→triage→next. Same compact, paginated {total, count, offset, items[]} envelope as haven_list_items.",
+          "inputSchema": obj(json!({"project":{"type":"string"},"owner":{"type":"string"},"limit":{"type":"integer"},"offset":{"type":"integer"}}), json!([])) },
         { "name": "haven_get_item", "description": "Fetch one item in full (prose + requested edges/artifacts/lineage); internal sync fields (public_id/sync_state/revision) are omitted. The detail door for an item shown compactly by haven_list_items/haven_next.",
           "inputSchema": obj(json!({"ref":{"type":"string"},"project":{"type":"string"},"include":{"type":"array","items":{"type":"string"}}}), json!(["ref"])) },
         { "name": "haven_next", "description": "Items ready to dispatch (committed, ready, unblocked). Returns a compact view per item (identity + axes, no prose — fetch full via haven_get_item).",
@@ -848,7 +897,8 @@ mod tests {
         assert_eq!(out.len(), 2);
         assert_eq!(out[0]["result"]["serverInfo"]["name"], "haven");
         let tools = out[1]["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 23);
+        assert_eq!(tools.len(), 24);
+        assert!(tools.iter().any(|t| t["name"] == "haven_inbox"));
         assert!(tools.iter().any(|t| t["name"] == "haven_next"));
         assert!(tools.iter().any(|t| t["name"] == "haven_next_explain"));
         assert!(tools.iter().any(|t| t["name"] == "haven_resolve_live"));
@@ -1279,6 +1329,8 @@ mod tests {
             "revision",
             "sort_key",
             "metadata",
+            "context_pack",
+            "context_pack_clash",
         ] {
             assert!(first.get(k).is_none(), "compact item should omit {k}");
         }
@@ -1319,6 +1371,130 @@ mod tests {
         all.sort();
         all.dedup();
         assert_eq!(all, ["HV-1", "HV-2", "HV-3"]);
+    }
+
+    #[test]
+    fn inbox_tool_returns_untriaged_floaters_and_drops_on_triage() {
+        let s = store();
+        let out = session(
+            &s,
+            &[
+                // An untriaged floater: uncommitted, no acceptance.
+                json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"haven_add_item","arguments":{"title":"raw idea"}}}),
+                // A sealed floater: already has acceptance — excluded from inbox.
+                json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"haven_add_item","arguments":{"title":"scoped","done_looks_like":"ships"}}}),
+                json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"haven_inbox","arguments":{}}}),
+                // Triage the floater → it drops out of the inbox.
+                json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"haven_update_item","arguments":{"ref":"HV-1","done_looks_like":"now defined"}}}),
+                json!({"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"haven_inbox","arguments":{}}}),
+            ],
+        );
+        let before = tool_payload(&out[2]);
+        assert_eq!(before["total"], 1);
+        assert_eq!(before["items"][0]["ref"], "HV-1");
+        let after = tool_payload(&out[4]);
+        assert_eq!(after["total"], 0);
+        assert!(after["items"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn graph_tool_carries_container_rollup() {
+        let s = store();
+        let out = session(
+            &s,
+            &[
+                json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"haven_add_item","arguments":{"title":"Phase","type":"phase"}}}),
+                json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"haven_add_item","arguments":{"title":"child","parent":"HV-1","commit":true,"status":"in_progress"}}}),
+                json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"haven_graph","arguments":{}}}),
+            ],
+        );
+        let graph = tool_payload(&out[2]);
+        let nodes = graph["nodes"].as_array().unwrap();
+        let phase = nodes.iter().find(|n| n["ref"] == "HV-1").unwrap();
+        assert_eq!(phase["rollup_state"], "active");
+        // Leaves carry no rollup_state key.
+        let child = nodes.iter().find(|n| n["ref"] == "HV-2").unwrap();
+        assert!(child.get("rollup_state").is_none());
+    }
+
+    #[test]
+    fn context_pack_pointer_rides_get_item_and_graph_but_not_next() {
+        let s = store();
+        let out = session(
+            &s,
+            &[
+                // A build-batch container that will carry the pack.
+                json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"haven_add_item","arguments":{"title":"Checkout — dev batch","type":"phase"}}}),
+                // A grouped, dispatchable leaf, plus an unrelated ungrouped one.
+                json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"haven_add_item","arguments":{"title":"cart endpoint","commit":true,"status":"ready","assign":"ai"}}}),
+                json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"haven_add_item","arguments":{"title":"unrelated"}}}),
+                json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"haven_add_edge","arguments":{"kind":"grouping","from":"HV-1","to":"HV-2"}}}),
+                json!({"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"haven_add_artifact","arguments":{"ref":"HV-1","role":"spec","name":"context-pack.md","content":"# pack"}}}),
+                json!({"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"haven_get_item","arguments":{"ref":"HV-2","include":["edges"]}}}),
+                json!({"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"haven_get_item","arguments":{"ref":"HV-3"}}}),
+                json!({"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"haven_graph","arguments":{}}}),
+                json!({"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"haven_next","arguments":{"owner":"ai"}}}),
+            ],
+        );
+        // get_item on the packed leaf carries the one-hop pointer (container + name).
+        let leaf = tool_payload(&out[5]);
+        assert_eq!(leaf["context_pack"]["container"], "HV-1");
+        assert_eq!(leaf["context_pack"]["artifact"], "context-pack.md");
+        assert!(leaf.get("context_pack_clash").is_none());
+        // The ungrouped leaf carries no pointer.
+        let bare = tool_payload(&out[6]);
+        assert!(bare.get("context_pack").is_none());
+        // graph_node carries the pointer too, for whole-graph triage.
+        let graph = tool_payload(&out[7]);
+        let nodes = graph["nodes"].as_array().unwrap();
+        let gleaf = nodes.iter().find(|n| n["ref"] == "HV-2").unwrap();
+        assert_eq!(gleaf["context_pack"]["container"], "HV-1");
+        // next stays lean — no pointer on the compact dispatch view.
+        let next = tool_payload(&out[8]);
+        let nitem = next
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|n| n["ref"] == "HV-2")
+            .unwrap();
+        assert!(
+            nitem.get("context_pack").is_none(),
+            "compact dispatch view (next) must stay lean"
+        );
+    }
+
+    #[test]
+    fn context_pack_clash_surfaces_both_containers_no_silent_pick() {
+        let s = store();
+        let out = session(
+            &s,
+            &[
+                json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"haven_add_item","arguments":{"title":"Batch A","type":"phase"}}}),
+                json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"haven_add_item","arguments":{"title":"Batch B","type":"phase"}}}),
+                json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"haven_add_item","arguments":{"title":"shared leaf"}}}),
+                json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"haven_add_edge","arguments":{"kind":"grouping","from":"HV-1","to":"HV-3"}}}),
+                json!({"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"haven_add_edge","arguments":{"kind":"grouping","from":"HV-2","to":"HV-3"}}}),
+                json!({"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"haven_add_artifact","arguments":{"ref":"HV-1","role":"spec","name":"context-pack.md","content":"# a"}}}),
+                json!({"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"haven_add_artifact","arguments":{"ref":"HV-2","role":"spec","name":"context-pack.md","content":"# b"}}}),
+                json!({"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"haven_get_item","arguments":{"ref":"HV-3"}}}),
+            ],
+        );
+        // Two packed containers claim one leaf → a clash, surfaced (not picked).
+        let leaf = tool_payload(&out[7]);
+        assert!(
+            leaf.get("context_pack").is_none(),
+            "a clash must not silently pick a pack"
+        );
+        let clash: Vec<&str> = leaf["context_pack_clash"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert!(
+            clash.contains(&"HV-1") && clash.contains(&"HV-2"),
+            "clash lists both containers, got {clash:?}"
+        );
     }
 
     #[test]

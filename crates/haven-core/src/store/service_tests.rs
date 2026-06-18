@@ -1161,6 +1161,173 @@ fn icebox_filter_excludes_committed_and_dead() {
 }
 
 #[test]
+fn inbox_excludes_committed_dead_and_sealed_then_drops_on_triage() {
+    let s = store();
+    // An untriaged floater: uncommitted, no acceptance — the one inbox item.
+    let floater = add(&s, "idea");
+    // A sealed floater: uncommitted but already scoped — excluded from inbox.
+    let sealed = s
+        .add_item(
+            None,
+            NewItem {
+                title: "scoped".into(),
+                done_looks_like: Some("it ships".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    // Committed and archived are excluded (same as icebox).
+    let _committed = s
+        .add_item(
+            None,
+            NewItem {
+                title: "doing".into(),
+                commit: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let archived = add(&s, "dead");
+    s.archive_item(None, &archived.reference, None, None)
+        .unwrap();
+
+    let inbox = |s: &Store| {
+        s.list_items(
+            None,
+            &ItemFilter {
+                inbox: true,
+                ..Default::default()
+            },
+        )
+        .unwrap()
+    };
+
+    let refs: Vec<String> = inbox(&s).iter().map(|i| i.reference.clone()).collect();
+    assert_eq!(refs, vec![floater.reference.clone()]);
+    assert!(!refs.contains(&sealed.reference));
+
+    // Triaging the floater (giving it acceptance) drops it out of the inbox.
+    s.update_item(
+        None,
+        &floater.reference,
+        ItemUpdate {
+            done_looks_like: Some("a real definition".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert!(inbox(&s).is_empty());
+}
+
+#[test]
+fn container_rollup_derives_from_committed_subtree() {
+    let s = store();
+    let phase = s
+        .add_item(
+            None,
+            NewItem {
+                title: "Phase".into(),
+                node_type: Some(NodeType::Phase),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let rollup = |s: &Store| {
+        s.get_item(None, &phase.reference, &[])
+            .unwrap()
+            .rollup_state
+    };
+
+    // Two uncommitted children via decomposition → nothing committed yet.
+    let a = s
+        .add_item(
+            None,
+            NewItem {
+                title: "A".into(),
+                parent: Some(phase.reference.clone()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let b = s
+        .add_item(
+            None,
+            NewItem {
+                title: "B".into(),
+                parent: Some(phase.reference.clone()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(rollup(&s), Some(RollupState::Dormant));
+
+    // Commit both → queued (committed work, none started).
+    s.commit_items(None, &[a.reference.as_str(), b.reference.as_str()], None)
+        .unwrap();
+    assert_eq!(rollup(&s), Some(RollupState::Queued));
+
+    // One in_progress → active.
+    s.update_item(
+        None,
+        &a.reference,
+        ItemUpdate {
+            status: Some(Status::InProgress),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(rollup(&s), Some(RollupState::Active));
+
+    // All committed descendants done → done.
+    for r in [&a.reference, &b.reference] {
+        s.update_item(
+            None,
+            r,
+            ItemUpdate {
+                status: Some(Status::Done),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    }
+    assert_eq!(rollup(&s), Some(RollupState::Done));
+
+    // A committed, in_progress node reached via BOTH a grouping and a
+    // decomposition edge is counted once and pulls the rollup back to active —
+    // exercising the union walk + dedup.
+    let _c = s
+        .add_item(
+            None,
+            NewItem {
+                title: "C".into(),
+                commit: true,
+                status: Some(Status::InProgress),
+                parent: Some(phase.reference.clone()),
+                group: Some(phase.reference.clone()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(rollup(&s), Some(RollupState::Active));
+
+    // project_graph agrees with get_item for the same container.
+    let g = s.project_graph(None, false).unwrap();
+    let from_graph = g
+        .nodes
+        .iter()
+        .find(|n| n.reference == phase.reference)
+        .unwrap()
+        .rollup_state;
+    assert_eq!(from_graph, Some(RollupState::Active));
+
+    // A leaf carries no rollup.
+    assert_eq!(
+        s.get_item(None, &a.reference, &[]).unwrap().rollup_state,
+        None
+    );
+}
+
+#[test]
 fn graph_walks_lineage_in_both_directions() {
     let s = store();
     let big = add(&s, "Big");

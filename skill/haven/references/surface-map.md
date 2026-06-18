@@ -2,13 +2,13 @@
 
 The two front-ends drive the **same** store but are **not 1:1**. The CLI has many
 friendly verbs (for a human typing); the MCP is a deliberately smaller, more
-general set of 23 tools (for an agent). When a workflow runs over MCP, translate
+general set of 24 tools (for an agent). When a workflow runs over MCP, translate
 using the mapping below.
 
 ## Contents
 - [Enums (valid values)](#enums)
 - [CLI command surface](#cli-command-surface)
-- [MCP tool catalogue (23 tools)](#mcp-tool-catalogue)
+- [MCP tool catalogue (24 tools)](#mcp-tool-catalogue)
 - [CLI → MCP mapping](#cli--mcp-mapping)
 - [CLI-only operations](#cli-only-operations)
 - [The content channel](#the-content-channel)
@@ -104,12 +104,13 @@ haven sync [status] [--watch]
 
 ## MCP tool catalogue
 
-23 tools, each taking an optional `project` and naming items by `ref` or
+24 tools, each taking an optional `project` and naming items by `ref` or
 `public_id`. Required args in **bold**.
 
 | Tool | Args |
 |---|---|
 | `haven_list_items` | `status?, type?, owner?, committed?, icebox?, group?, wait?, stale?, limit?, offset?` — returns a compact, paginated envelope `{total, count, offset, items[]}` (default `limit` 100) |
+| `haven_inbox` | `owner?, limit?, offset?` — untriaged floaters (uncommitted, live, no `done_looks_like` yet); same compact paginated envelope as `haven_list_items` |
 | `haven_get_item` | **`ref`**, `include?: ["edges","artifacts","lineage"]` — the full item (prose + includes); the detail door |
 | `haven_next` | `owner?, limit?` — compact items |
 | `haven_next_explain` | `owner?` — diagnose an empty queue (counts by reason + hint) |

@@ -169,6 +169,9 @@ pub struct ItemFilter {
     pub committed: Option<bool>,
     /// `icebox` view: committed = 0 and not archived/superseded.
     pub icebox: bool,
+    /// `inbox` view: the icebox AND `done_looks_like IS NULL` — untriaged
+    /// floaters with no acceptance yet. A composable subset of `icebox`.
+    pub inbox: bool,
     pub group: Option<String>,
     /// Items parked on a specific wait-state — answers "what's waiting on me?"
     /// (`on_human`) or "stuck on something external?" (`on_external`).
@@ -346,6 +349,16 @@ impl Store {
                 Include::Lineage => item.lineage = Some(self.lineage_events_for_node(node_id)?),
             }
         }
+        if item.node_type.is_container() {
+            item.rollup_state = Some(self.rollup_state_for(node_id)?);
+        } else {
+            // A leaf advertises the context pack governing its build, so a
+            // dispatcher can't build it naked or guess which group carries the
+            // pack (HV-75). Derived on read; containers hold packs, not consume.
+            let (pack, clash) = self.context_pack_for_node(node_id)?;
+            item.context_pack = pack;
+            item.context_pack_clash = clash;
+        }
         Ok(item)
     }
 
@@ -373,6 +386,11 @@ impl Store {
         }
         if filter.icebox {
             sql.push_str(" AND n.committed = 0 AND n.status NOT IN ('archived','superseded')");
+        }
+        if filter.inbox {
+            sql.push_str(
+                " AND n.committed = 0 AND n.status NOT IN ('archived','superseded') AND n.done_looks_like IS NULL",
+            );
         }
         if let Some(wait) = filter.wait {
             sql.push_str(&format!(" AND n.wait_state = ?{}", args.len() + 1));

@@ -16,6 +16,12 @@ use crate::model::*;
 
 use super::{new_uuid, ItemFilter, Store};
 
+/// The canonical filename of a context-pack artifact. `prepare-for-dev` writes
+/// it as a `spec` artifact on a group's container; the pack-pointer derivation
+/// (HV-75) reads it. This string is the contract between the skill and the store
+/// — keep them in sync.
+pub const CONTEXT_PACK_ARTIFACT: &str = "context-pack.md";
+
 /// Parameters for `artifact add`.
 #[derive(Debug, Default, Clone)]
 pub struct NewArtifact {
@@ -69,6 +75,59 @@ impl Store {
     /// Absolute path to a project's content directory (`<root>/<key>/`).
     fn project_dir(&self, project_key: &str) -> PathBuf {
         self.content_root().join(project_key)
+    }
+
+    /// Derive the context pack governing a leaf (HV-75): the LIVE grouping
+    /// containers it belongs to that carry a `spec` [`CONTEXT_PACK_ARTIFACT`],
+    /// deduped by container. Returns `(pack, clash)` of which at most one is
+    /// `Some` — zero containers → `(None, None)`; exactly one → the pack; more
+    /// than one → a clash (the conflicting container refs). Pure read: the
+    /// pointer is never stored, so the graph stays the single source of truth.
+    /// Dedup by container means a re-prepped group (which appends a second
+    /// `context-pack.md` row on the *same* container) is not read as a clash.
+    pub(crate) fn context_pack_for_node(
+        &self,
+        node_id: i64,
+    ) -> Result<(Option<ContextPack>, Option<Vec<String>>)> {
+        let mut stmt = self.conn.prepare(
+            "SELECT DISTINCT c.ref
+               FROM grouping_edges ge
+               JOIN nodes c ON c.id = ge.group_id
+               JOIN artifacts a ON a.node_id = c.id
+              WHERE ge.member_id = ?1
+                AND a.role = 'spec'
+                AND a.path LIKE '%/' || ?2
+                AND c.status NOT IN ('archived', 'superseded')
+              ORDER BY c.ref",
+        )?;
+        let containers: Vec<String> = stmt
+            .query_map(params![node_id, CONTEXT_PACK_ARTIFACT], |r| {
+                r.get::<_, String>(0)
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(match containers.len() {
+            0 => (None, None),
+            1 => (
+                Some(ContextPack {
+                    container: containers.into_iter().next().expect("len == 1"),
+                    artifact: CONTEXT_PACK_ARTIFACT.to_string(),
+                }),
+                None,
+            ),
+            _ => (None, Some(containers)),
+        })
+    }
+
+    /// Public entry to [`Self::context_pack_for_node`] by selector — used by the
+    /// CLI and by `prepare-for-dev`'s clash precondition.
+    pub fn context_pack_for(
+        &self,
+        project: Option<&str>,
+        selector: &str,
+    ) -> Result<(Option<ContextPack>, Option<Vec<String>>)> {
+        let (project_id, _key) = self.require_project(project)?;
+        let node_id = self.resolve_node_id(project_id, selector)?;
+        self.context_pack_for_node(node_id)
     }
 
     /// Register an artifact on a node. For `kind = file`, the content is written
@@ -468,6 +527,82 @@ mod tests {
             .get_artifact(None, &item.reference, Some(ArtifactRole::Spec), None)
             .unwrap();
         assert_eq!(got.content.as_deref(), Some("# Spec\nhello\n"));
+    }
+
+    #[test]
+    fn context_pack_for_derives_found_clash_and_dedups() {
+        let tmp = tempfile::tempdir().unwrap();
+        let s = store_with_root(tmp.path());
+        let add_phase = |title: &str| {
+            s.add_item(
+                None,
+                NewItem {
+                    title: title.into(),
+                    node_type: Some(NodeType::Phase),
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+            .reference
+        };
+        let pack_on = |container: &str, body: &str| {
+            s.add_artifact(
+                None,
+                container,
+                NewArtifact {
+                    role: ArtifactRole::Spec,
+                    content: Some(body.into()),
+                    name: Some(CONTEXT_PACK_ARTIFACT.into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        };
+
+        let batch_a = add_phase("Batch A");
+        let leaf = s
+            .add_item(
+                None,
+                NewItem {
+                    title: "leaf".into(),
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+            .reference;
+        s.group(None, &batch_a, &leaf, false).unwrap();
+
+        // Grouped, but no pack on the container yet → nothing to point at.
+        let (pack, clash) = s.context_pack_for(None, &leaf).unwrap();
+        assert!(pack.is_none() && clash.is_none());
+
+        // A pack on the one container → Found, pointing at it.
+        pack_on(&batch_a, "# pack");
+        let (pack, clash) = s.context_pack_for(None, &leaf).unwrap();
+        assert_eq!(pack.unwrap().container, batch_a);
+        assert!(clash.is_none());
+
+        // Re-prepping appends a SECOND context-pack.md row on the SAME
+        // container — dedup by container means it stays one pack, never a clash.
+        pack_on(&batch_a, "# pack v2");
+        let (pack, clash) = s.context_pack_for(None, &leaf).unwrap();
+        assert!(
+            pack.is_some() && clash.is_none(),
+            "duplicate pack rows on one container must not read as a clash"
+        );
+
+        // A SECOND container also claiming the leaf, with its own pack → clash,
+        // and no silent pick of either.
+        let batch_b = add_phase("Batch B");
+        s.group(None, &batch_b, &leaf, false).unwrap();
+        pack_on(&batch_b, "# pack b");
+        let (pack, clash) = s.context_pack_for(None, &leaf).unwrap();
+        assert!(pack.is_none(), "a clash must not silently pick a pack");
+        let mut refs = clash.unwrap();
+        refs.sort();
+        let mut want = vec![batch_a, batch_b];
+        want.sort();
+        assert_eq!(refs, want);
     }
 
     #[test]
