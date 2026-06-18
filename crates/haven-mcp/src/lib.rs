@@ -55,7 +55,10 @@ const DEFAULT_LIST_LIMIT: i64 = 100;
 /// `revision`, `sort_key`) are *always* dropped — an agent reasons in `ref`s, not
 /// storage internals — and the `compact` form (list/next/resolve) further omits
 /// the prose fields, timestamps and includes, which an agent pulls on demand via
-/// `haven_get_item`. Borrows from the source `Item`; the enums are `Copy`.
+/// `haven_get_item`. The `graph` view (`graph_node`) is compact plus
+/// `done_looks_like`, so a whole-graph read can be triaged (e.g. tell a sealed
+/// leaf from an unsealed one) without a per-node fetch. Borrows from the source
+/// `Item`; the enums are `Copy`.
 #[derive(Serialize)]
 struct McpItem<'a> {
     #[serde(rename = "ref")]
@@ -72,7 +75,8 @@ struct McpItem<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     wait_state: Option<WaitState>,
 
-    // Full-only fields — all `None` in the compact form.
+    // Full-only fields — `None` in the compact form. (`done_looks_like` is also
+    // populated by the `graph` view — see `graph_node`.)
     #[serde(skip_serializing_if = "Option::is_none")]
     body: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -120,6 +124,16 @@ impl<'a> McpItem<'a> {
             edges: None,
             artifacts: None,
             lineage: None,
+        }
+    }
+
+    /// Graph view: the compact axes plus `done_looks_like`, so a single
+    /// `haven_graph` read can triage and plan (e.g. tell a sealed leaf from an
+    /// unsealed one) without N per-node detail fetches. list/next stay lean.
+    fn graph_node(item: &'a Item) -> Self {
+        McpItem {
+            done_looks_like: item.done_looks_like.as_deref(),
+            ..McpItem::compact(item)
         }
     }
 
@@ -499,9 +513,10 @@ fn call_tool(store: &Store, name: &str, a: &Value) -> Result<Value> {
         }
         // The whole project graph (all nodes + edges) in one read — for rendering
         // the graph or reasoning over the entire dependency structure at once.
-        // Nodes ride as compact items (the bulk of the payload); live-only by
-        // default (drop superseded/archived nodes + any edge that would dangle
-        // onto one), with `all:true` to include the dead nodes.
+        // Nodes ride as compact-plus-acceptance items (`graph_node`: axes +
+        // done_looks_like, the bulk of the payload); live-only by default (drop
+        // superseded/archived nodes + any edge that would dangle onto one), with
+        // `all:true` to include the dead nodes.
         "haven_graph" => {
             let g = store.project_graph(project, opt_bool(a, "lineage").unwrap_or(false))?;
             let all = opt_bool(a, "all").unwrap_or(false);
@@ -515,7 +530,7 @@ fn call_tool(store: &Store, name: &str, a: &Value) -> Result<Value> {
                 .nodes
                 .iter()
                 .filter(|n| keep.contains(n.reference.as_str()))
-                .map(McpItem::compact)
+                .map(McpItem::graph_node)
                 .collect();
             let edges: Vec<_> = g
                 .edges
@@ -754,7 +769,7 @@ fn tools_list() -> Value {
           "inputSchema": obj(json!({"ref":{"type":"string"},"project":{"type":"string"}}), json!(["ref"])) },
         { "name": "haven_search", "description": "Full-text search over item title/body.",
           "inputSchema": obj(json!({"query":{"type":"string"},"project":{"type":"string"},"limit":{"type":"integer"}}), json!(["query"])) },
-        { "name": "haven_graph", "description": "The whole project work-graph in one read: every node plus a flat edge list ({kind, from, to}, same shape as haven_add_edge), and optionally lineage links. Use to render the graph or reason over the entire dependency structure at once, instead of N+1 per-node fetches. Nodes are compact (identity + axes; fetch prose for one via haven_get_item) and live-only by default — pass `all:true` to include superseded/archived nodes (edges onto dropped nodes are omitted).",
+        { "name": "haven_graph", "description": "The whole project work-graph in one read: every node plus a flat edge list ({kind, from, to}, same shape as haven_add_edge), and optionally lineage links. Use to render the graph or reason over the entire dependency structure at once, instead of N+1 per-node fetches. Nodes are compact (identity + axes + done_looks_like; fetch other prose for one via haven_get_item) and live-only by default — pass `all:true` to include superseded/archived nodes (edges onto dropped nodes are omitted).",
           "inputSchema": obj(json!({"project":{"type":"string"},"lineage":{"type":"boolean"},"all":{"type":"boolean"}}), json!([])) },
         { "name": "haven_docs", "description": "List live project living-doc anchors and their artifacts. Use this instead of hard-coding a docs ref.",
           "inputSchema": obj(json!({"project":{"type":"string"}}), json!([])) },
@@ -1392,7 +1407,7 @@ mod tests {
             &s,
             &[
                 json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{
-                    "name":"haven_add_item","arguments":{"title":"Keep","body":"prose"}
+                    "name":"haven_add_item","arguments":{"title":"Keep","body":"prose","done_looks_like":"ships"}
                 }}),
                 json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{
                     "name":"haven_add_item","arguments":{"title":"Dead"}
@@ -1424,6 +1439,10 @@ mod tests {
         assert!(live["edges"].as_array().unwrap().is_empty());
         assert!(live["nodes"][0].get("body").is_none());
         assert!(live["nodes"][0].get("sync_state").is_none());
+        // Graph nodes carry done_looks_like (the planner's sealed-leaf test reads
+        // it from one read) while prose like body stays dropped. list/next stay
+        // lean — guarded by list_items_compact_view_and_envelope.
+        assert_eq!(live["nodes"][0]["done_looks_like"], "ships");
         // all:true: the dead node and its edge come back.
         let full = tool_payload(&out[5]);
         assert_eq!(full["nodes"].as_array().unwrap().len(), 2);

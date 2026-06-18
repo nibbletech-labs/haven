@@ -1,0 +1,14 @@
+name: orchestrate-plan
+agent: codex
+skill: orchestrate-plan
+mcp:
+  server: haven
+  command: haven
+  args:
+    - mcp
+discovery:
+  agents_md: AGENTS.md
+  skill_paths:
+    - .agents/skills/orchestrate-plan
+    - ~/.agents/skills/orchestrate-plan
+    - /etc/codex/skills/orchestrate-plan

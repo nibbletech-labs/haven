@@ -5,6 +5,7 @@
 //! `<root>/<project>/...` is the Layer 4 concern; here we just resolve paths and
 //! open the store.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use haven_auth::AuthConfig;
@@ -130,10 +131,15 @@ fn agents_dir() -> Result<PathBuf> {
     }
 }
 
-/// The `haven` skill, embedded in the binary so it versions with the CLI/MCP
-/// surface it documents (ARCHITECTURE §14.3) — no runtime dependency on the repo.
+/// A skill shipped in the binary, versioned with the CLI/MCP surface it documents
+/// (ARCHITECTURE §14.3) — no runtime dependency on the repo. `files` are
 /// `(relative path under the skill dir, contents)`.
-const SKILL_FILES: &[(&str, &str)] = &[
+struct Skill {
+    name: &'static str,
+    files: &'static [(&'static str, &'static str)],
+}
+
+const HAVEN_SKILL_FILES: &[(&str, &str)] = &[
     ("SKILL.md", include_str!("../../../skill/haven/SKILL.md")),
     (
         "references/workflows.md",
@@ -149,30 +155,78 @@ const SKILL_FILES: &[(&str, &str)] = &[
     ),
 ];
 
-pub const SKILL_FILE_LIST: &[&str] = &[
-    "SKILL.md",
-    "references/workflows.md",
-    "references/surface-map.md",
-    "agents/openai.yaml",
+const ORCHESTRATE_PLAN_SKILL_FILES: &[(&str, &str)] = &[
+    (
+        "SKILL.md",
+        include_str!("../../../skill/orchestrate-plan/SKILL.md"),
+    ),
+    (
+        "references/decomposition.md",
+        include_str!("../../../skill/orchestrate-plan/references/decomposition.md"),
+    ),
+    (
+        "references/tick-ops.md",
+        include_str!("../../../skill/orchestrate-plan/references/tick-ops.md"),
+    ),
+    (
+        "agents/openai.yaml",
+        include_str!("../../../skill/orchestrate-plan/agents/openai.yaml"),
+    ),
 ];
 
-/// Install the embedded skill snapshot to `<claude>/skills/haven/`. Idempotent —
-/// overwrites, since it's a versioned snapshot, not user-editable state. Returns
-/// the installed skill directory.
-pub fn ensure_skill_installed() -> Result<PathBuf> {
-    let skill_dir = claude_dir()?.join("skills").join("haven");
-    write_skill_snapshot(&skill_dir)?;
+/// Every skill `haven setup` / `haven skill install` lay down. Add a skill by
+/// adding its files const + an entry here; install / refresh / doctor all
+/// iterate this registry.
+const SKILL_REGISTRY: &[Skill] = &[
+    Skill {
+        name: "haven",
+        files: HAVEN_SKILL_FILES,
+    },
+    Skill {
+        name: "orchestrate-plan",
+        files: ORCHESTRATE_PLAN_SKILL_FILES,
+    },
+];
+
+/// Skill names shipped in this binary, in registry order.
+pub fn skill_names() -> impl Iterator<Item = &'static str> {
+    SKILL_REGISTRY.iter().map(|s| s.name)
+}
+
+/// The embedded files for `skill_name`, or `None` if it isn't a shipped skill.
+fn skill_files(skill_name: &str) -> Option<&'static [(&'static str, &'static str)]> {
+    SKILL_REGISTRY
+        .iter()
+        .find(|s| s.name == skill_name)
+        .map(|s| s.files)
+}
+
+/// Relative paths shipped for `skill_name` (for `haven skill install` output).
+pub fn skill_file_list(skill_name: &str) -> Vec<&'static str> {
+    skill_files(skill_name)
+        .map(|fs| fs.iter().map(|(rel, _)| *rel).collect())
+        .unwrap_or_default()
+}
+
+/// Install a skill's embedded snapshot to `<claude>/skills/<skill_name>/`.
+/// Idempotent — overwrites, since it's a versioned snapshot, not user-editable
+/// state. Returns the installed skill directory.
+pub fn ensure_skill_installed(skill_name: &str) -> Result<PathBuf> {
+    let skill_dir = claude_dir()?.join("skills").join(skill_name);
+    write_skill_snapshot(skill_name, &skill_dir)?;
     Ok(skill_dir)
 }
 
-pub fn ensure_codex_skill_installed() -> Result<PathBuf> {
-    let skill_dir = agents_dir()?.join("skills").join("haven");
-    write_skill_snapshot(&skill_dir)?;
+pub fn ensure_codex_skill_installed(skill_name: &str) -> Result<PathBuf> {
+    let skill_dir = agents_dir()?.join("skills").join(skill_name);
+    write_skill_snapshot(skill_name, &skill_dir)?;
     Ok(skill_dir)
 }
 
-fn write_skill_snapshot(skill_dir: &Path) -> Result<()> {
-    for (rel, contents) in SKILL_FILES {
+fn write_skill_snapshot(skill_name: &str, skill_dir: &Path) -> Result<()> {
+    let files = skill_files(skill_name)
+        .ok_or_else(|| HavenError::Invalid(format!("unknown skill: {skill_name}")))?;
+    for (rel, contents) in files {
         let dest = skill_dir.join(rel);
         if let Some(parent) = dest.parent() {
             std::fs::create_dir_all(parent)?;
@@ -190,25 +244,27 @@ fn write_skill_snapshot(skill_dir: &Path) -> Result<()> {
 /// reported on stderr and must never stop the caller (the MCP server).
 /// Returns the dirs it refreshed.
 pub fn refresh_stale_skill_snapshots() -> Vec<PathBuf> {
-    let candidates = [
-        claude_dir().map(|d| d.join("skills").join("haven")),
-        agents_dir().map(|d| d.join("skills").join("haven")),
-    ];
+    let bases = [claude_dir(), agents_dir()];
     let mut refreshed = Vec::new();
-    for skill_dir in candidates.into_iter().flatten() {
-        if !skill_dir.is_dir() {
-            continue; // never installed here (or opted out) — not ours to create
-        }
-        let (_, current) = skill_snapshot_check(&skill_dir);
-        if current {
-            continue;
-        }
-        match write_skill_snapshot(&skill_dir) {
-            Ok(()) => refreshed.push(skill_dir),
-            Err(e) => eprintln!(
-                "haven: skill refresh skipped ({}): {e}",
-                skill_dir.display()
-            ),
+    for base in bases.into_iter().flatten() {
+        for skill in SKILL_REGISTRY {
+            let skill_dir = base.join("skills").join(skill.name);
+            if !skill_dir.is_dir() {
+                continue; // never installed here (or opted out) — not ours to create
+            }
+            let (_, current) = skill_snapshot_check(skill.name, &skill_dir);
+            if current {
+                continue;
+            }
+            match write_skill_snapshot(skill.name, &skill_dir) {
+                Ok(()) => refreshed.push(skill_dir),
+                Err(e) => {
+                    eprintln!(
+                        "haven: skill refresh skipped ({}): {e}",
+                        skill_dir.display()
+                    )
+                }
+            }
         }
     }
     refreshed
@@ -220,25 +276,29 @@ pub fn refresh_stale_skill_snapshots() -> Vec<PathBuf> {
 pub struct InstallCheck {
     pub claude_mcp_config_path: PathBuf,
     pub claude_mcp_registered: bool,
-    pub claude_skill_dir: PathBuf,
-    /// Every embedded skill file is present on disk.
-    pub claude_skill_present: bool,
-    /// …and its bytes match the snapshot baked into this binary (no drift).
-    pub claude_skill_current: bool,
-    /// Embedded skill files absent from disk (subset that fails `skill_present`).
-    pub claude_missing_skill_files: Vec<String>,
+    /// Per-skill snapshot status under `<claude>/skills/<name>/`, keyed by name.
+    pub claude_skills: BTreeMap<String, SkillInstallStatus>,
     pub codex_mcp_config_path: PathBuf,
     pub codex_mcp_registered: bool,
-    pub codex_skill_dir: PathBuf,
-    pub codex_skill_present: bool,
-    pub codex_skill_current: bool,
-    pub codex_missing_skill_files: Vec<String>,
+    /// Per-skill snapshot status under `<agents>/skills/<name>/`, keyed by name.
+    pub codex_skills: BTreeMap<String, SkillInstallStatus>,
     pub agents_md_path: PathBuf,
     pub agents_md_present: bool,
     pub agents_md_current: bool,
     /// `haven` resolved on `$PATH` — what the MCP `command: "haven"` stanza needs
     /// to actually launch. `None` if the binary isn't reachable by that name.
     pub haven_on_path: Option<PathBuf>,
+}
+
+/// One installed skill's snapshot health, for one agent.
+pub struct SkillInstallStatus {
+    pub dir: PathBuf,
+    /// Every embedded skill file is present on disk.
+    pub present: bool,
+    /// …and its bytes match the snapshot baked into this binary (no drift).
+    pub current: bool,
+    /// Embedded skill files absent from disk (subset that fails `present`).
+    pub missing_files: Vec<String>,
 }
 
 /// Inspect the install wiring without mutating anything (the read side of
@@ -255,15 +315,40 @@ pub fn install_check() -> Result<InstallCheck> {
         })
         .unwrap_or(false);
 
-    let claude_skill_dir = claude_dir()?.join("skills").join("haven");
-    let (claude_missing_skill_files, claude_skill_current) =
-        skill_snapshot_check(&claude_skill_dir);
     let codex_mcp_config_path = codex_mcp_config_path()?;
     let codex_mcp_registered = std::fs::read_to_string(&codex_mcp_config_path)
         .map(|s| codex_config_has_haven(&s))
         .unwrap_or(false);
-    let codex_skill_dir = agents_dir()?.join("skills").join("haven");
-    let (codex_missing_skill_files, codex_skill_current) = skill_snapshot_check(&codex_skill_dir);
+
+    // Per-skill snapshot health, for each shipped skill, on each agent.
+    let claude_skills_base = claude_dir()?;
+    let codex_skills_base = agents_dir()?;
+    let mut claude_skills = BTreeMap::new();
+    let mut codex_skills = BTreeMap::new();
+    for skill in SKILL_REGISTRY {
+        let cdir = claude_skills_base.join("skills").join(skill.name);
+        let (cmissing, ccurrent) = skill_snapshot_check(skill.name, &cdir);
+        claude_skills.insert(
+            skill.name.to_string(),
+            SkillInstallStatus {
+                present: cmissing.is_empty(),
+                current: ccurrent,
+                missing_files: cmissing,
+                dir: cdir,
+            },
+        );
+        let xdir = codex_skills_base.join("skills").join(skill.name);
+        let (xmissing, xcurrent) = skill_snapshot_check(skill.name, &xdir);
+        codex_skills.insert(
+            skill.name.to_string(),
+            SkillInstallStatus {
+                present: xmissing.is_empty(),
+                current: xcurrent,
+                missing_files: xmissing,
+                dir: xdir,
+            },
+        );
+    }
     let agents_md_path = std::env::current_dir()?.join("AGENTS.md");
     let agents_md = std::fs::read_to_string(&agents_md_path).ok();
     let agents_md_current = agents_md
@@ -274,16 +359,10 @@ pub fn install_check() -> Result<InstallCheck> {
     Ok(InstallCheck {
         claude_mcp_config_path,
         claude_mcp_registered,
-        claude_skill_dir,
-        claude_skill_present: claude_missing_skill_files.is_empty(),
-        claude_skill_current,
-        claude_missing_skill_files,
+        claude_skills,
         codex_mcp_config_path,
         codex_mcp_registered,
-        codex_skill_dir,
-        codex_skill_present: codex_missing_skill_files.is_empty(),
-        codex_skill_current,
-        codex_missing_skill_files,
+        codex_skills,
         agents_md_path,
         agents_md_present: agents_md.is_some(),
         agents_md_current,
@@ -291,10 +370,13 @@ pub fn install_check() -> Result<InstallCheck> {
     })
 }
 
-fn skill_snapshot_check(skill_dir: &Path) -> (Vec<String>, bool) {
+fn skill_snapshot_check(skill_name: &str, skill_dir: &Path) -> (Vec<String>, bool) {
+    let Some(files) = skill_files(skill_name) else {
+        return (vec![format!("unknown skill: {skill_name}")], false);
+    };
     let mut missing_skill_files = Vec::new();
     let mut skill_current = true;
-    for (rel, contents) in SKILL_FILES {
+    for (rel, contents) in files {
         match std::fs::read_to_string(skill_dir.join(rel)) {
             Ok(on_disk) if on_disk == *contents => {}
             Ok(_) => skill_current = false,

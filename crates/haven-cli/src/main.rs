@@ -165,11 +165,14 @@ enum SyncCmd {
 
 #[derive(Subcommand)]
 enum SkillCmd {
-    /// Write the embedded skill to the selected agent skill path.
+    /// Write the embedded skill(s) to the selected agent skill path.
     Install {
         /// Agent skill target: all, claude, or codex.
         #[arg(long, value_enum, default_value_t = AgentTarget::Claude)]
         agent: AgentTarget,
+        /// Install only this skill (default: all shipped skills).
+        #[arg(long)]
+        skill: Option<String>,
     },
 }
 
@@ -1066,31 +1069,44 @@ fn cmd_setup(
         "skipped (--agent claude)".to_string()
     };
 
+    // Install every shipped skill for each in-scope agent; collect per-skill
+    // paths, and keep a `skill` headline (the Claude `haven` path) for back-compat.
+    let mut claude_skills = serde_json::Map::new();
+    let mut codex_skills = serde_json::Map::new();
+    if !no_skill {
+        for name in config::skill_names() {
+            if agent.includes_claude() {
+                let v = match config::ensure_skill_installed(name) {
+                    Ok(p) => p.display().to_string(),
+                    Err(e) => {
+                        warnings.push(format!("Claude skill `{name}` install skipped: {e}"));
+                        format!("skipped: {e}")
+                    }
+                };
+                claude_skills.insert(name.to_string(), serde_json::json!(v));
+            }
+            if agent.includes_codex() {
+                let v = match config::ensure_codex_skill_installed(name) {
+                    Ok(p) => p.display().to_string(),
+                    Err(e) => {
+                        warnings.push(format!("Codex skill `{name}` install skipped: {e}"));
+                        format!("skipped: {e}")
+                    }
+                };
+                codex_skills.insert(name.to_string(), serde_json::json!(v));
+            }
+        }
+    }
     let claude_skill = if no_skill {
         "skipped (--no-skill)".to_string()
     } else if agent.includes_claude() {
-        match config::ensure_skill_installed() {
-            Ok(p) => p.display().to_string(),
-            Err(e) => {
-                warnings.push(format!("Claude skill install skipped: {e}"));
-                format!("skipped: {e}")
-            }
-        }
+        claude_skills
+            .get("haven")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string()
     } else {
         "skipped (--agent codex)".to_string()
-    };
-    let codex_skill = if no_skill {
-        "skipped (--no-skill)".to_string()
-    } else if agent.includes_codex() {
-        match config::ensure_codex_skill_installed() {
-            Ok(p) => p.display().to_string(),
-            Err(e) => {
-                warnings.push(format!("Codex skill install skipped: {e}"));
-                format!("skipped: {e}")
-            }
-        }
-    } else {
-        "skipped (--agent claude)".to_string()
     };
 
     let agents_md = match config::ensure_agents_md() {
@@ -1123,11 +1139,11 @@ fn cmd_setup(
         "root": paths.root.display().to_string(),
         "db": paths.db.display().to_string(),
         "mcp_config": claude_mcp_config.clone(),
-        "skill": claude_skill.clone(),
+        "skill": claude_skill,
         "claude_mcp_config": claude_mcp_config,
-        "claude_skill": claude_skill,
+        "claude_skills": claude_skills,
         "codex_mcp_config": codex_mcp_config,
-        "codex_skill": codex_skill,
+        "codex_skills": codex_skills,
         "agents_md": agents_md,
         "current_project": current_project,
         "project_created": project_created,
@@ -1143,25 +1159,43 @@ fn cmd_setup(
 
 fn cmd_skill(cmd: &SkillCmd) -> Result<Output> {
     match cmd {
-        SkillCmd::Install { agent } => {
+        SkillCmd::Install { agent, skill } => {
+            let names: Vec<&str> = match skill {
+                Some(s) => {
+                    if !config::skill_names().any(|n| n == s.as_str()) {
+                        return Err(HavenError::Invalid(format!("unknown skill: {s}")));
+                    }
+                    vec![s.as_str()]
+                }
+                None => config::skill_names().collect(),
+            };
             let mut installed = serde_json::Map::new();
-            if agent.includes_claude() {
-                installed.insert(
-                    "claude".into(),
-                    serde_json::json!(config::ensure_skill_installed()?.display().to_string()),
-                );
-            }
-            if agent.includes_codex() {
-                installed.insert(
-                    "codex".into(),
-                    serde_json::json!(config::ensure_codex_skill_installed()?
-                        .display()
-                        .to_string()),
+            let mut files = serde_json::Map::new();
+            for name in names {
+                if agent.includes_claude() {
+                    installed.insert(
+                        format!("claude_{name}"),
+                        serde_json::json!(config::ensure_skill_installed(name)?
+                            .display()
+                            .to_string()),
+                    );
+                }
+                if agent.includes_codex() {
+                    installed.insert(
+                        format!("codex_{name}"),
+                        serde_json::json!(config::ensure_codex_skill_installed(name)?
+                            .display()
+                            .to_string()),
+                    );
+                }
+                files.insert(
+                    name.to_string(),
+                    serde_json::json!(config::skill_file_list(name)),
                 );
             }
             Ok(Output::Json(serde_json::json!({
                 "installed": installed,
-                "files": config::SKILL_FILE_LIST,
+                "files": files,
             })))
         }
     }
@@ -1433,6 +1467,35 @@ fn cmd_doctor() -> Result<Output> {
     // 2–6. Install wiring: MCP stanzas, skill snapshots, AGENTS.md, binary on PATH.
     match config::install_check() {
         Ok(w) => {
+            let skill_check =
+                |agent: &str, name: &str, st: &config::SkillInstallStatus| -> serde_json::Value {
+                    let check_name = format!("{agent}_skill_{name}");
+                    let hint = if agent == "codex" {
+                        "run `haven skill install --agent codex`"
+                    } else {
+                        "run `haven skill install`"
+                    };
+                    if st.present && st.current {
+                        check(
+                            &check_name,
+                            "ok",
+                            format!("up to date at {}", st.dir.display()),
+                        )
+                    } else if st.present {
+                        check(
+                            &check_name,
+                            "warn",
+                            format!("installed but stale vs this binary — {hint}"),
+                        )
+                    } else {
+                        check(
+                            &check_name,
+                            "warn",
+                            format!("missing {} — {hint}", st.missing_files.join(", ")),
+                        )
+                    }
+                };
+
             checks.push(if w.claude_mcp_registered {
                 check(
                     "claude_mcp",
@@ -1453,28 +1516,9 @@ fn cmd_doctor() -> Result<Output> {
                 )
             });
 
-            checks.push(if w.claude_skill_present && w.claude_skill_current {
-                check(
-                    "claude_skill",
-                    "ok",
-                    format!("up to date at {}", w.claude_skill_dir.display()),
-                )
-            } else if w.claude_skill_present {
-                check(
-                    "claude_skill",
-                    "warn",
-                    "installed but stale vs this binary — run `haven skill install`".into(),
-                )
-            } else {
-                check(
-                    "claude_skill",
-                    "warn",
-                    format!(
-                        "missing {} — run `haven skill install`",
-                        w.claude_missing_skill_files.join(", ")
-                    ),
-                )
-            });
+            for (name, st) in &w.claude_skills {
+                checks.push(skill_check("claude", name, st));
+            }
 
             checks.push(if w.codex_mcp_registered {
                 check(
@@ -1496,29 +1540,9 @@ fn cmd_doctor() -> Result<Output> {
                 )
             });
 
-            checks.push(if w.codex_skill_present && w.codex_skill_current {
-                check(
-                    "codex_skill",
-                    "ok",
-                    format!("up to date at {}", w.codex_skill_dir.display()),
-                )
-            } else if w.codex_skill_present {
-                check(
-                    "codex_skill",
-                    "warn",
-                    "installed but stale vs this binary — run `haven skill install --agent codex`"
-                        .into(),
-                )
-            } else {
-                check(
-                    "codex_skill",
-                    "warn",
-                    format!(
-                        "missing {} — run `haven skill install --agent codex`",
-                        w.codex_missing_skill_files.join(", ")
-                    ),
-                )
-            });
+            for (name, st) in &w.codex_skills {
+                checks.push(skill_check("codex", name, st));
+            }
 
             checks.push(if w.agents_md_current {
                 check(

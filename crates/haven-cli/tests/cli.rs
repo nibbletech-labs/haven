@@ -79,7 +79,7 @@ fn skill_install_and_setup_write_the_snapshot() {
 
     // Explicit install writes the embedded snapshot.
     let out = h.json(&["skill", "install"]);
-    assert!(out["installed"]["claude"]
+    assert!(out["installed"]["claude_haven"]
         .as_str()
         .unwrap()
         .ends_with("skills/haven"));
@@ -91,12 +91,34 @@ fn skill_install_and_setup_write_the_snapshot() {
     let body = std::fs::read_to_string(skill_dir.join("SKILL.md")).unwrap();
     assert!(body.contains("name: haven"));
 
+    // The same install lays down every shipped skill, not just haven.
+    assert!(out["installed"]["claude_orchestrate-plan"]
+        .as_str()
+        .unwrap()
+        .ends_with("skills/orchestrate-plan"));
+    let op_dir = h.home.join(".claude/skills/orchestrate-plan");
+    assert!(op_dir.join("SKILL.md").exists());
+    assert!(op_dir.join("references/decomposition.md").exists());
+    assert!(op_dir.join("references/tick-ops.md").exists());
+    assert!(op_dir.join("agents/openai.yaml").exists());
+    assert!(std::fs::read_to_string(op_dir.join("SKILL.md"))
+        .unwrap()
+        .contains("name: orchestrate-plan"));
+
     let codex = h.json(&["skill", "install", "--agent", "codex"]);
-    assert!(codex["installed"]["codex"]
+    assert!(codex["installed"]["codex_haven"]
         .as_str()
         .unwrap()
         .ends_with("skills/haven"));
+    assert!(codex["installed"]["codex_orchestrate-plan"]
+        .as_str()
+        .unwrap()
+        .ends_with("skills/orchestrate-plan"));
     assert!(h.home.join(".agents/skills/haven/SKILL.md").exists());
+    assert!(h
+        .home
+        .join(".agents/skills/orchestrate-plan/SKILL.md")
+        .exists());
 
     // `setup` installs both default agent skills (alongside MCP wiring) — unless --no-skill.
     let fresh = Haven::new();
@@ -115,6 +137,27 @@ fn skill_install_and_setup_write_the_snapshot() {
     assert_eq!(out["skill"], "skipped (--no-skill)");
     assert!(!skipped.home.join(".claude/skills/haven/SKILL.md").exists());
     assert!(!skipped.home.join(".agents/skills/haven/SKILL.md").exists());
+}
+
+#[test]
+fn skill_install_can_target_one_skill() {
+    let h = Haven::new();
+    let out = h.json(&["skill", "install", "--skill", "orchestrate-plan"]);
+    assert!(out["installed"]["claude_orchestrate-plan"]
+        .as_str()
+        .unwrap()
+        .ends_with("skills/orchestrate-plan"));
+    // --skill scopes the install: haven is NOT touched.
+    assert!(out["installed"].get("claude_haven").is_none());
+    assert!(h
+        .home
+        .join(".claude/skills/orchestrate-plan/SKILL.md")
+        .exists());
+    assert!(!h.home.join(".claude/skills/haven").exists());
+
+    // An unknown skill name is a clean error envelope, not a panic.
+    let err = h.fail(&["skill", "install", "--skill", "nope"]);
+    assert!(err.to_string().contains("unknown skill"));
 }
 
 #[test]
@@ -182,9 +225,11 @@ fn doctor_reports_install_health() {
         "schema detail was: {schema_detail}"
     );
     assert_eq!(status_of(&before, "claude_mcp"), "warn");
-    assert_eq!(status_of(&before, "claude_skill"), "warn");
+    assert_eq!(status_of(&before, "claude_skill_haven"), "warn");
+    assert_eq!(status_of(&before, "claude_skill_orchestrate-plan"), "warn");
     assert_eq!(status_of(&before, "codex_mcp"), "warn");
-    assert_eq!(status_of(&before, "codex_skill"), "warn");
+    assert_eq!(status_of(&before, "codex_skill_haven"), "warn");
+    assert_eq!(status_of(&before, "codex_skill_orchestrate-plan"), "warn");
     assert_eq!(status_of(&before, "agents_md"), "warn");
 
     // After setup, MCP + skill are green. Put the built binary on $PATH so the
@@ -205,9 +250,11 @@ fn doctor_reports_install_health() {
         .unwrap();
     let after: Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(status_of(&after, "claude_mcp"), "ok");
-    assert_eq!(status_of(&after, "claude_skill"), "ok");
+    assert_eq!(status_of(&after, "claude_skill_haven"), "ok");
+    assert_eq!(status_of(&after, "claude_skill_orchestrate-plan"), "ok");
     assert_eq!(status_of(&after, "codex_mcp"), "ok");
-    assert_eq!(status_of(&after, "codex_skill"), "ok");
+    assert_eq!(status_of(&after, "codex_skill_haven"), "ok");
+    assert_eq!(status_of(&after, "codex_skill_orchestrate-plan"), "ok");
     assert_eq!(status_of(&after, "agents_md"), "ok");
     assert_eq!(status_of(&after, "path"), "ok");
     assert_eq!(
