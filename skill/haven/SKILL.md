@@ -61,7 +61,9 @@ The mistakes that actually bite — internalise these:
 - **`ready` requires `done_looks_like`.** An item with no acceptance can't be
   verified or cleanly dispatched. Set it when you mark something `ready` — the
   store now **enforces** this: a status→`ready` transition (or clearing
-  acceptance on a `ready` item) is refused without it.
+  acceptance on a `ready` item) is refused without it. For *how* to write good
+  acceptance and specs — the quality bar, adaptive depth, and clarify-first vs
+  assume-and-tag — see `references/spec-quality.md`.
 - **Don't build an ungroomed item.** Before dispatching work to a builder
   (workflow 4), confirm it's `ready` with concrete `done_looks_like`; if not,
   groom it first (workflow 3) or bounce to planning. Building an unverifiable

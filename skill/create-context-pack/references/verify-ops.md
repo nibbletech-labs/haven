@@ -60,9 +60,12 @@ No mutation here — it shapes pack sections 3 and the dependency edges you wire
 
 Bring every member to a sealed leaf via the `haven` **groom** workflow (wf 3): firm its
 `done_looks_like` to a concrete, testable bar, and write/firm its `spec` (wf 10) where it
-warrants one. Groom under-specified-but-coherent members **in place**; only a member that
-needs **decomposition** (structurally too big) → **STOP** and run `orchestrate-plan` on it
-first. Don't decompose here.
+warrants one — both to the `haven` skill's `references/spec-quality.md` bar (field map,
+scope-boundary + constraints backbone, adaptive ceremony). With a human present, groom
+**clarify-first** (ask targeted questions before writing); in an unattended/batch run, infer
+and tag each assumption `[VERIFY]`. Groom under-specified-but-coherent members **in place**;
+only a member that needs **decomposition** (structurally too big) → **STOP** and run
+`orchestrate-plan` on it first. Don't decompose here.
 
 **Clash check — single active pack per leaf.** `haven_get_item` returns a derived
 `context_pack` pointer (and `context_pack_clash`) on each leaf. Before claiming a member

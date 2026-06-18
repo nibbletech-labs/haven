@@ -103,7 +103,9 @@ pack's section layout + the verbatim preamble are in `references/pack-template.m
    `d` in, or it blocks `b`") and let the human decide. **Never auto-expand scope.**
 3. **GROOM EACH MEMBER (precondition).** Bring every member to a sealed leaf via
    the `haven` **groom** workflow (wf 3): firm its `done_looks_like` to a concrete,
-   testable bar and write/firm its `spec` (wf 10) where it warrants one. Under-
+   testable bar and write/firm its `spec` (wf 10) where it warrants one — both held to
+   the `haven` skill's `references/spec-quality.md` bar (field map, backbone, adaptive
+   depth). With a human present this is **clarify-first**: ask before assuming. Under-
    specified-but-coherent members you groom **in place**; only a member that needs
    **decomposition** (structurally too big) → **STOP and route to
    `orchestrate-plan`** (this skill fleshes out a planned group; it does not

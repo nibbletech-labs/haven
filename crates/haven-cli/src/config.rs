@@ -150,6 +150,10 @@ const HAVEN_SKILL_FILES: &[(&str, &str)] = &[
         include_str!("../../../skill/haven/references/surface-map.md"),
     ),
     (
+        "references/spec-quality.md",
+        include_str!("../../../skill/haven/references/spec-quality.md"),
+    ),
+    (
         "agents/openai.yaml",
         include_str!("../../../skill/haven/agents/openai.yaml"),
     ),

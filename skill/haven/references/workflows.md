@@ -119,9 +119,12 @@ ordered plan.
 2. For each, judge and apply:
    - Well-enough-defined to dispatch → set its acceptance and mark ready in one go:
      `haven item update HV-7 --status ready --done-looks-like "what success is"`.
-     A `ready` item without `done_looks_like` can't be verified — always set it.
-   - Needs a spec/decision first → `--status definition`, write/attach the artifact
-     (workflow 10).
+     A `ready` item without `done_looks_like` can't be verified — always set it, and
+     hold it to the bar in `spec-quality.md` (concrete + testable, not "works well").
+   - Needs a spec/decision first → `--status definition`, then write the artifact
+     (workflow 10) **to the bar in `spec-quality.md`** — score the gap, **clarify with
+     the human before writing** where it's genuinely under-defined (don't assume), and
+     give the spec its backbone (scope boundary + constraints).
    - Too big → split (workflow 7). Duplicate → merge (workflow 7).
    - Stale / won't-do → `haven item archive HV-7 --rationale "…"` (never delete).
    - Floating but clearly in-play → commit (workflow 2).
@@ -132,6 +135,9 @@ ordered plan.
 - **Ready means dispatchable** — someone could pick it up and start *without
   further definition*. If you'd have to ask "what does this even mean," it's not
   ready.
+- **Clarify, don't assume.** Scale the work to the gap (`spec-quality.md`: rich →
+  fast-validate, thin → ask 2–4 targeted questions *then* write). With a human in the
+  loop, asking beats inferring a pile of assumptions into a big unvalidated spec.
 - **Groom toward fewer, clearer items.** Archive aggressively — it's reversible via
   `reopen`; the icebox is not sacred.
 - **Don't bulk-commit during grooming.** Grooming is maturity (axis 1); commitment
@@ -333,6 +339,14 @@ filesystem-less client must read/write content.
   the DB — only the pointer.
 - **Read:** `haven_get_artifact {ref, role}` returns `{path, role, content}`,
   lazy-pulling from Storage if the file is remote-only.
+
+**Writing a good `spec` (not just a file):** registering the artifact is the
+mechanical half — the content has a bar. See `spec-quality.md` for it: the field map
+(problem → `why`, success → `done_looks_like`, boundary/constraints/detail → the spec —
+never duplicated), the always-present backbone (**scope boundary + constraints**),
+adaptive ceremony (score rich/moderate/thin, don't pay uniform overhead), and the
+depth mode — **clarify-first with a human present** (ask targeted questions before
+writing), infer-and-`[VERIFY]` only when headless. Don't dead-end at "wrote a file."
 
 **Register vs just write:**
 - **Register** (`artifact add`) durable, referenceable work products someone will
