@@ -22,11 +22,18 @@ first if unknown: CLI `haven project list`; MCP `haven_list_projects`.
 ## 1. Resolve the target — find or create the grouping container
 
 The input is a **single item or an explicit set of refs**. Determine their common
-container from step-0's grouping edges (a `release`/`phase` node they all belong to).
+container from step-0's grouping edges (a `release`/`phase` node they all belong to), then
+pick the pack's home by comparing your target set to that container's **full** membership:
 
-- **If a container already exists** (members share one `release`/`phase` group): use it.
-- **If not, create one and group the members in:**
-  - CLI: `haven item add "<group title> — dev batch" --type phase -p <P>` → returns
+- **Target set == the container's full membership:** use the existing container.
+- **Target set ⊊ the container's members** (a strict subset — building part of a broader
+  phase), **or no common container exists:** create a dedicated **build-batch** container
+  and group your members in. The pack lands here, **never on the broad phase** — a phase
+  holds one `context-pack.md`, so a subset's pack on the broad phase is mis-scoped and a
+  later batch clobbers it. Members keep any existing phase membership — grouping is
+  **additive / many-to-many**, so you *add* the batch edge and **never remove** the
+  member's original group (a leaf can sit in its theme phase *and* a build batch at once).
+  - CLI: `haven item add "<batch title> — dev batch" --type phase -p <P>` → returns
     `<CONTAINER>`; then `haven group <CONTAINER> --add <ref> --add <ref> … -p <P>`.
   - MCP: `haven_add_item {"project":"<P>","title":"…","type":"phase"}` → `<CONTAINER>`;
     then **one call per member** `haven_add_edge {"project":"<P>","kind":"grouping",

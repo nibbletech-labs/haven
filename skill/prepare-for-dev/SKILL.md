@@ -67,10 +67,25 @@ pack's section layout + the verbatim preamble are in `references/pack-template.m
 0. **REORIENT.** Read the whole graph in one call (`haven graph` / `haven_graph`).
    Resolve the project first if unknown. This is the only tick state.
 1. **RESOLVE THE TARGET.** The input is an explicit **single item or set of items**
-   — never the whole project. Find their common `release`/`phase` grouping
-   container; if none exists, **create one** (`--type phase`) and **group the
-   members into it** (additive — see Safety). A single item is a degenerate group
-   (just enrich that one leaf; usually no shared-behaviour pack is warranted).
+   — never the whole project. Read the members' grouping edges, find their common
+   `release`/`phase` container, then pick the pack's home by comparing your target set
+   to that container's **full** membership:
+   - **Target set == the container's full membership** → use that container directly.
+   - **Target set is a strict *subset* of its members** (you're building only part of a
+     broader phase), **or there is no common container** → **create a dedicated
+     build-batch container** (`--type phase`) and group **only the targeted members**
+     into it. Members keep their existing phase membership — grouping is **many-to-many**,
+     so you *add* the batch edge and *never remove* the member's original group. The pack
+     must land on this batch container: a phase holds **one** `context-pack.md`, so writing
+     a subset's pack onto the broad phase mis-scopes it (a pack covering 2 of 7 members)
+     **and** a later batch from the same phase would **clobber** it.
+   A single item is a degenerate group (just enrich that one leaf; usually no
+   shared-behaviour pack is warranted). What groups a batch is simply that **you intend to
+   build the members together** — neither a dependency between them nor shared architecture
+   is required. Shared architecture is the *bonus*: when members touch the same code,
+   contracts, or data model, the pack captures that write-once context; when they don't,
+   step 5's shared-context assessment records a one-line "simple batch — no pack" and you
+   still keep the grouping. Dependency is never the trigger.
 2. **DEPENDENCY-CLOSURE CHECK.** Walk each member's dependency edges. For an
    external dependency `d` (not in the set): if `d` is `done`, pull its
    output/acceptance into the pack's foundation as **read-only context**; if `d` is
