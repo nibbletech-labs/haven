@@ -86,7 +86,7 @@ after the work is on `main`.
 `orchestrate-plan` (re-invoke it on that branch). If it's clearly moot, archive with a
 rationale via lineage (never delete):
 - CLI: `haven item archive <ref> --rationale "<superseded by <producer>'s outcome>" -p <P>`
-- MCP: `haven_archive {"project":"<P>","ref":"<ref>","why":"<…>"}`
+- MCP: `haven_archive {"project":"<P>","ref":"<ref>","rationale":"<…>"}`
 
 ## Failure path
 
