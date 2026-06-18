@@ -120,6 +120,21 @@ fn skill_install_and_setup_write_the_snapshot() {
         .unwrap()
         .contains("name: create-context-pack"));
 
+    // …and the fourth skill, orchestrate-run.
+    assert!(out["installed"]["claude_orchestrate-run"]
+        .as_str()
+        .unwrap()
+        .ends_with("skills/orchestrate-run"));
+    let orun_dir = h.home.join(".claude/skills/orchestrate-run");
+    assert!(orun_dir.join("SKILL.md").exists());
+    assert!(orun_dir.join("references/tick-ops.md").exists());
+    assert!(orun_dir.join("references/worktree-merge.md").exists());
+    assert!(orun_dir.join("references/dispatch-policy.md").exists());
+    assert!(orun_dir.join("agents/openai.yaml").exists());
+    assert!(std::fs::read_to_string(orun_dir.join("SKILL.md"))
+        .unwrap()
+        .contains("name: orchestrate-run"));
+
     let codex = h.json(&["skill", "install", "--agent", "codex"]);
     assert!(codex["installed"]["codex_haven"]
         .as_str()
@@ -133,6 +148,10 @@ fn skill_install_and_setup_write_the_snapshot() {
         .as_str()
         .unwrap()
         .ends_with("skills/create-context-pack"));
+    assert!(codex["installed"]["codex_orchestrate-run"]
+        .as_str()
+        .unwrap()
+        .ends_with("skills/orchestrate-run"));
     assert!(h.home.join(".agents/skills/haven/SKILL.md").exists());
     assert!(h
         .home
@@ -141,6 +160,10 @@ fn skill_install_and_setup_write_the_snapshot() {
     assert!(h
         .home
         .join(".agents/skills/create-context-pack/SKILL.md")
+        .exists());
+    assert!(h
+        .home
+        .join(".agents/skills/orchestrate-run/SKILL.md")
         .exists());
 
     // `setup` installs both default agent skills (alongside MCP wiring) — unless --no-skill.
@@ -256,6 +279,7 @@ fn doctor_reports_install_health() {
         status_of(&before, "claude_skill_create-context-pack"),
         "warn"
     );
+    assert_eq!(status_of(&before, "claude_skill_orchestrate-run"), "warn");
     assert_eq!(status_of(&before, "codex_mcp"), "warn");
     assert_eq!(status_of(&before, "codex_skill_haven"), "warn");
     assert_eq!(status_of(&before, "codex_skill_orchestrate-plan"), "warn");
@@ -263,6 +287,7 @@ fn doctor_reports_install_health() {
         status_of(&before, "codex_skill_create-context-pack"),
         "warn"
     );
+    assert_eq!(status_of(&before, "codex_skill_orchestrate-run"), "warn");
     assert_eq!(status_of(&before, "agents_md"), "warn");
 
     // After setup, MCP + skill are green. Put the built binary on $PATH so the
@@ -286,10 +311,12 @@ fn doctor_reports_install_health() {
     assert_eq!(status_of(&after, "claude_skill_haven"), "ok");
     assert_eq!(status_of(&after, "claude_skill_orchestrate-plan"), "ok");
     assert_eq!(status_of(&after, "claude_skill_create-context-pack"), "ok");
+    assert_eq!(status_of(&after, "claude_skill_orchestrate-run"), "ok");
     assert_eq!(status_of(&after, "codex_mcp"), "ok");
     assert_eq!(status_of(&after, "codex_skill_haven"), "ok");
     assert_eq!(status_of(&after, "codex_skill_orchestrate-plan"), "ok");
     assert_eq!(status_of(&after, "codex_skill_create-context-pack"), "ok");
+    assert_eq!(status_of(&after, "codex_skill_orchestrate-run"), "ok");
     assert_eq!(status_of(&after, "agents_md"), "ok");
     assert_eq!(status_of(&after, "path"), "ok");
     assert_eq!(

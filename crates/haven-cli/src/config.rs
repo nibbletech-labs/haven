@@ -197,6 +197,29 @@ const CREATE_CONTEXT_PACK_SKILL_FILES: &[(&str, &str)] = &[
     ),
 ];
 
+const ORCHESTRATE_RUN_SKILL_FILES: &[(&str, &str)] = &[
+    (
+        "SKILL.md",
+        include_str!("../../../skill/orchestrate-run/SKILL.md"),
+    ),
+    (
+        "references/tick-ops.md",
+        include_str!("../../../skill/orchestrate-run/references/tick-ops.md"),
+    ),
+    (
+        "references/worktree-merge.md",
+        include_str!("../../../skill/orchestrate-run/references/worktree-merge.md"),
+    ),
+    (
+        "references/dispatch-policy.md",
+        include_str!("../../../skill/orchestrate-run/references/dispatch-policy.md"),
+    ),
+    (
+        "agents/openai.yaml",
+        include_str!("../../../skill/orchestrate-run/agents/openai.yaml"),
+    ),
+];
+
 /// Every skill `haven setup` / `haven skill install` lay down. Add a skill by
 /// adding its files const + an entry here; install / refresh / doctor all
 /// iterate this registry.
@@ -212,6 +235,10 @@ const SKILL_REGISTRY: &[Skill] = &[
     Skill {
         name: "create-context-pack",
         files: CREATE_CONTEXT_PACK_SKILL_FILES,
+    },
+    Skill {
+        name: "orchestrate-run",
+        files: ORCHESTRATE_RUN_SKILL_FILES,
     },
 ];
 

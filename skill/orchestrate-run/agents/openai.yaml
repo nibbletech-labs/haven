@@ -1,0 +1,14 @@
+name: orchestrate-run
+agent: codex
+skill: orchestrate-run
+mcp:
+  server: haven
+  command: haven
+  args:
+    - mcp
+discovery:
+  agents_md: AGENTS.md
+  skill_paths:
+    - .agents/skills/orchestrate-run
+    - ~/.agents/skills/orchestrate-run
+    - /etc/codex/skills/orchestrate-run
