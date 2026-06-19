@@ -80,25 +80,33 @@ loop:
    by `ref`. (Depth is single-valued — see "Keep it a tree".)
 4. **READ ITS DETAIL** if step-0's compact node lacks the prose you need to judge
    grain (`haven item get` / `haven_get_item`). Read `body`/`why`/`done_looks_like`.
-5. **DECIDE — seal, split, or defer?** Apply the stop test
-   (`references/decomposition.md`). Three outcomes: it's skill-grain → **seal**
-   (step 8); it should split **and** depth < 5 **and** its children are knowable now
-   → **split** (step 6); it should split **but** its shape depends on an output that
-   doesn't exist yet → **defer** (step 7).
+5. **DECIDE — seal, split, defer, or discover?** Apply the stop test
+   (`references/decomposition.md`). It's skill-grain → **seal** (step 8); it should split
+   **and** depth < 5 **and** its children are knowable now → **split** (step 6); it should
+   split **but** its shape depends on an output that doesn't exist yet → **defer** (step 7);
+   or you *could* seal it but only by **assuming** a load-bearing unknown (feasibility, fit,
+   approach, mechanics, magnitude, an external answer, or whether it's worth doing at all) →
+   **discover** — mint an AI-first discovery leaf and defer the dependent on it (step 7).
 6. **SPLIT** (one level): create each child wired to the parent via a decomposition
    edge; wire dependency edges where one child's output feeds another. Record a
    one-line rationale on the parent's `why` (or a `decision` artifact) when the
    split is non-obvious. **End the tick** — children existing *is* the parent's
    decomposed state; there is no `decomposed` status to set.
-7. **DEFER** (the knowability horizon): the node should break down, but you don't yet
-   know its children because they depend on an unproduced output (you can't know the
-   storefront's sub-tasks until the platform is chosen). Don't guess. Make sure the
-   producing work exists as its own node (split it out / seal it if skill-grain),
-   wire this node's **dependency** edge to it, set this node **`status=blocked`**,
-   leave it coarse, and record *why* in `why`. **End the tick.** It re-enters the
-   frontier (step 2) when that dependency completes — and the next pass decomposes it
-   *then*, with the answer in hand. Also drop a floating `discovery` node for any
-   genuine gap/unknown you notice but can't place yet (capture is cheap).
+7. **DEFER / DISCOVER** (the knowability & evidence horizons): the node should break down,
+   but you can't yet — either because its children depend on an **unproduced output** (you
+   can't know the storefront's sub-tasks until the platform is chosen) *or* because sealing it
+   would rest on a **load-bearing unknown** you'd only be guessing at (feasibility, fit,
+   approach, mechanics, magnitude, an external answer, or whether it's worth doing at all).
+   Either way, don't guess. Make the **producer** exist as its own node — for a missing output,
+   the build work that yields it; for a missing fact, a **discovery leaf** (`done_looks_like` =
+   the evidence/decision it produces) — wire this node's **dependency** edge to it, set this
+   node **`status=blocked`**, leave it coarse, record *why*. **End the tick.** It re-enters the
+   frontier (step 2) when the producer completes — the next pass decomposes it *then*, with the
+   answer in hand. **Route a discovery producer AI-first:** default a `research`/probe leaf owned
+   `ai` (web research, data, or a cheap *reversible* try); reserve `human` for genuinely
+   human-only unknowns AI couldn't settle under a low uncertainty bar (full routing + the seven
+   unknowns: `references/decomposition.md`, "the evidence check"). Also drop a floating
+   `discovery` node for any genuine gap/unknown you notice but can't place yet (capture is cheap).
 8. **SEAL AS LEAF** (skill-grain reached, or depth cap hit): set a concrete,
    testable `done_looks_like` + `status=ready` + commit (priority) + an **owner** —
    `ai` for work the executor can do, `human` for real-world tasks (formulation,
@@ -182,7 +190,9 @@ defect, not something to dispatch.)
 
 Execution (agent/skill dispatch, verification, completion, evidence). Also: a live
 skill-discovery manifest (grain is judged by the stop test's heuristics, not a
-manifest), explicit scope/constraint fields, test-and-learn/alternatives, autonomy
-modes, and conflict detection across concurrent planners (v1 assumes one planner per
-project per session). These orchestrate concepts have no Haven primitive yet — reason
-about them in prose if useful, but don't pretend the graph encodes them.
+manifest), explicit scope/constraint fields, autonomy modes, and conflict detection
+across concurrent planners (v1 assumes one planner per project per session). (The
+**evidence/discovery gate** — minting AI-first research/probe leaves over load-bearing
+unknowns — is **in** now, step 7; heavier test-and-learn/alternatives machinery beyond
+that is not.) These orchestrate concepts have no Haven primitive yet — reason about them
+in prose if useful, but don't pretend the graph encodes them.
