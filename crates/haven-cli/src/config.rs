@@ -220,6 +220,22 @@ const ORCHESTRATE_RUN_SKILL_FILES: &[(&str, &str)] = &[
     ),
 ];
 
+const VERIFY_SKILL_FILES: &[(&str, &str)] = &[
+    ("SKILL.md", include_str!("../../../skill/verify/SKILL.md")),
+    (
+        "references/verdict-contract.md",
+        include_str!("../../../skill/verify/references/verdict-contract.md"),
+    ),
+    (
+        "references/verify-ops.md",
+        include_str!("../../../skill/verify/references/verify-ops.md"),
+    ),
+    (
+        "agents/openai.yaml",
+        include_str!("../../../skill/verify/agents/openai.yaml"),
+    ),
+];
+
 /// Every skill `haven setup` / `haven skill install` lay down. Add a skill by
 /// adding its files const + an entry here; install / refresh / doctor all
 /// iterate this registry.
@@ -239,6 +255,10 @@ const SKILL_REGISTRY: &[Skill] = &[
     Skill {
         name: "orchestrate-run",
         files: ORCHESTRATE_RUN_SKILL_FILES,
+    },
+    Skill {
+        name: "verify",
+        files: VERIFY_SKILL_FILES,
     },
 ];
 

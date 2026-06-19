@@ -31,19 +31,23 @@ effort on the first retry and bump on the second.
 
 ## GATE — how a batch is judged before merge
 
-- **Unattended (default for autonomous runs): a fresh VERIFIER AGENT.** Spawn a *separate*
-  agent — **never the build agent** — given **only**: the leaf's `done_looks_like`, the pack's
-  shared-requirements section, and the diff. It must **not** see the build agent's reasoning or
-  worktree narrative. It runs `build + lint + test` (exit 0) **and** judges whether the diff
-  actually satisfies the acceptance, returning `pass/fail + evidence`. A same-context reviewer
-  is structurally blind to its own blind spots; the verifier's independence by construction is
-  the load-bearing quality guarantee, and deterministic exit-0 alone is only partial cover
-  (test adequacy + "does this meet `done_looks_like`" are judgment calls).
+- **Unattended (default for autonomous runs): compose the `verify` skill.** The gate **is** the
+  standalone `verify` skill (Mode 1) — a fresh verifier agent given **only** the leaf's
+  `done_looks_like` + the pack's shared-requirements + the diff (never the build agent's reasoning
+  or worktree narrative), running `build + lint + test` (exit-0) + an independent acceptance
+  judgment, and returning a **PASS / NEEDS-HUMAN / FAIL** verdict + evidence. **See `skill/verify`
+  (`SKILL.md` + `references/verdict-contract.md`) for the contract — do not restate it here.** The
+  executor **consumes** the verdict; it never re-implements the judgment. Only **PASS** merges; a
+  **FAIL** keeps the batch in the worktree → failure path (STRIKES below); a **NEEDS-HUMAN**
+  escalates straight to `handoff` (ambiguity won't clear on a blind retry). The verifier's
+  independence by construction is the load-bearing quality guarantee — deterministic exit-0 alone
+  is only partial cover (test adequacy + "does this meet `done_looks_like`" are judgment calls).
 - **Attended: native plan-mode human approval** per complex batch. Use when a person is driving
   and the batch warrants a human "go".
 
-> The verifier (or the human) runs **twice** for any merged batch: once in-worktree (step 7)
-> and again post-rebase inside the merge lock (step 8). The post-rebase run is non-negotiable.
+> The verifier (or the human) runs **twice** for any merged batch: once in-worktree (step 7) and
+> again post-rebase inside the merge lock (step 8). The post-rebase run is non-negotiable — *when*,
+> *which worktree*, and *how many times* the gate runs is the **executor's**, not the skill's.
 
 ## The build agent's self-check (shifts acceptance left)
 

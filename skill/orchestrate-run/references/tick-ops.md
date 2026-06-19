@@ -61,11 +61,13 @@ self-check derived from `done_looks_like`. Read member detail if the compact nod
 - CLI: `haven item get <ref> --include edges,artifacts -p <P>`
 - MCP: `haven_get_item {"project":"<P>","ref":"<ref>","include":["edges","artifacts"]}`
 
-## 7. Gate — a fresh verifier (unattended) or plan-mode approval (attended)
+## 7. Gate — compose the `verify` skill (unattended) or plan-mode approval (attended)
 
-No Haven op — the gate is a spawned **verifier agent** (given only `done_looks_like` + pack
-shared requirements + the diff) running `build + lint + test`, or a human plan-mode "go".
-See `references/dispatch-policy.md` for the verifier contract.
+No Haven op — the unattended gate **is** the standalone `verify` skill (Mode 1): a fresh verifier
+agent given only `done_looks_like` + pack shared-requirements + the diff, running
+`build + lint + test` + an acceptance judgment, returning PASS / NEEDS-HUMAN / FAIL + evidence. The
+attended gate is a human plan-mode "go". **See `skill/verify` (and `references/dispatch-policy.md`
+§GATE) for the verifier contract** — the executor consumes the verdict, it does not re-implement it.
 
 ## 8. Merge — serialized lock → rebase → re-gate → ff
 
