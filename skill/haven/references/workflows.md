@@ -157,8 +157,8 @@ it as deliberate intent, not something to discover by tripping the guard.
 
 ```bash
 haven next --pretty                 # top of the dispatch queue
-haven next --owner human --limit 3  # what the human could pick up
-haven next --owner ai               # what an AI agent should take
+haven next --owner human --limit 3  # work a human is ELIGIBLE to pull
+haven next --owner ai               # work an AI is ELIGIBLE to pull (owner_eligible ai|any)
 haven next --explain --owner ai     # WHY the queue is empty (when it is)
 ```
 
@@ -168,11 +168,17 @@ haven next --explain --owner ai     # WHY the queue is empty (when it is)
   `blocked_by_dependency`, `waiting`, `committed_not_ready`, `ready_but_uncommitted`
   — and a `hint`. Report the reason and offer the fix (commit it / mark it ready /
   resolve the blocker), rather than reconstructing it by hand or inventing work.
-- **Respect ownership.** Filter `--owner ai` when dispatching to an agent; never
-  hand an agent a human-owned node waiting on a real-world action.
-- **Advance maturity on pickup:** `--status in_progress` when work starts (and
-  `assign` if needed); finish with **`item complete`** (workflow 9), not a bare
-  `--status done` — it records evidence and tells you what unblocked.
+- **Eligibility — not assignment — gates `--owner`.** `next --owner ai` returns items
+  whose **`owner_eligible`** is `ai` or `any` (*who MAY pull it*) and **excludes
+  untriaged (`owner_eligible` NULL) work, so it is never auto-pulled**. This is distinct
+  from *assignment* (`owner_kind`, set by `assign` — *who IS doing it*): assigning a node
+  to `ai` does **not** put it on the `--owner ai` frontier. So when you ready AI work, set
+  its eligibility — `haven item update <ref> --owner-eligible ai` (or `any`) — or it stays
+  invisible to the agent queue (`--owner-eligible none` re-untriages it). Never hand an
+  agent a human-eligible node waiting on a real-world action.
+- **Advance maturity on pickup:** `--status in_progress` when work starts (and `assign`
+  to record *who's doing it*, separate from eligibility); finish with **`item complete`**
+  (workflow 9), not a bare `--status done` — it records evidence and tells you what unblocked.
 
 ## 5. Multi-item delivery
 

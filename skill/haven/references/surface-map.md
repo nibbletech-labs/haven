@@ -25,7 +25,12 @@ values error.
   `gate` are container nodes (group targets); `anchor` is for living project docs.
 - **Status** (`--status`): `discovery` (default) → `definition` → `ready` →
   `in_progress` → `done`, plus `blocked`, `superseded`, `archived`.
-- **Owner** (`--to` / `--owner` / `--assign`): `human`, `ai`.
+- **Owner — two orthogonal axes.** *Assignment* (`--to` / `--assign`, stored
+  `owner_kind`): `human`, `ai` — NULL = unassigned (who IS doing it). *Eligibility*
+  (`--owner-eligible`, stored `owner_eligible`): `human`, `ai`, `any`, + `none` to
+  clear — NULL = untriaged (who MAY pull it). **`next --owner human|ai` filters on
+  ELIGIBILITY** (`owner_eligible IN (<owner>,'any')`); untriaged (NULL) is **never**
+  auto-pulled — when readying AI work set `--owner-eligible ai|any`, not just `assign`.
 - **Wait state** (`--wait`): `on_human`, `on_dependency`, `on_external`, and
   `none` to clear.
 - **Artifact role** (`--role`): `spec`, `research`, `design`, `decision`,
@@ -49,7 +54,7 @@ haven project list | get <key> | use <key>
 
 # Items (nodes)
 haven item add "<title>" [--type] [--body] [--done-looks-like "…"] [--why "…"]
-                         [--status] [--priority N] [--commit] [--assign human|ai]
+                         [--status] [--priority N] [--commit] [--assign human|ai] [--due-at YYYY-MM-DD]
                          [--parent <ref>] [--depends-on <ref>] [--group <ref>]
                          [--if-absent]   # normalized-title dedupe: return the existing item
 haven import <file.json> [--if-absent]  # bulk add: one validated, all-or-nothing transaction;
@@ -59,7 +64,9 @@ haven item list [--status] [--type] [--owner] [--committed] [--icebox] [--group 
                 [--wait on_human|on_dependency|on_external] [--stale <days>]
 haven item get <ref> [--include edges,artifacts,lineage]
 haven item update <ref>… [--title] [--body] [--done-looks-like "…"] [--why "…"]
-                        [--status] [--priority N] [--type] [--wait]  # 1+ refs, same update each
+                        [--status] [--priority N] [--type] [--wait]
+                        [--owner-eligible human|ai|any|none] [--due-at YYYY-MM-DD|none]  # 1+ refs, same update each
+                        # owner_eligible (dispatch eligibility) is set on UPDATE only, never on `item add`; `none` clears either field
 haven item commit <ref>… [--priority N]      # one or more refs (grooming)
 haven item uncommit <ref>…
 haven item assign <ref> --to human|ai [--actor <name>]
@@ -70,7 +77,7 @@ haven item archive <ref>… [--rationale "…"]  # one or more refs (grooming)
 haven item reopen  <ref> [--rationale "…"]
 
 # Dispatch
-haven next [--owner human|ai] [--limit N]
+haven next [--owner human|ai] [--limit N]   # --owner = ELIGIBILITY filter (owner_eligible IN owner,'any'); untriaged (NULL) excluded
 haven graph [--lineage]        # whole project: all nodes + edges in one read
 haven docs                     # live project-doc anchors + their artifacts
 
@@ -88,6 +95,7 @@ haven evolve resolve <ref>     # stale ref → its live descendant(s)
 
 # Search & content
 haven search "<query>" [--limit N]
+haven xref <ref>                # cross-store links: outbound xrefs + inbound backlinks (read-only)
 haven artifact add <ref> --role <role> [--file <path> | --content "…"] [--name <f>] [--replace]
                          [--kind] [--uri] [--title] [--excerpt] [--from] [--to] [--by]
                          # --name sets the destination filename (also for --file);
@@ -117,11 +125,11 @@ haven sync [status] [--watch]
 | `haven_inbox` | `owner?, limit?, offset?` — untriaged floaters (uncommitted, live, no `done_looks_like` yet); same compact paginated envelope as `haven_list_items` |
 | `haven_xref` | **`ref`** — cross-store links on the node's artifacts: a sorted `{node, outbound[], inbound[]}` report (outbound xrefs + inbound backlinks); read-only |
 | `haven_get_item` | **`ref`**, `include?: ["edges","artifacts","lineage"]` — the full item (prose + includes); the detail door |
-| `haven_next` | `owner?, limit?` — compact items |
+| `haven_next` | `owner?, limit?` — compact items; `owner` filters ELIGIBILITY (`owner_eligible IN (owner,'any')`), untriaged (NULL) excluded |
 | `haven_next_explain` | `owner?` — diagnose an empty queue (counts by reason + hint) |
 | `haven_rank` | **`ref`**, `before?` \| `after?` (exactly one) — reorder within a priority band (fine ordering) |
-| `haven_add_item` | **`title`**, `type?, body?, done_looks_like?, why?, status?, priority?, commit?, assign?, parent?, depends_on?, group?, if_absent?` — with `if_absent` a normalized-title match returns the existing item (`existing: true`); responses may carry advisory `similar` |
-| `haven_update_item` | **`ref`**, `title?, body?, done_looks_like?, why?, status?, priority?, type?, wait?, commit?, assign?, actor?` |
+| `haven_add_item` | **`title`**, `type?, body?, done_looks_like?, why?, status?, priority?, commit?, assign?, due_at?, parent?, depends_on?, group?, if_absent?` — with `if_absent` a normalized-title match returns the existing item (`existing: true`); responses may carry advisory `similar` |
+| `haven_update_item` | **`ref`**, `title?, body?, done_looks_like?, why?, status?, priority?, type?, wait?, owner_eligible?, due_at?, commit?, assign?, actor?` (`owner_eligible`/`due_at` accept `"none"` to clear) |
 | `haven_add_edge` | **`kind`** (`decomposition`\|`dependency`\|`grouping`), **`from`**, **`to`**, `remove?` |
 | `haven_evolve` | **`op`** (`split`\|`merge`\|`supersede`), **`refs`**, `into?, with?, title?, rationale?, by?` |
 | `haven_lineage` | **`ref`**, `direction?, depth?` |

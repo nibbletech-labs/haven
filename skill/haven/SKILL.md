@@ -191,8 +191,10 @@ Over MCP, pass `project` on every call. The common ops:
 // Capture — floating, uncommitted, discovery (the default).
 haven_add_item   {"project":"haven","title":"Cache the JWKS lookup"}
 // Make it dispatchable: commit + ready + acceptance, in one update.
+// For AI work, also set owner_eligible — `next --owner ai` filters on ELIGIBILITY
+// (owner_eligible ai|any), NOT assignment; untriaged (NULL) is never auto-pulled.
 haven_update_item{"project":"haven","ref":"HV-1","status":"ready","commit":true,
-                  "priority":1,"done_looks_like":"p95 verify < 5ms"}
+                  "priority":1,"owner_eligible":"ai","done_looks_like":"p95 verify < 5ms"}
 // List is compact + paginated: {total, count, offset, items[]}, default limit 100.
 haven_list_items   {"project":"haven","status":"ready","limit":20,"offset":0}
 haven_get_item     {"project":"haven","ref":"HV-1"}    // full item (prose + includes)
