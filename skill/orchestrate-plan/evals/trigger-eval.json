@@ -1,0 +1,23 @@
+[
+  {"query": "have a go at creating the e-commerce site for my scent idea (it's in /Users/tom/second-brain/01_Projects/Explore Personal Scent System). I can make the product but have no brand, no packaging, no website, nothing — goal is to launch, publicise it and start shipping", "should_trigger": true},
+  {"query": "I want to take learn-the-world from prototype to a real launched product — the full Expo mobile app, the content pipeline, marketing site, app-store listing, the lot. can you get the whole thing moving?", "should_trigger": true},
+  {"query": "build me a whole booking-and-payments SaaS for my sister's physio clinic from scratch — online scheduling, sms reminders, stripe, the marketing website, admin dashboard, everything. there's nothing yet", "should_trigger": true},
+  {"query": "orchestrate the entire codezilla launch — landing page, finish the app, pricing tiers, docs, the announcement. take it from here to shipped", "should_trigger": true},
+  {"query": "ok new side project: a paid newsletter about UK house prices. nothing exists. plan out absolutely everything I'd need to launch it and get my first 100 paying subscribers", "should_trigger": true},
+  {"query": "decompose the haven cloud-sync initiative (it's HV-13) into a proper dependency graph of dispatchable leaves with acceptance criteria", "should_trigger": true},
+  {"query": "turn 'launch the personal scent brand in the UK and start shipping orders' into a full work graph / backlog", "should_trigger": true},
+  {"query": "break the servo v2 rebuild down into a stacked tree — the data model, the capture pipeline, the API, the mobile client, auth, deploy. it all needs doing and some of it depends on the rest", "should_trigger": true},
+  {"query": "I'm starting a small-batch coffee roastery brand. I can roast and bag the beans but there's no name, no logo, no shop, no socials, nothing. take me from zero to taking orders online", "should_trigger": true},
+  {"query": "stand up the full internal analytics platform for the team from scratch — event ingestion, the warehouse, auth, and the actual dashboards, then deploy it. greenfield, nothing exists yet", "should_trigger": true},
+
+  {"query": "add a 'forgot password?' link under the login form on the storefront and wire it to the reset flow we already have", "should_trigger": false},
+  {"query": "there's a bug in checkout.ts — the cart total doesn't recalculate when you change item quantity. can you fix it?", "should_trigger": false},
+  {"query": "the perfume plan (PF project) is already decomposed and ready — run the ready AI work and get phase 1 actually built", "should_trigger": false},
+  {"query": "execute the haven graph for me — dispatch whatever's ready for ai and build it", "should_trigger": false},
+  {"query": "create a context pack for PF-36 and PF-37 so they're build-ready for dev", "should_trigger": false},
+  {"query": "what should I work on next on the scent project?", "should_trigger": false},
+  {"query": "what's actually left before I can launch the store? give me the outstanding items", "should_trigger": false},
+  {"query": "park this for later — an idea for a subscription refill model for the scent system. don't action it, just capture it", "should_trigger": false},
+  {"query": "build a reusable date-range picker component and add it to the web design system — should match the existing tokens", "should_trigger": false},
+  {"query": "write me the launch-day tweet thread and a short press release for the scent brand launch", "should_trigger": false}
+]

@@ -1,16 +1,19 @@
 ---
 name: orchestrate-plan
 description: >-
-  Decompose a goal or initiative into a multi-level Haven work-graph — children,
-  dependencies, and acceptance criteria — ready for planning and dispatch.
-  Plan-only: it structures work into the graph, it does NOT execute it. Use when a
-  goal is too big to act on directly and needs breaking into a stacked tree of
-  smaller, ownable pieces where some outputs feed others — e.g. "decompose this
-  into a plan", "turn this goal into a backlog/graph", "break this initiative
-  down into a dependency graph", "plan out the work to build/launch X". Sits on
-  top of the `haven` skill: it CREATES graph structure; defer simple capture,
-  "what's next", listing, status, handoff, and single-item grooming to `haven`.
-  Not for one-off captures or already-decomposed work.
+  The starting point for any large, multi-part effort that has no plan yet —
+  building or launching a product, app, site, platform, brand, newsletter, or
+  business end-to-end, especially greenfield ("from scratch", "nothing exists
+  yet", "the lot", "everything I'd need"). Take that goal and break it into a
+  structured Haven work-graph: a multi-level tree of ownable tasks with
+  dependencies (one piece's output feeds another) and acceptance criteria. This
+  is planning, not doing — fire it even when the user says "build it", "create
+  the site", "get the whole thing moving", or "have a go at X"; you map the whole
+  effort before any of it is built. Also fires on explicit "decompose this into a
+  dependency graph / work graph / backlog". If a plan already exists and they
+  just want it built, that's `orchestrate-run`. For one task, a status check,
+  "what's next", or grooming a single item, use `haven`. Not for a one-off or
+  single-component task you can just do, or already-decomposed work.
 ---
 
 # orchestrate-plan — the planner half of orchestrate
@@ -51,6 +54,13 @@ The gotchas that bite the planner:
   planner *commits* leaves it seals (they're real, ordered work); it leaves
   genuine unknowns floating and surfaces them, rather than fabricating work.
 - **Over MCP there is no sticky session** — pass `project` on every call.
+- **Creative & strategic decisions are research-and-propose nodes, never quick
+  questions.** A brand name, a visual aesthetic, a positioning, a platform choice —
+  when the answer should be *earned* by studying comparables and trade-offs, mint it
+  as a `research`/`design` leaf that yields options + a recommendation, with the
+  dependent work blocked on it; the human decides *after* seeing the proposal. Never
+  use AskUserQuestion to shortcut a decision the graph should derive — that's the
+  piecemeal trap applied to judgment, not just architecture.
 
 ## The tick
 
