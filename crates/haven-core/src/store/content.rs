@@ -34,7 +34,8 @@ pub struct NewArtifact {
     /// the content tree and only the typed pointer is stored in the DB — the
     /// content itself is never a DB column.
     pub content: Option<String>,
-    /// Target filename for inline `content` (defaults to `<role>.md`).
+    /// Target filename: for inline `content` (defaults to `<role>.md`) and, when
+    /// set, the destination name for a source `file` (else the source basename).
     pub name: Option<String>,
     pub uri: Option<String>,
     pub title: Option<String>,
@@ -42,6 +43,10 @@ pub struct NewArtifact {
     pub from_owner: Option<OwnerKind>,
     pub to_owner: Option<OwnerKind>,
     pub created_by: Option<String>,
+    /// When the destination `(node, path)` already exists: `false` rejects the
+    /// add (the safe default — a duplicate would shadow on read); `true` updates
+    /// the existing row in place (rewrite file, recompute hash, bump revision).
+    pub replace: bool,
 }
 
 /// The bytes (as text) behind an artifact, returned by `artifact get`.
@@ -152,7 +157,10 @@ impl Store {
             ));
         }
 
-        let (rel_path, content_hash) = match new.kind {
+        // Resolve the row fields plus, for file kinds, the pending on-disk write —
+        // deferred so the (node, path) collision check below can reject *before*
+        // clobbering an existing file.
+        let (rel_path, content_hash, pending_write) = match new.kind {
             ArtifactKind::File => {
                 if new.file.is_some() && new.content.is_some() {
                     return Err(HavenError::Invalid(
@@ -170,11 +178,17 @@ impl Store {
                     let bytes = std::fs::read(src).map_err(|e| {
                         HavenError::Invalid(format!("cannot read {}: {e}", src.display()))
                     })?;
-                    let filename = src
-                        .file_name()
-                        .ok_or_else(|| HavenError::Invalid("source has no file name".into()))?
-                        .to_string_lossy()
-                        .to_string();
+                    // Honor an explicit --name as the destination filename (run
+                    // through the same plain-name validation below); else fall
+                    // back to the source basename.
+                    let filename = match &new.name {
+                        Some(name) => name.clone(),
+                        None => src
+                            .file_name()
+                            .ok_or_else(|| HavenError::Invalid("source has no file name".into()))?
+                            .to_string_lossy()
+                            .to_string(),
+                    };
                     (filename, bytes)
                 } else {
                     return Err(HavenError::Invalid(
@@ -183,16 +197,7 @@ impl Store {
                 };
                 // Filename must be a single plain component (no separators / `..`),
                 // so a client-supplied name can't escape the item directory.
-                if filename.is_empty()
-                    || filename.contains('/')
-                    || filename.contains('\\')
-                    || filename.split(['/', '\\']).any(|seg| seg == "..")
-                    || filename == ".."
-                {
-                    return Err(HavenError::Invalid(format!(
-                        "artifact file name {filename:?} must be a plain file name"
-                    )));
-                }
+                validate_plain_name(&filename)?;
                 // Handoffs live under notes/; everything else directly in the item dir.
                 let subdir = if new.role == ArtifactRole::Handoff {
                     format!("items/{node_ref}/notes")
@@ -200,11 +205,13 @@ impl Store {
                     format!("items/{node_ref}")
                 };
                 let dest_dir = self.project_dir(&project_key).join(&subdir);
-                std::fs::create_dir_all(&dest_dir)?;
                 let dest = dest_dir.join(&filename);
-                std::fs::write(&dest, &bytes)?;
                 let hash = hex(&Sha256::digest(&bytes));
-                (Some(format!("{subdir}/{filename}")), Some(hash))
+                (
+                    Some(format!("{subdir}/{filename}")),
+                    Some(hash),
+                    Some((dest_dir, dest, bytes)),
+                )
             }
             ArtifactKind::External | ArtifactKind::Delivery => {
                 if new.uri.is_none() {
@@ -212,33 +219,87 @@ impl Store {
                         "an external artifact requires --uri".into(),
                     ));
                 }
-                (None, None)
+                (None, None, None)
             }
         };
 
-        let public_id = new_uuid();
-        self.conn.execute(
-            "INSERT INTO artifacts
-               (public_id, node_id, role, kind, path, uri, title, excerpt,
-                from_owner, to_owner, content_hash, created_by, client_id)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
-            params![
-                public_id,
-                node_id,
-                new.role,
-                new.kind,
-                rel_path,
-                new.uri,
-                new.title,
-                new.excerpt,
-                new.from_owner,
-                new.to_owner,
-                content_hash,
-                new.created_by,
-                new_uuid(),
-            ],
-        )?;
-        let id = self.conn.last_insert_rowid();
+        // Collision key is (node, path), NOT (node, role): a node may legitimately
+        // hold several same-role artifacts (e.g. a leaf `spec` co-residing with a
+        // group's `context-pack.md` spec). A duplicate path would shadow on read,
+        // so reject by default; `--replace`/`replace:true` updates in place.
+        let existing = if let Some(path) = &rel_path {
+            self.load_artifacts(node_id)?
+                .into_iter()
+                .find(|a| a.path.as_deref() == Some(path.as_str()))
+        } else {
+            None
+        };
+        if let Some(existing) = &existing {
+            if !new.replace {
+                return Err(HavenError::Invalid(format!(
+                    "an artifact already exists at {path:?} on {node_ref:?} \
+                     (role {role}, id {id}); pass --replace to overwrite it, \
+                     or remove it first with `haven artifact rm`",
+                    path = existing.path.as_deref().unwrap_or_default(),
+                    role = existing.role,
+                    id = existing.public_id,
+                )));
+            }
+        }
+
+        // Past the collision gate: commit the deferred file write (once).
+        if let Some((dest_dir, dest, bytes)) = &pending_write {
+            std::fs::create_dir_all(dest_dir)?;
+            std::fs::write(dest, bytes)?;
+        }
+
+        // Replace-in-place: rewrite the existing row (keep public_id / created_at /
+        // history), refresh content_hash, bump revision; else insert a fresh row.
+        let id = if let Some(existing) = existing {
+            self.conn.execute(
+                "UPDATE artifacts
+                    SET role = ?1, kind = ?2, uri = ?3, title = ?4, excerpt = ?5,
+                        from_owner = ?6, to_owner = ?7, content_hash = ?8,
+                        revision = revision + 1, sync_state = 'local'
+                  WHERE id = ?9",
+                params![
+                    new.role,
+                    new.kind,
+                    new.uri,
+                    new.title,
+                    new.excerpt,
+                    new.from_owner,
+                    new.to_owner,
+                    content_hash,
+                    existing.id,
+                ],
+            )?;
+            existing.id
+        } else {
+            let public_id = new_uuid();
+            self.conn.execute(
+                "INSERT INTO artifacts
+                   (public_id, node_id, role, kind, path, uri, title, excerpt,
+                    from_owner, to_owner, content_hash, created_by, client_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                params![
+                    public_id,
+                    node_id,
+                    new.role,
+                    new.kind,
+                    rel_path,
+                    new.uri,
+                    new.title,
+                    new.excerpt,
+                    new.from_owner,
+                    new.to_owner,
+                    content_hash,
+                    new.created_by,
+                    new_uuid(),
+                ],
+            )?;
+            self.conn.last_insert_rowid()
+        };
         let artifacts = self.load_artifacts(node_id)?;
         artifacts
             .into_iter()
@@ -330,6 +391,162 @@ impl Store {
             uri: chosen.uri,
             content,
         })
+    }
+
+    /// Resolve an [`ArtifactSelector`] to the single artifact it names on a node.
+    /// `Id`/`Name` are unique keys; a `Role` selector that matches more than one
+    /// row is refused — the caller must disambiguate by `--name`/`--id`.
+    fn select_artifact(&self, node_id: i64, selector: &ArtifactSelector) -> Result<Artifact> {
+        let artifacts = self.load_artifacts(node_id)?;
+        let matches: Vec<Artifact> = match selector {
+            ArtifactSelector::Role(role) => {
+                artifacts.into_iter().filter(|a| a.role == *role).collect()
+            }
+            ArtifactSelector::Name(name) => artifacts
+                .into_iter()
+                .filter(|a| {
+                    a.path
+                        .as_deref()
+                        .and_then(|p| p.rsplit('/').next())
+                        .map(|base| base == name)
+                        .unwrap_or(false)
+                })
+                .collect(),
+            ArtifactSelector::Id(id) => artifacts
+                .into_iter()
+                .filter(|a| &a.public_id == id)
+                .collect(),
+        };
+        match matches.len() {
+            0 => Err(HavenError::NotFound(format!(
+                "no artifact matched {selector:?}"
+            ))),
+            1 => Ok(matches.into_iter().next().expect("len == 1")),
+            _ => {
+                let ids: Vec<String> = matches
+                    .iter()
+                    .map(|a| {
+                        let name = a
+                            .path
+                            .as_deref()
+                            .and_then(|p| p.rsplit('/').next())
+                            .unwrap_or("?");
+                        format!("{name} ({})", a.public_id)
+                    })
+                    .collect();
+                Err(HavenError::Invalid(format!(
+                    "selector {selector:?} is ambiguous — matched {} artifacts; \
+                     disambiguate by --name or --id ({})",
+                    matches.len(),
+                    ids.join(", "),
+                )))
+            }
+        }
+    }
+
+    /// Remove one artifact: delete the DB row and, for `kind = file`, the backing
+    /// file. The selector must resolve to exactly one row (an ambiguous `Role` is
+    /// refused). Returns the removed artifact.
+    pub fn remove_artifact(
+        &self,
+        project: Option<&str>,
+        selector_ref: &str,
+        selector: ArtifactSelector,
+    ) -> Result<Artifact> {
+        let (project_id, project_key) = self.require_project(project)?;
+        let node_id = self.resolve_node_id(project_id, selector_ref)?;
+        let target = self.select_artifact(node_id, &selector)?;
+
+        // Drop the backing file first (guarded inside the project tree), then the
+        // row — a leftover file is recoverable; a leftover row points at nothing.
+        if target.kind == ArtifactKind::File {
+            if let Some(rel) = &target.path {
+                let base = self.project_dir(&project_key);
+                let full = base.join(rel);
+                if !full.starts_with(&base) {
+                    return Err(HavenError::Invalid(format!(
+                        "artifact path {rel:?} escapes the project directory"
+                    )));
+                }
+                if full.exists() {
+                    std::fs::remove_file(&full)?;
+                }
+            }
+        }
+        self.conn
+            .execute("DELETE FROM artifacts WHERE id = ?1", params![target.id])?;
+        Ok(target)
+    }
+
+    /// Rename one artifact's backing file and update its `path`, keeping the row
+    /// (role / history / created_at) intact. `new_name` is validated as a plain
+    /// name and rejected if it would collide with an existing path on the node.
+    pub fn rename_artifact(
+        &self,
+        project: Option<&str>,
+        selector_ref: &str,
+        selector: ArtifactSelector,
+        new_name: &str,
+    ) -> Result<Artifact> {
+        let (project_id, project_key) = self.require_project(project)?;
+        let node_id = self.resolve_node_id(project_id, selector_ref)?;
+        let node_ref = self.node_ref(node_id)?;
+        let target = self.select_artifact(node_id, &selector)?;
+
+        validate_plain_name(new_name)?;
+
+        let rel = target.path.clone().ok_or_else(|| {
+            HavenError::Invalid("only a file artifact (with a path) can be renamed".into())
+        })?;
+        // Preserve the subdir; swap the basename. `rsplit_once` splits off the
+        // last segment, so handoffs under notes/ stay under notes/.
+        let subdir = rel.rsplit_once('/').map(|(d, _)| d).unwrap_or("");
+        let new_rel = if subdir.is_empty() {
+            new_name.to_string()
+        } else {
+            format!("{subdir}/{new_name}")
+        };
+        if new_rel == rel {
+            return Ok(target); // no-op rename to the same name
+        }
+
+        // Reject a collision with another path on this node (per the add rule).
+        if self
+            .load_artifacts(node_id)?
+            .iter()
+            .any(|a| a.path.as_deref() == Some(new_rel.as_str()))
+        {
+            return Err(HavenError::Invalid(format!(
+                "an artifact already exists at {new_rel:?} on {node_ref:?}; \
+                 rename or remove it first"
+            )));
+        }
+
+        let base = self.project_dir(&project_key);
+        let from = base.join(&rel);
+        let to = base.join(&new_rel);
+        // Both endpoints must stay inside the project tree before any fs op.
+        if !from.starts_with(&base) || !to.starts_with(&base) {
+            return Err(HavenError::Invalid(
+                "artifact rename would escape the project directory".into(),
+            ));
+        }
+        if let Some(parent) = to.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::rename(&from, &to)?;
+
+        self.conn.execute(
+            "UPDATE artifacts
+                SET path = ?1, revision = revision + 1, sync_state = 'local'
+              WHERE id = ?2",
+            params![new_rel, target.id],
+        )?;
+        let artifacts = self.load_artifacts(node_id)?;
+        artifacts
+            .into_iter()
+            .find(|a| a.id == target.id)
+            .ok_or_else(|| HavenError::NotFound("artifact just renamed".into()))
     }
 
     /// Append a free-text scratch line to the node's dated notes file. No DB row
@@ -432,6 +649,22 @@ impl Store {
     }
 }
 
+/// A client-supplied artifact filename must be a single plain component (no
+/// path separators or `..`), so it can never escape the item directory.
+fn validate_plain_name(name: &str) -> Result<()> {
+    if name.is_empty()
+        || name.contains('/')
+        || name.contains('\\')
+        || name.split(['/', '\\']).any(|seg| seg == "..")
+        || name == ".."
+    {
+        return Err(HavenError::Invalid(format!(
+            "artifact file name {name:?} must be a plain file name"
+        )));
+    }
+    Ok(())
+}
+
 fn hex(bytes: &[u8]) -> String {
     let mut s = String::with_capacity(bytes.len() * 2);
     for b in bytes {
@@ -513,6 +746,8 @@ mod tests {
             .unwrap()
             .reference
         };
+        // `replace: true` so a re-prep overwrites the container's pack in place
+        // (collision-safe add, HV-95) rather than erroring on the same path.
         let pack_on = |container: &str, body: &str| {
             s.add_artifact(
                 None,
@@ -521,6 +756,7 @@ mod tests {
                     role: ArtifactRole::Spec,
                     content: Some(body.into()),
                     name: Some(CONTEXT_PACK_ARTIFACT.into()),
+                    replace: true,
                     ..Default::default()
                 },
             )
@@ -550,13 +786,14 @@ mod tests {
         assert_eq!(pack.unwrap().container, batch_a);
         assert!(clash.is_none());
 
-        // Re-prepping appends a SECOND context-pack.md row on the SAME
-        // container — dedup by container means it stays one pack, never a clash.
+        // Re-prepping the SAME container overwrites its context-pack.md in place
+        // (collision-safe add) — still exactly one pack, and dedup-by-container
+        // keeps even a hypothetical duplicate row from reading as a clash.
         pack_on(&batch_a, "# pack v2");
         let (pack, clash) = s.context_pack_for(None, &leaf).unwrap();
         assert!(
             pack.is_some() && clash.is_none(),
-            "duplicate pack rows on one container must not read as a clash"
+            "a re-prepped pack on one container must not read as a clash"
         );
 
         // A SECOND container also claiming the leaf, with its own pack → clash,
@@ -889,5 +1126,258 @@ mod tests {
         let path = s.render(None).unwrap();
         assert!(path.ends_with("haven/backlog.md"));
         assert_eq!(std::fs::read_to_string(&path).unwrap(), a);
+    }
+
+    // ---- HV-95: write/mutate surface (Parts A–D) ----
+
+    /// A leaf to hang artifacts on, returning the store + its ref.
+    fn store_with_item(tmp: &std::path::Path) -> (Store, String) {
+        let s = store_with_root(tmp);
+        let item = s
+            .add_item(
+                None,
+                NewItem {
+                    title: "Work".into(),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        (s, item.reference)
+    }
+
+    /// Part A: `--file` + `--name` stores the file under the *given* name, not the
+    /// source basename (the previously-untested regression — `--name` was dropped).
+    #[test]
+    fn file_add_honors_name_over_source_basename() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (s, item) = store_with_item(tmp.path());
+
+        let src = tmp.path().join("draft-x.md");
+        std::fs::write(&src, b"# pack\n").unwrap();
+
+        let art = s
+            .add_artifact(
+                None,
+                &item,
+                NewArtifact {
+                    role: ArtifactRole::Spec,
+                    kind: ArtifactKind::File,
+                    file: Some(src),
+                    name: Some(CONTEXT_PACK_ARTIFACT.into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        // Stored under the requested name, NOT draft-x.md.
+        assert_eq!(art.path.as_deref(), Some("items/HV-1/context-pack.md"));
+        assert!(tmp.path().join("haven/items/HV-1/context-pack.md").exists());
+        assert!(!tmp.path().join("haven/items/HV-1/draft-x.md").exists());
+
+        // A traversal name on the file branch is rejected too (same validation).
+        let evil = tmp.path().join("evil.md");
+        std::fs::write(&evil, b"x").unwrap();
+        let err = s.add_artifact(
+            None,
+            &item,
+            NewArtifact {
+                role: ArtifactRole::Scratch,
+                kind: ArtifactKind::File,
+                file: Some(evil),
+                name: Some("../escape.md".into()),
+                ..Default::default()
+            },
+        );
+        assert_eq!(err.unwrap_err().code(), "invalid");
+    }
+
+    /// Part B: collision key is (node, path). A second add at the same path errors
+    /// by default; with `replace` it updates the one row in place (no duplicate).
+    #[test]
+    fn collision_safe_add_rejects_then_replaces_in_place() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (s, item) = store_with_item(tmp.path());
+
+        let first = s
+            .add_artifact(
+                None,
+                &item,
+                NewArtifact {
+                    role: ArtifactRole::Spec,
+                    kind: ArtifactKind::File,
+                    content: Some("v1".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let path = first.path.clone().unwrap();
+
+        // Second add at the same (node, path) WITHOUT replace → rejected, and the
+        // original file is left untouched (no clobber, no duplicate row).
+        let err = s.add_artifact(
+            None,
+            &item,
+            NewArtifact {
+                role: ArtifactRole::Spec,
+                kind: ArtifactKind::File,
+                content: Some("v2".into()),
+                ..Default::default()
+            },
+        );
+        assert_eq!(err.unwrap_err().code(), "invalid");
+        assert_eq!(s.list_artifacts(None, &item, None).unwrap().len(), 1);
+        assert_eq!(
+            std::fs::read_to_string(s.project_dir("haven").join(&path)).unwrap(),
+            "v1"
+        );
+
+        // With replace → updates the existing row in place: same public_id, bumped
+        // revision, rewritten file, and still exactly ONE row.
+        let replaced = s
+            .add_artifact(
+                None,
+                &item,
+                NewArtifact {
+                    role: ArtifactRole::Spec,
+                    kind: ArtifactKind::File,
+                    content: Some("v2".into()),
+                    replace: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(replaced.public_id, first.public_id);
+        assert_eq!(replaced.revision, first.revision + 1);
+        assert_eq!(replaced.path, first.path);
+        assert_eq!(s.list_artifacts(None, &item, None).unwrap().len(), 1);
+        assert_eq!(
+            std::fs::read_to_string(s.project_dir("haven").join(&path)).unwrap(),
+            "v2"
+        );
+        assert_ne!(replaced.content_hash, first.content_hash);
+    }
+
+    /// Part C: remove deletes the row + backing file; removes one of two same-role
+    /// artifacts by name; an ambiguous role-only remove is refused.
+    #[test]
+    fn remove_artifact_row_file_selectors_and_ambiguity() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (s, item) = store_with_item(tmp.path());
+
+        let add = |role: ArtifactRole, name: &str, body: &str| {
+            s.add_artifact(
+                None,
+                &item,
+                NewArtifact {
+                    role,
+                    kind: ArtifactKind::File,
+                    content: Some(body.into()),
+                    name: Some(name.into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+        };
+
+        // Two same-role (spec) artifacts on the node — legitimate (leaf spec +
+        // co-resident pack). Role-only remove can't disambiguate.
+        add(ArtifactRole::Spec, "spec.md", "the spec");
+        add(ArtifactRole::Spec, "context-pack.md", "the pack");
+        let err = s.remove_artifact(None, &item, ArtifactSelector::Role(ArtifactRole::Spec));
+        assert_eq!(err.unwrap_err().code(), "invalid");
+
+        // By name → removes exactly that one; its file is gone, the other remains.
+        let pack_path = tmp.path().join("haven/items/HV-1/context-pack.md");
+        let spec_path = tmp.path().join("haven/items/HV-1/spec.md");
+        assert!(pack_path.exists() && spec_path.exists());
+        let removed = s
+            .remove_artifact(
+                None,
+                &item,
+                ArtifactSelector::Name("context-pack.md".into()),
+            )
+            .unwrap();
+        assert_eq!(removed.path.as_deref(), Some("items/HV-1/context-pack.md"));
+        assert!(!pack_path.exists(), "backing file must be deleted");
+        assert!(spec_path.exists(), "the sibling spec must survive");
+        let left = s.list_artifacts(None, &item, None).unwrap();
+        assert_eq!(left.len(), 1);
+        assert_eq!(left[0].path.as_deref(), Some("items/HV-1/spec.md"));
+
+        // Role-only now unambiguous (one spec left) → removes it.
+        let removed = s
+            .remove_artifact(None, &item, ArtifactSelector::Role(ArtifactRole::Spec))
+            .unwrap();
+        assert_eq!(removed.path.as_deref(), Some("items/HV-1/spec.md"));
+        assert!(!spec_path.exists());
+        assert!(s.list_artifacts(None, &item, None).unwrap().is_empty());
+    }
+
+    /// Part D: rename moves the backing file + updates `path`, preserving the row
+    /// (public_id / role / created_at); a colliding new_name is rejected.
+    #[test]
+    fn rename_artifact_moves_file_preserves_row_and_rejects_collision() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (s, item) = store_with_item(tmp.path());
+
+        let orig = s
+            .add_artifact(
+                None,
+                &item,
+                NewArtifact {
+                    role: ArtifactRole::Spec,
+                    kind: ArtifactKind::File,
+                    content: Some("body".into()),
+                    name: Some("draft.md".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+        let renamed = s
+            .rename_artifact(
+                None,
+                &item,
+                ArtifactSelector::Name("draft.md".into()),
+                "spec.md",
+            )
+            .unwrap();
+        // Path updated; file moved; row identity + role + hash preserved.
+        assert_eq!(renamed.path.as_deref(), Some("items/HV-1/spec.md"));
+        assert_eq!(renamed.public_id, orig.public_id);
+        assert_eq!(renamed.role, ArtifactRole::Spec);
+        assert_eq!(renamed.created_at, orig.created_at);
+        assert_eq!(renamed.content_hash, orig.content_hash);
+        assert!(!tmp.path().join("haven/items/HV-1/draft.md").exists());
+        let moved = tmp.path().join("haven/items/HV-1/spec.md");
+        assert_eq!(std::fs::read_to_string(&moved).unwrap(), "body");
+        // Content reads back through the new path.
+        let got = s
+            .get_artifact(None, &item, None, Some("items/HV-1/spec.md"))
+            .unwrap();
+        assert_eq!(got.content.as_deref(), Some("body"));
+
+        // Add a second artifact, then renaming onto its name collides → rejected.
+        s.add_artifact(
+            None,
+            &item,
+            NewArtifact {
+                role: ArtifactRole::Research,
+                kind: ArtifactKind::File,
+                content: Some("notes".into()),
+                name: Some("notes.md".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let err = s.rename_artifact(
+            None,
+            &item,
+            ArtifactSelector::Name("spec.md".into()),
+            "notes.md",
+        );
+        assert_eq!(err.unwrap_err().code(), "invalid");
+        // The collision left both files intact.
+        assert!(moved.exists());
+        assert!(tmp.path().join("haven/items/HV-1/notes.md").exists());
     }
 }

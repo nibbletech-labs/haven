@@ -9,9 +9,9 @@ use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use haven_core::{
-    ArtifactKind, ArtifactRole, CompleteInput, HandoffInput, HavenError, Include, ItemFilter,
-    ItemUpdate, LineageDirection, NewArtifact, NewItem, NodeType, OwnerKind, Result, Status, Store,
-    WaitState, WaitUpdate,
+    ArtifactKind, ArtifactRole, ArtifactSelector, CompleteInput, HandoffInput, HavenError, Include,
+    ItemFilter, ItemUpdate, LineageDirection, NewArtifact, NewItem, NodeType, OwnerKind, Result,
+    Status, Store, WaitState, WaitUpdate,
 };
 
 use output::Output;
@@ -280,6 +280,10 @@ enum ArtifactCmd {
     /// Get one artifact by ref and role.
     #[command(alias = "show")]
     Get(ArtifactGetArgs),
+    /// Remove an artifact (row + backing file) by role/name/id.
+    Rm(ArtifactRmArgs),
+    /// Rename an artifact's backing file (role/history preserved).
+    Mv(ArtifactMvArgs),
 }
 
 #[derive(Args)]
@@ -297,9 +301,14 @@ struct ArtifactAddArgs {
     /// Inline content written to a file by the server (alternative to --file).
     #[arg(long)]
     content: Option<String>,
-    /// Filename for --content (defaults to <role>.md).
+    /// Destination filename. For --content it defaults to <role>.md; for --file
+    /// it overrides the source basename.
     #[arg(long)]
     name: Option<String>,
+    /// Overwrite in place if an artifact already exists at the same path on the
+    /// item (default: reject the collision).
+    #[arg(long)]
+    replace: bool,
     /// External URL, obsidian:// link, or delivery link.
     #[arg(long)]
     uri: Option<String>,
@@ -334,6 +343,36 @@ struct ArtifactGetArgs {
     role: Option<String>,
     #[arg(long)]
     path: Option<String>,
+}
+
+#[derive(Args)]
+struct ArtifactRmArgs {
+    reference: String,
+    /// Select by role (refused if it matches more than one artifact).
+    #[arg(long)]
+    role: Option<String>,
+    /// Select by file name (the path basename).
+    #[arg(long)]
+    name: Option<String>,
+    /// Select by artifact public id.
+    #[arg(long)]
+    id: Option<String>,
+}
+
+#[derive(Args)]
+struct ArtifactMvArgs {
+    reference: String,
+    /// New plain file name for the artifact.
+    new_name: String,
+    /// Select by role (refused if it matches more than one artifact).
+    #[arg(long)]
+    role: Option<String>,
+    /// Select by file name (the path basename).
+    #[arg(long)]
+    name: Option<String>,
+    /// Select by artifact public id.
+    #[arg(long)]
+    id: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -1005,6 +1044,7 @@ fn cmd_artifact(project: Option<&str>, cmd: &ArtifactCmd) -> Result<Output> {
                 from_owner: opt_parse(&a.from, OwnerKind::parse)?,
                 to_owner: opt_parse(&a.to, OwnerKind::parse)?,
                 created_by: a.by.clone(),
+                replace: a.replace,
             };
             Ok(Output::Json(serde_json::to_value(s.add_artifact(
                 project,
@@ -1038,6 +1078,40 @@ fn cmd_artifact(project: Option<&str>, cmd: &ArtifactCmd) -> Result<Output> {
             };
             Ok(Output::Json(serde_json::to_value(got)?))
         }
+        ArtifactCmd::Rm(a) => {
+            let selector = artifact_selector(&a.role, &a.name, &a.id)?;
+            Ok(Output::Json(serde_json::to_value(s.remove_artifact(
+                project,
+                &a.reference,
+                selector,
+            )?)?))
+        }
+        ArtifactCmd::Mv(a) => {
+            let selector = artifact_selector(&a.role, &a.name, &a.id)?;
+            Ok(Output::Json(serde_json::to_value(s.rename_artifact(
+                project,
+                &a.reference,
+                selector,
+                &a.new_name,
+            )?)?))
+        }
+    }
+}
+
+/// Build an [`ArtifactSelector`] from the mutually-exclusive --role/--name/--id
+/// flags shared by `artifact rm` and `artifact mv`. Exactly one must be given.
+fn artifact_selector(
+    role: &Option<String>,
+    name: &Option<String>,
+    id: &Option<String>,
+) -> Result<ArtifactSelector> {
+    match (role, name, id) {
+        (Some(r), None, None) => Ok(ArtifactSelector::Role(ArtifactRole::parse(r)?)),
+        (None, Some(n), None) => Ok(ArtifactSelector::Name(n.clone())),
+        (None, None, Some(i)) => Ok(ArtifactSelector::Id(i.clone())),
+        _ => Err(HavenError::Invalid(
+            "provide exactly one of --role, --name, or --id".into(),
+        )),
     }
 }
 

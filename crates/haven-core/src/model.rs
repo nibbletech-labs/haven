@@ -221,6 +221,17 @@ pub struct Artifact {
     pub sync_state: SyncState,
 }
 
+/// How `remove`/`rename` pick the one artifact to act on within a node. `Role`
+/// is the convenient key but may match more than one row (a node can hold
+/// several same-role artifacts) — callers refuse an ambiguous `Role` and ask
+/// for `Name` (the `path` basename) or `Id` (the `public_id`), which are unique.
+#[derive(Debug, Clone)]
+pub enum ArtifactSelector {
+    Role(ArtifactRole),
+    Name(String),
+    Id(String),
+}
+
 /// A lineage event with its from→to edges, resolved to `ref`s. Returned by
 /// `lineage`/`evolve graph`.
 #[derive(Debug, Clone, Serialize, Deserialize)]

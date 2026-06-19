@@ -10,8 +10,8 @@
 use std::io::{self, BufRead, Write};
 
 use haven_core::{
-    Artifact, ArtifactKind, ArtifactRole, CompleteInput, ContextPack, EdgeKind, Edges,
-    HandoffInput, HavenError, Include, Item, ItemFilter, ItemUpdate, LineageDirection,
+    Artifact, ArtifactKind, ArtifactRole, ArtifactSelector, CompleteInput, ContextPack, EdgeKind,
+    Edges, HandoffInput, HavenError, Include, Item, ItemFilter, ItemUpdate, LineageDirection,
     LineageEvent, NewArtifact, NewItem, NodeType, OwnerKind, Result, RollupState, Status, Store,
     WaitState, WaitUpdate,
 };
@@ -325,6 +325,18 @@ fn opt_i64(v: &Value, k: &str) -> Option<i64> {
 fn opt_bool(v: &Value, k: &str) -> Option<bool> {
     v.get(k).and_then(|x| x.as_bool())
 }
+/// Build an [`ArtifactSelector`] from the mutually-exclusive `role`/`name`/`id`
+/// args shared by `haven_rm_artifact` and `haven_mv_artifact`. Exactly one.
+fn artifact_selector(a: &Value) -> Result<ArtifactSelector> {
+    match (opt_str(a, "role"), opt_str(a, "name"), opt_str(a, "id")) {
+        (Some(r), None, None) => Ok(ArtifactSelector::Role(ArtifactRole::parse(r)?)),
+        (None, Some(n), None) => Ok(ArtifactSelector::Name(n.to_string())),
+        (None, None, Some(i)) => Ok(ArtifactSelector::Id(i.to_string())),
+        _ => Err(HavenError::Invalid(
+            "provide exactly one of role, name, or id".into(),
+        )),
+    }
+}
 fn str_array(v: &Value, k: &str) -> Vec<String> {
     v.get(k)
         .and_then(|x| x.as_array())
@@ -348,6 +360,8 @@ fn is_mutating_tool(name: &str) -> bool {
             | "haven_evolve"
             | "haven_rank"
             | "haven_add_artifact"
+            | "haven_rm_artifact"
+            | "haven_mv_artifact"
             | "haven_add_project"
             | "haven_archive"
             | "haven_reopen"
@@ -684,8 +698,22 @@ fn call_tool(store: &Store, name: &str, a: &Value) -> Result<Value> {
                 from_owner: opt_str(a, "from").map(OwnerKind::parse).transpose()?,
                 to_owner: opt_str(a, "to").map(OwnerKind::parse).transpose()?,
                 created_by: opt_str(a, "by").map(String::from),
+                replace: opt_bool(a, "replace").unwrap_or(false),
             };
             to_value(store.add_artifact(project, req_str(a, "ref")?, new)?)
+        }
+        "haven_rm_artifact" => {
+            let selector = artifact_selector(a)?;
+            to_value(store.remove_artifact(project, req_str(a, "ref")?, selector)?)
+        }
+        "haven_mv_artifact" => {
+            let selector = artifact_selector(a)?;
+            to_value(store.rename_artifact(
+                project,
+                req_str(a, "ref")?,
+                selector,
+                req_str(a, "new_name")?,
+            )?)
         }
         "haven_status" => store.store_status(project),
         // Discover backlogs — a remote/headless client has no local `current_project`
@@ -868,8 +896,12 @@ fn tools_list() -> Value {
           "inputSchema": obj(json!({"project":{"type":"string"}}), json!([])) },
         { "name": "haven_get_artifact", "description": "Read an artifact's content (local or lazy-pulled).",
           "inputSchema": obj(json!({"ref":{"type":"string"},"role":{"type":"string"},"path":{"type":"string"},"project":{"type":"string"}}), json!(["ref"])) },
-        { "name": "haven_add_artifact", "description": "Register an artifact on an item. Pass `content` to have the server write the file (the content channel for filesystem-less clients), or `path`/`uri` for a local file / external link.",
-          "inputSchema": obj(json!({"ref":{"type":"string"},"role":{"type":"string"},"kind":{"type":"string"},"content":{"type":"string"},"name":{"type":"string"},"path":{"type":"string"},"uri":{"type":"string"},"title":{"type":"string"},"from":{"type":"string"},"to":{"type":"string"},"project":{"type":"string"}}), json!(["ref","role"])) },
+        { "name": "haven_add_artifact", "description": "Register an artifact on an item. Pass `content` to have the server write the file (the content channel for filesystem-less clients), or `path`/`uri` for a local file / external link. `name` sets the destination filename (also for `path`). Re-adding the same filename errors unless `replace:true`, which overwrites in place.",
+          "inputSchema": obj(json!({"ref":{"type":"string"},"role":{"type":"string"},"kind":{"type":"string"},"content":{"type":"string"},"name":{"type":"string"},"replace":{"type":"boolean"},"path":{"type":"string"},"uri":{"type":"string"},"title":{"type":"string"},"from":{"type":"string"},"to":{"type":"string"},"project":{"type":"string"}}), json!(["ref","role"])) },
+        { "name": "haven_rm_artifact", "description": "Remove an artifact (DB row + backing file) from an item. Select by exactly one of `role`/`name`/`id`; a `role` matching more than one artifact is refused — disambiguate by `name` (the file's basename) or `id` (public_id).",
+          "inputSchema": obj(json!({"ref":{"type":"string"},"role":{"type":"string"},"name":{"type":"string"},"id":{"type":"string"},"project":{"type":"string"}}), json!(["ref"])) },
+        { "name": "haven_mv_artifact", "description": "Rename an artifact's backing file (role / history / created_at preserved). Select by exactly one of `role`/`name`/`id` (same ambiguity rule as haven_rm_artifact); `new_name` is a plain filename, rejected if it collides with another artifact's path on the item.",
+          "inputSchema": obj(json!({"ref":{"type":"string"},"new_name":{"type":"string"},"role":{"type":"string"},"name":{"type":"string"},"id":{"type":"string"},"project":{"type":"string"}}), json!(["ref","new_name"])) },
         { "name": "haven_status", "description": "Project counts and sync state.",
           "inputSchema": obj(json!({"project":{"type":"string"}}), json!([])) },
         { "name": "haven_list_projects", "description": "List all projects (backlogs). Use this to discover what's available; then target one by passing its `key` as the `project` arg on subsequent calls (selection is per-call, not a stored default).",
@@ -941,7 +973,7 @@ mod tests {
         assert_eq!(out.len(), 2);
         assert_eq!(out[0]["result"]["serverInfo"]["name"], "haven");
         let tools = out[1]["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 24);
+        assert_eq!(tools.len(), 26);
         assert!(tools.iter().any(|t| t["name"] == "haven_inbox"));
         assert!(tools.iter().any(|t| t["name"] == "haven_next"));
         assert!(tools.iter().any(|t| t["name"] == "haven_next_explain"));
@@ -1667,5 +1699,43 @@ mod tests {
         let full = tool_payload(&out[5]);
         assert_eq!(full["nodes"].as_array().unwrap().len(), 2);
         assert_eq!(full["edges"].as_array().unwrap().len(), 1);
+    }
+
+    /// HV-95: the new rm/mv tools over MCP — add an artifact, rename it, remove it.
+    #[test]
+    fn rm_and_mv_artifact_via_tools() {
+        let s = store();
+        let out = session(
+            &s,
+            &[
+                json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{
+                    "name":"haven_add_item","arguments":{"title":"Has artifacts"}
+                }}),
+                json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{
+                    "name":"haven_add_artifact",
+                    "arguments":{"ref":"HV-1","role":"spec","content":"draft","name":"draft.md"}
+                }}),
+                // Rename draft.md → spec.md (select by name).
+                json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{
+                    "name":"haven_mv_artifact",
+                    "arguments":{"ref":"HV-1","new_name":"spec.md","name":"draft.md"}
+                }}),
+                // Remove it (now the only spec → role selector is unambiguous).
+                json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{
+                    "name":"haven_rm_artifact",
+                    "arguments":{"ref":"HV-1","role":"spec"}
+                }}),
+                // Gone: get now errors.
+                json!({"jsonrpc":"2.0","id":5,"method":"tools/call","params":{
+                    "name":"haven_get_artifact","arguments":{"ref":"HV-1","role":"spec"}
+                }}),
+            ],
+        );
+        assert_eq!(out[2]["result"]["isError"], false);
+        assert_eq!(tool_payload(&out[2])["path"], "items/HV-1/spec.md");
+        assert_eq!(out[3]["result"]["isError"], false);
+        assert_eq!(tool_payload(&out[3])["path"], "items/HV-1/spec.md");
+        // After removal the artifact is gone.
+        assert_eq!(out[4]["result"]["isError"], true);
     }
 }

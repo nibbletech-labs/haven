@@ -88,10 +88,14 @@ haven evolve resolve <ref>     # stale ref → its live descendant(s)
 
 # Search & content
 haven search "<query>" [--limit N]
-haven artifact add <ref> --role <role> [--file <path> | --content "…" --name <f>]
+haven artifact add <ref> --role <role> [--file <path> | --content "…"] [--name <f>] [--replace]
                          [--kind] [--uri] [--title] [--excerpt] [--from] [--to] [--by]
+                         # --name sets the destination filename (also for --file);
+                         # --replace overwrites an existing same-path artifact in place
 haven artifact list <ref> [--role <role>]
 haven artifact get  <ref> [--role <role>] [--path <relpath>]
+haven artifact rm   <ref> (--role <r> | --name <f> | --id <pid>)   # remove row + file
+haven artifact mv   <ref> <new-name> (--role <r> | --name <f> | --id <pid>)  # rename file
 haven note <ref> "<text>"
 haven render
 haven skill install [--agent all|claude|codex]
@@ -104,7 +108,7 @@ haven sync [status] [--watch]
 
 ## MCP tool catalogue
 
-24 tools, each taking an optional `project` and naming items by `ref` or
+26 tools, each taking an optional `project` and naming items by `ref` or
 `public_id`. Required args in **bold**.
 
 | Tool | Args |
@@ -125,7 +129,9 @@ haven sync [status] [--watch]
 | `haven_graph` | `lineage?, all?` — the whole project graph (compact nodes + `{kind,from,to}` edges) in one read; live nodes only unless `all` |
 | `haven_docs` | `project?` — live project-doc anchors and their artifacts |
 | `haven_get_artifact` | **`ref`**, `role?, path?` |
-| `haven_add_artifact` | **`ref`**, **`role`**, `kind?, content?, name?, path?, uri?, title?, from?, to?, by?` |
+| `haven_add_artifact` | **`ref`**, **`role`**, `kind?, content?, name?, replace?, path?, uri?, title?, from?, to?, by?` — `name` sets the destination filename (also for `path`); `replace?` overwrites a same-path artifact in place (default: collision is rejected) |
+| `haven_rm_artifact` | **`ref`**, one of `role?` \| `name?` \| `id?` — remove an artifact (row + backing file); an ambiguous `role` is refused |
+| `haven_mv_artifact` | **`ref`**, **`new_name`**, one of `role?` \| `name?` \| `id?` — rename the backing file (role/history preserved) |
 | `haven_status` | `project?` |
 | `haven_list_projects` | _(none)_ — discover backlogs |
 | `haven_add_project` | **`key`**, **`title`**, `prefix?, description?` |
@@ -169,6 +175,7 @@ The collapses that catch people out:
 | `next` / `next --explain` | `haven_next` / `haven_next_explain` |
 | `item rank` | `haven_rank` |
 | `search`, `status`, `artifact get`/`add` | `haven_search`, `haven_status`, `haven_get_artifact`/`haven_add_artifact` |
+| `artifact rm` / `mv` | `haven_rm_artifact` / `haven_mv_artifact` |
 | `graph` | `haven_graph` |
 | `docs` | `haven_docs` |
 | `project list` / `add` | `haven_list_projects` / `haven_add_project` |

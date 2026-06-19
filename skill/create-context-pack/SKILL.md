@@ -88,8 +88,13 @@ pack's section layout + the verbatim preamble are in `references/pack-template.m
      a subset's pack onto the broad phase mis-scopes it (a pack covering 2 of 7 members)
      **and** a later batch from the same phase would **clobber** it.
    A single item is a **degenerate group**: there is nothing cross-cutting to
-   synthesise, so just **groom that one leaf** (wf 3 — firm acceptance + write a
-   `spec` via wf 10 where warranted) and stop. **No container, no pack artifact.**
+   synthesise, so just **groom that one leaf** (wf 3 — firm acceptance + write/firm
+   the leaf's **own** `spec` artifact `spec.md` via wf 10 where warranted) and stop.
+   **No container, and no separate `context-pack.md` artifact** — a pack only exists
+   to govern a *group* from its container, so on a lone leaf it would merely co-reside
+   with the leaf's own `spec.md` (two `role=spec` artifacts on one node, one of them
+   pointless) and could shadow the real spec on read. Firm `spec.md` in place; that
+   is the leaf's contract.
    What groups a batch is simply that **you intend to
    build the members together** — neither a dependency between them nor shared architecture
    is required. Shared architecture is the *bonus*: when members touch the same code,
@@ -130,7 +135,11 @@ pack's section layout + the verbatim preamble are in `references/pack-template.m
    - add **dependency edges** for any real ordering you found (`haven depend` /
      `haven_add_edge {kind:"grouping"|"dependency"}`);
    - write the pack as a `spec` artifact `context-pack.md` on the **container**
-     (`haven artifact add … --role spec --name context-pack.md` / `haven_add_artifact`);
+     (`haven artifact add … --role spec --name context-pack.md --replace` /
+     `haven_add_artifact {… role:"spec", name:"context-pack.md", replace:true}`) —
+     **`--replace` is required for idempotent re-prep**: a re-run overwrites the
+     container's existing `context-pack.md` in place instead of erroring on the
+     `(container, context-pack.md)` collision;
    - set the container's `why` to a one-line pointer at the pack.
 8. **HAND OFF.** Report the container ref and tell the next session / plan mode to
    take its `spec` `context-pack.md` as input. The two skills meet only at the graph.
