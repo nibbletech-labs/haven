@@ -380,8 +380,8 @@ fn call_tool(store: &Store, name: &str, a: &Value) -> Result<Value> {
     if let Ok(frozen) = Store::backups_frozen(&backups) {
         if !frozen.is_empty() {
             eprintln!(
-                "haven: WARNING — {} quarantined backup(s) ({}); rotation frozen, \
-                 remove the *-SUSPECT dir(s) under {} to clear.",
+                "haven: WARNING — {} quarantined backup(s) ({}); rotation + object GC frozen, \
+                 run `haven backup clear <id>` (or remove the *-SUSPECT manifest/dir under {}).",
                 frozen.len(),
                 frozen.join(", "),
                 backups.display(),

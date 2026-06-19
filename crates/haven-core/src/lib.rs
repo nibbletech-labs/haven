@@ -14,6 +14,7 @@ pub mod model;
 pub mod sortkey;
 pub mod store;
 mod time;
+mod util;
 
 pub use error::{HavenError, Result};
 pub use model::*;

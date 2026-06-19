@@ -13,6 +13,7 @@ use sha2::{Digest, Sha256};
 
 use crate::error::{HavenError, Result};
 use crate::model::*;
+use crate::util::hex;
 
 use super::{new_uuid, ItemFilter, Store};
 
@@ -663,14 +664,6 @@ fn validate_plain_name(name: &str) -> Result<()> {
         )));
     }
     Ok(())
-}
-
-fn hex(bytes: &[u8]) -> String {
-    let mut s = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        let _ = write!(s, "{b:02x}");
-    }
-    s
 }
 
 #[cfg(test)]

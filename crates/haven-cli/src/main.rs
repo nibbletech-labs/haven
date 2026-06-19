@@ -153,29 +153,38 @@ enum Command {
 
 #[derive(Subcommand)]
 enum BackupCmd {
-    /// List snapshots (id, size, integrity), newest first.
+    /// List snapshots (id, size, integrity, format), newest first.
     List,
-    /// Take a snapshot now: online-backup of the DB + tar.gz of each items/ tree.
+    /// Take a snapshot now: content-addressed objects + a per-snapshot manifest.
     Now,
-    /// Verify a snapshot's integrity (PRAGMA integrity_check). Latest if no id.
+    /// Verify a snapshot: re-hash every referenced object (or integrity-check a
+    /// legacy snapshot's DB). Latest if no id.
     Verify(BackupVerifyArgs),
     /// Restore a snapshot. Safety-snapshots current state first, then swaps it in.
     Restore(BackupRestoreArgs),
+    /// Clear a quarantined (`*-SUSPECT`) snapshot, un-freezing rotation + GC.
+    Clear(BackupClearArgs),
 }
 
 #[derive(Args)]
 struct BackupVerifyArgs {
-    /// Snapshot id (the `<UTC-ts>` dir name). Defaults to the latest.
+    /// Snapshot id (the `<UTC-ts>` manifest/dir name). Defaults to the latest.
     id: Option<String>,
 }
 
 #[derive(Args)]
 struct BackupRestoreArgs {
-    /// Snapshot id (the `<UTC-ts>` dir name) to restore.
+    /// Snapshot id (the `<UTC-ts>` manifest/dir name) to restore.
     id: String,
     /// Confirm the destructive DB + content-file swap (required).
     #[arg(long)]
     yes: bool,
+}
+
+#[derive(Args)]
+struct BackupClearArgs {
+    /// The quarantined snapshot id (a `<UTC-ts>-SUSPECT`) to remove.
+    id: String,
 }
 
 #[derive(Subcommand)]
@@ -1204,8 +1213,9 @@ fn warn_if_quarantined() {
         if !frozen.is_empty() {
             eprintln!(
                 "haven: WARNING — {} quarantined backup(s) ({}). Integrity check failed; \
-                 backup rotation is FROZEN to protect good snapshots. Review and remove the \
-                 *-SUSPECT dir(s) under {} to clear.",
+                 backup rotation AND object GC are FROZEN to protect good snapshots. \
+                 Run `haven backup clear <id>` (or remove the *-SUSPECT manifest/dir under {}) \
+                 to clear.",
                 frozen.len(),
                 frozen.join(", "),
                 backups.display(),
@@ -1790,7 +1800,7 @@ fn cmd_doctor() -> Result<Output> {
             "backups",
             "warn",
             format!(
-                "{} quarantined snapshot(s) ({}); rotation frozen — remove the *-SUSPECT dir(s) under {}",
+                "{} quarantined snapshot(s) ({}); rotation + GC frozen — run `haven backup clear <id>` (or remove the *-SUSPECT manifest/dir under {})",
                 frozen.len(),
                 frozen.join(", "),
                 backups.display(),
@@ -1911,7 +1921,7 @@ fn cmd_backup(cmd: &BackupCmd) -> Result<Output> {
             Ok(Output::Json(serde_json::json!({
                 "id": id,
                 "integrity": integrity,
-                "checked": "integrity_check",
+                "checked": "objects+integrity",
             })))
         }
         BackupCmd::Restore(a) => {
@@ -1924,6 +1934,13 @@ fn cmd_backup(cmd: &BackupCmd) -> Result<Output> {
             let paths = config::resolve()?;
             let report = Store::restore_backup(&paths.db, &paths.root, &backups, &a.id)?;
             Ok(Output::Json(serde_json::to_value(report)?))
+        }
+        BackupCmd::Clear(a) => {
+            Store::clear_quarantine(&backups, &a.id)?;
+            Ok(Output::Json(serde_json::json!({
+                "cleared": a.id,
+                "frozen": !Store::backups_frozen(&backups)?.is_empty(),
+            })))
         }
     }
 }
