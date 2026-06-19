@@ -11,8 +11,7 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use haven_core::{
     ArtifactKind, ArtifactRole, ArtifactSelector, CompleteInput, DueUpdate, HandoffInput,
     HavenError, Include, IntegrityKind, ItemFilter, ItemUpdate, LineageDirection, NewArtifact,
-    NewItem, NodeType, OwnerEligible, OwnerEligibleUpdate, OwnerKind, Result, Status, Store,
-    WaitState, WaitUpdate,
+    NewItem, NodeType, OwnerKind, Result, Status, Store, WaitState, WaitUpdate,
 };
 
 use output::Output;
@@ -586,10 +585,6 @@ struct ItemUpdateArgs {
     /// Deadline as a calendar date YYYY-MM-DD; `none` clears it.
     #[arg(long = "due-at")]
     due_at: Option<String>,
-    /// Eligibility: which owner may auto-pull this item — human | ai | any | none
-    /// (`none` clears to untriaged). Distinct from `assign` (who owns it).
-    #[arg(long = "owner-eligible")]
-    owner_eligible: Option<String>,
 }
 
 #[derive(Args)]
@@ -2177,11 +2172,6 @@ fn cmd_item(project: Option<&str>, cmd: &ItemCmd) -> Result<Output> {
                 Some("none") => Some(DueUpdate::Clear),
                 Some(d) => Some(DueUpdate::Set(d.to_string())),
             };
-            let owner_eligible = match a.owner_eligible.as_deref() {
-                None => None,
-                Some("none") => Some(OwnerEligibleUpdate::Clear),
-                Some(e) => Some(OwnerEligibleUpdate::Set(OwnerEligible::parse(e)?)),
-            };
             let upd = ItemUpdate {
                 title: a.title.clone(),
                 body: a.body.clone(),
@@ -2192,7 +2182,6 @@ fn cmd_item(project: Option<&str>, cmd: &ItemCmd) -> Result<Output> {
                 node_type: opt_parse(&a.node_type, NodeType::parse)?,
                 wait,
                 due,
-                owner_eligible,
             };
             Ok(Output::Items(s.update_items(
                 project,

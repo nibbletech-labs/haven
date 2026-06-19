@@ -187,21 +187,9 @@ fn anchors_are_living_docs_not_dispatch_work() {
             },
         )
         .unwrap();
-    // HV-66: `next --owner` now filters the eligibility axis, not assignment.
-    // Mark BOTH ai-eligible — the anchor must STILL be excluded (by type), and
-    // the work must surface: proves the exclusion is type-driven, not luck.
-    for r in [&anchor.reference, &work.reference] {
-        s.update_item(
-            None,
-            r,
-            ItemUpdate {
-                owner_eligible: Some(OwnerEligibleUpdate::Set(OwnerEligible::Ai)),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-    }
-
+    // Both are assigned to ai (owner_kind=ai), the axis `next --owner ai` filters
+    // (HV-125). The anchor must STILL be excluded — by TYPE, not ownership: proves
+    // the exclusion is type-driven, not luck.
     let next = s.next(None, Some(OwnerKind::Ai), None).unwrap();
     let refs: Vec<&str> = next.iter().map(|i| i.reference.as_str()).collect();
     assert_eq!(refs, [work.reference.as_str()]);
@@ -846,93 +834,78 @@ fn next_respects_ready_committed_wait_and_dependencies() {
     assert_eq!(refs[0], go.reference);
 }
 
-/// Create a ready+committed leaf and set its `owner_eligible` (HV-66). Returns
-/// the item ref. `eligible = None` leaves it untriaged (NULL).
-fn ready_eligible(s: &Store, title: &str, eligible: Option<OwnerEligible>) -> String {
-    let item = s
-        .add_item(
-            None,
-            NewItem {
-                title: title.into(),
-                status: Some(Status::Ready),
-                done_looks_like: Some(format!("{title} done")),
-                commit: true,
-                ..Default::default()
-            },
-        )
-        .unwrap();
-    if let Some(e) = eligible {
-        s.update_item(
-            None,
-            &item.reference,
-            ItemUpdate {
-                owner_eligible: Some(OwnerEligibleUpdate::Set(e)),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-    }
-    item.reference
+/// Create a ready+committed leaf assigned to `owner` — the planner-seal shape
+/// (ready + committed + acceptance + owner_kind), the axis `next --owner` filters
+/// (HV-125). `owner = None` leaves it unassigned (NULL owner_kind). Returns the ref.
+fn ready_assigned(s: &Store, title: &str, owner: Option<OwnerKind>) -> String {
+    s.add_item(
+        None,
+        NewItem {
+            title: title.into(),
+            status: Some(Status::Ready),
+            done_looks_like: Some(format!("{title} done")),
+            commit: true,
+            assign: owner,
+            ..Default::default()
+        },
+    )
+    .unwrap()
+    .reference
 }
 
-/// HV-66 headline: in ONE project with ready+committed leaves of every
-/// eligibility, `next --owner ai` surfaces {ai, any} only; `--owner human`
-/// surfaces {human, any} only; a NULL/untriaged leaf is in NEITHER owner query;
-/// `any` is in BOTH; and bare `next` (no owner) ignores eligibility entirely.
+/// HV-125 headline: in ONE project with ready+committed leaves, `next --owner ai`
+/// surfaces only the ai-assigned leaf; `--owner human` only the human-assigned
+/// one; an unassigned (NULL owner_kind) leaf is in NEITHER owner query; and bare
+/// `next` (no owner) ignores ownership entirely.
 #[test]
-fn next_owner_eligibility_dispatch_matrix() {
+fn next_owner_kind_dispatch_matrix() {
     let s = store();
-    let ai = ready_eligible(&s, "ai work", Some(OwnerEligible::Ai));
-    let human = ready_eligible(&s, "human work", Some(OwnerEligible::Human));
-    let any = ready_eligible(&s, "any work", Some(OwnerEligible::Any));
-    let untriaged = ready_eligible(&s, "untriaged work", None);
+    let ai = ready_assigned(&s, "ai work", Some(OwnerKind::Ai));
+    let human = ready_assigned(&s, "human work", Some(OwnerKind::Human));
+    let unassigned = ready_assigned(&s, "unassigned work", None);
 
     let refs = |items: &[Item]| -> std::collections::HashSet<String> {
         items.iter().map(|i| i.reference.clone()).collect()
     };
 
-    // --owner ai → {ai, any}; never human, never untriaged.
+    // --owner ai → {ai}; never human, never unassigned.
     let ai_q = refs(&s.next(None, Some(OwnerKind::Ai), None).unwrap());
     assert_eq!(
         ai_q,
-        std::collections::HashSet::from([ai.clone(), any.clone()]),
-        "next --owner ai must be exactly the ai + any leaves"
+        std::collections::HashSet::from([ai.clone()]),
+        "next --owner ai must be exactly the ai-assigned leaf"
     );
     assert!(!ai_q.contains(&human));
-    assert!(!ai_q.contains(&untriaged));
+    assert!(!ai_q.contains(&unassigned));
 
-    // --owner human → {human, any}; never ai, never untriaged.
+    // --owner human → {human}; never ai, never unassigned.
     let human_q = refs(&s.next(None, Some(OwnerKind::Human), None).unwrap());
     assert_eq!(
         human_q,
-        std::collections::HashSet::from([human.clone(), any.clone()]),
-        "next --owner human must be exactly the human + any leaves"
+        std::collections::HashSet::from([human.clone()]),
+        "next --owner human must be exactly the human-assigned leaf"
     );
     assert!(!human_q.contains(&ai));
-    assert!(!human_q.contains(&untriaged));
+    assert!(!human_q.contains(&unassigned));
 
-    // `any` appears for BOTH owners.
-    assert!(ai_q.contains(&any) && human_q.contains(&any));
-
-    // Bare next (no --owner) ignores eligibility — all four surface.
+    // Bare next (no --owner) ignores ownership — all three surface.
     let bare = refs(&s.next(None, None, None).unwrap());
     assert_eq!(
         bare,
-        std::collections::HashSet::from([ai, human, any, untriaged]),
-        "bare next must ignore eligibility and return all four ready leaves"
+        std::collections::HashSet::from([ai, human, unassigned]),
+        "bare next must ignore ownership and return all three ready leaves"
     );
 }
 
-/// HV-66 lockstep: `next --explain`'s dispatchable count must equal the real
-/// `next` length for each owner — the eligibility predicate is applied at the
+/// HV-125 lockstep: `next --explain`'s dispatchable count must equal the real
+/// `next` length for each owner — the `owner_kind` predicate is applied at the
 /// one shared seam in BOTH `next()` and `count_dispatchable`.
 #[test]
 fn next_explain_dispatchable_matches_next_per_owner() {
     let s = store();
-    ready_eligible(&s, "ai work", Some(OwnerEligible::Ai));
-    ready_eligible(&s, "human work", Some(OwnerEligible::Human));
-    ready_eligible(&s, "any work", Some(OwnerEligible::Any));
-    ready_eligible(&s, "untriaged work", None);
+    ready_assigned(&s, "ai work", Some(OwnerKind::Ai));
+    ready_assigned(&s, "human work", Some(OwnerKind::Human));
+    ready_assigned(&s, "unassigned work", None);
 
     for owner in [None, Some(OwnerKind::Ai), Some(OwnerKind::Human)] {
         let n = s.next(None, owner, None).unwrap().len() as i64;
@@ -945,79 +918,50 @@ fn next_explain_dispatchable_matches_next_per_owner() {
     }
 }
 
-/// HV-66 three-valued logic: a NULL-eligibility ready leaf is absent from
-/// `next --owner ai` directly (the safety property `owner_eligible IN (?, 'any')`
-/// against NULL yields NULL ⇒ excluded), even though it surfaces in bare `next`.
+/// HV-125 three-valued logic: an unassigned (NULL owner_kind) ready leaf is absent
+/// from `next --owner ai`/`human` directly (`owner_kind = ?` against NULL yields
+/// NULL ⇒ excluded), even though it surfaces in bare `next`.
 #[test]
-fn next_owner_excludes_untriaged_null_eligibility() {
+fn next_owner_excludes_unassigned_null_owner_kind() {
     let s = store();
-    let untriaged = ready_eligible(&s, "untriaged", None);
+    let unassigned = ready_assigned(&s, "unassigned", None);
 
     let ai_q = s.next(None, Some(OwnerKind::Ai), None).unwrap();
     assert!(
-        !ai_q.iter().any(|i| i.reference == untriaged),
-        "a NULL-eligibility leaf must never appear in a --owner ai query"
+        !ai_q.iter().any(|i| i.reference == unassigned),
+        "an unassigned leaf must never appear in a --owner ai query"
     );
     let human_q = s.next(None, Some(OwnerKind::Human), None).unwrap();
     assert!(
-        !human_q.iter().any(|i| i.reference == untriaged),
-        "a NULL-eligibility leaf must never appear in a --owner human query"
+        !human_q.iter().any(|i| i.reference == unassigned),
+        "an unassigned leaf must never appear in a --owner human query"
     );
     // But it IS dispatchable to a bare (owner-agnostic) next.
     let bare = s.next(None, None, None).unwrap();
-    assert!(bare.iter().any(|i| i.reference == untriaged));
+    assert!(bare.iter().any(|i| i.reference == unassigned));
 }
 
-/// HV-66 write/clear round-trip: `update --owner-eligible any` sets the axis and
-/// bumps the revision; `none` clears it back to NULL (untriaged). `assign` does
-/// NOT touch eligibility (orthogonal axes).
+/// HV-125 dispatch invariant (the plan->run contract the suite previously lacked):
+/// a planner-sealed leaf — ready + committed + done_looks_like + owner_kind=ai —
+/// MUST be dispatchable via `next --owner ai`. orchestrate-plan's SKILL.md
+/// guarantees "next --owner ai is the AI dispatch queue"; this is the guard that
+/// the producer (assignment) and the consumer (`next --owner`) filter the SAME
+/// axis — the exact regression owner_eligible (HV-66) silently introduced.
 #[test]
-fn owner_eligible_write_and_clear_round_trip() {
+fn next_owner_ai_dispatches_planner_sealed_leaf() {
     let s = store();
-    let item = add(&s, "task");
-    assert!(item.owner_eligible.is_none(), "born untriaged");
-    let rev0 = item.revision;
+    let sealed = ready_assigned(&s, "sealed ai leaf", Some(OwnerKind::Ai));
 
-    // Set to `any`.
-    let set = s
-        .update_item(
-            None,
-            &item.reference,
-            ItemUpdate {
-                owner_eligible: Some(OwnerEligibleUpdate::Set(OwnerEligible::Any)),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-    assert_eq!(set.owner_eligible, Some(OwnerEligible::Any));
-    assert!(set.revision > rev0, "a write bumps the revision (LWW)");
-
-    // Assigning to ai must NOT change eligibility (orthogonal axes).
-    let assigned = s
-        .assign_item(None, &item.reference, OwnerKind::Ai, None)
-        .unwrap();
-    assert_eq!(
-        assigned.owner_eligible,
-        Some(OwnerEligible::Any),
-        "assign is the assignment axis; it must not touch owner_eligible"
-    );
-
-    // Clear back to NULL.
-    let cleared = s
-        .update_item(
-            None,
-            &item.reference,
-            ItemUpdate {
-                owner_eligible: Some(OwnerEligibleUpdate::Clear),
-                ..Default::default()
-            },
-        )
-        .unwrap();
+    let ai_q = s.next(None, Some(OwnerKind::Ai), None).unwrap();
     assert!(
-        cleared.owner_eligible.is_none(),
-        "`none` clears owner_eligible back to untriaged (NULL)"
+        ai_q.iter().any(|i| i.reference == sealed),
+        "a planner-sealed owner_kind=ai leaf must be dispatchable via next --owner ai"
     );
-    assert!(cleared.revision > set.revision);
+    let explain = s.next_explain(None, Some(OwnerKind::Ai)).unwrap();
+    assert_eq!(
+        explain["dispatchable"], 1,
+        "next --explain must agree the sealed leaf is dispatchable"
+    );
 }
 
 #[test]

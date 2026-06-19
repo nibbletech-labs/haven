@@ -142,14 +142,10 @@ impl Store {
         );
         let mut args: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(project_id)];
         if let Some(owner) = owner {
-            // HV-66: filter on the *eligibility* axis, not assignment. `ai` →
-            // `IN ('ai','any')`, `human` → `IN ('human','any')`. An untriaged
-            // (NULL) row yields NULL under three-valued logic ⇒ excluded, so it
-            // is never auto-pulled by a `--owner` query.
-            sql.push_str(&format!(
-                " AND n.owner_eligible IN (?{}, 'any')",
-                args.len() + 1
-            ));
+            // HV-125: `next --owner` filters the *assignment* axis (`owner_kind`).
+            // An unassigned (NULL `owner_kind`) row yields NULL under three-valued
+            // logic ⇒ excluded, so it is never auto-pulled by a `--owner` query.
+            sql.push_str(&format!(" AND n.owner_kind = ?{}", args.len() + 1));
             args.push(Box::new(owner.as_str()));
         }
         sql.push_str(ORDER);
@@ -248,14 +244,11 @@ impl Store {
             format!("SELECT count(*) FROM nodes n WHERE n.project_id = ?1 AND {predicate}");
         let mut args: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(project_id)];
         if let Some(owner) = owner {
-            // HV-66: keep lockstep with `next()` — count the eligibility frontier,
-            // not the assignment one. `count_dispatchable` (and every diagnostic
+            // HV-125: keep lockstep with `next()` — count the same `owner_kind`
+            // (assignment) frontier. `count_dispatchable` (and every diagnostic
             // counter) routes through here, so `next --explain` agrees with the
-            // real queue per owner, untriaged rows excluded by three-valued logic.
-            sql.push_str(&format!(
-                " AND n.owner_eligible IN (?{}, 'any')",
-                args.len() + 1
-            ));
+            // real queue per owner, unassigned rows excluded by three-valued logic.
+            sql.push_str(&format!(" AND n.owner_kind = ?{}", args.len() + 1));
             args.push(Box::new(owner.as_str()));
         }
         Ok(self.conn.query_row(

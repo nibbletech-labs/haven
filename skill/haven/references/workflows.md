@@ -157,8 +157,8 @@ it as deliberate intent, not something to discover by tripping the guard.
 
 ```bash
 haven next --pretty                 # top of the dispatch queue
-haven next --owner human --limit 3  # work a human is ELIGIBLE to pull
-haven next --owner ai               # work an AI is ELIGIBLE to pull (owner_eligible ai|any)
+haven next --owner human --limit 3  # work assigned to a human
+haven next --owner ai               # work assigned to an AI (owner_kind = ai)
 haven next --explain --owner ai     # WHY the queue is empty (when it is)
 ```
 
@@ -168,16 +168,14 @@ haven next --explain --owner ai     # WHY the queue is empty (when it is)
   `blocked_by_dependency`, `waiting`, `committed_not_ready`, `ready_but_uncommitted`
   — and a `hint`. Report the reason and offer the fix (commit it / mark it ready /
   resolve the blocker), rather than reconstructing it by hand or inventing work.
-- **Eligibility — not assignment — gates `--owner`.** `next --owner ai` returns items
-  whose **`owner_eligible`** is `ai` or `any` (*who MAY pull it*) and **excludes
-  untriaged (`owner_eligible` NULL) work, so it is never auto-pulled**. This is distinct
-  from *assignment* (`owner_kind`, set by `assign` — *who IS doing it*): assigning a node
-  to `ai` does **not** put it on the `--owner ai` frontier. So when you ready AI work, set
-  its eligibility — `haven item update <ref> --owner-eligible ai` (or `any`) — or it stays
-  invisible to the agent queue (`--owner-eligible none` re-untriages it). Never hand an
-  agent a human-eligible node waiting on a real-world action.
+- **Assignment gates `--owner`.** `next --owner ai` returns items whose **`owner_kind`**
+  is `ai` (*who IS doing it*, set by `assign`) and **excludes unassigned (`owner_kind`
+  NULL) work, so it is never auto-pulled**. So when you ready AI work, `assign` it to
+  `ai` — `haven item assign <ref> --to ai` (or `--assign ai` on `item add`) — or it stays
+  invisible to the agent queue. Never hand an agent a node assigned to a human and
+  waiting on a real-world action.
 - **Advance maturity on pickup:** `--status in_progress` when work starts (and `assign`
-  to record *who's doing it*, separate from eligibility); finish with **`item complete`**
+  to record *who's doing it*); finish with **`item complete`**
   (workflow 9), not a bare `--status done` — it records evidence and tells you what unblocked.
 
 ## 5. Multi-item delivery

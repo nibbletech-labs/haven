@@ -18,6 +18,7 @@ const MIGRATION_002: &str = include_str!("../../../migrations/002_acceptance.sql
 const MIGRATION_003: &str = include_str!("../../../migrations/003_anchor_type.sql");
 const MIGRATION_004: &str = include_str!("../../../migrations/004_due_at.sql");
 const MIGRATION_005: &str = include_str!("../../../migrations/005_owner_eligible.sql");
+const MIGRATION_006: &str = include_str!("../../../migrations/006_drop_owner_eligible.sql");
 
 /// The ordered migration SQL, embedded at compile time. Adding a migration here
 /// is the only edit needed: the supported schema version is this list's length,
@@ -28,6 +29,7 @@ const MIGRATION_SQL: &[&str] = &[
     MIGRATION_003,
     MIGRATION_004,
     MIGRATION_005,
+    MIGRATION_006,
 ];
 
 /// Highest `user_version` this binary can open, derived from `MIGRATION_SQL`.
@@ -116,7 +118,7 @@ mod tests {
         // adding a migration forces a one-line edit here, a moment to confirm
         // intent (and to bump the release/version if needed).
         assert_eq!(latest_schema_migration(), MIGRATION_SQL.len() as i64);
-        assert_eq!(latest_schema_migration(), 5);
+        assert_eq!(latest_schema_migration(), 6);
     }
 
     /// HV-66: the migration-005 `nodes` REBUILD must preserve every row's
@@ -175,12 +177,21 @@ mod tests {
             .query_row("SELECT id FROM nodes WHERE ref='HV-1'", [], |r| r.get(0))
             .unwrap();
 
-        // Now migrate the SAME connection to latest (runs the 005 rebuild).
-        migrations().to_latest(&mut conn).unwrap();
+        // Now migrate the SAME connection through 005 (the rebuild under test).
+        // Pinned to v5 deliberately: 006 later DROPS `owner_eligible`, so going to
+        // latest would invalidate the column assertions below — this test owns the
+        // 005-era invariant, and `migration_006_*` owns its removal.
+        let to_v5 = Migrations::new(
+            MIGRATION_SQL[..5]
+                .iter()
+                .copied()
+                .map(M::up)
+                .collect::<Vec<_>>(),
+        );
+        to_v5.to_latest(&mut conn).unwrap();
         let v5: i64 = conn
             .pragma_query_value(None, "user_version", |r| r.get(0))
             .unwrap();
-        assert_eq!(v5, latest_schema_migration());
         assert_eq!(v5, 5);
 
         // The row survived: id PRESERVED, no column dropped, owner_eligible NULL.
@@ -267,6 +278,155 @@ mod tests {
             )
             .unwrap();
         assert_eq!(hits, 1, "FTS index must be rebuilt and populated");
+    }
+
+    /// HV-125: the migration-006 `nodes` REBUILD must DROP `owner_eligible` while
+    /// preserving every row's integer id, carrying forward every remaining column
+    /// (esp. `due_at`), and keeping the edge tables + FTS intact across the
+    /// child-FK-table rebuild. This is the in-memory analog of the live-DB safety
+    /// gate: stage a populated row + a decomposition edge at v5, migrate to v6, and
+    /// assert the column is gone but nothing else was lost.
+    #[test]
+    fn migration_006_drops_owner_eligible_and_preserves_rows_edges_and_fts() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+
+        // Stage at schema v5 (the pre-006 schema: `owner_eligible` exists).
+        let to_v5 = Migrations::new(
+            MIGRATION_SQL[..5]
+                .iter()
+                .copied()
+                .map(M::up)
+                .collect::<Vec<_>>(),
+        );
+        to_v5.to_latest(&mut conn).unwrap();
+        assert_eq!(
+            conn.pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))
+                .unwrap(),
+            5,
+            "staged at schema v5"
+        );
+        // The column being dropped by 006 must exist at v5.
+        assert!(
+            conn.prepare("SELECT owner_eligible FROM nodes").is_ok(),
+            "owner_eligible must exist before migration 006"
+        );
+
+        // Stage a project + two fully-populated nodes (one with owner_eligible set,
+        // due_at, done_looks_like, why), and a decomposition edge between them.
+        conn.execute(
+            "INSERT INTO projects (public_id, key, ref_prefix, title, client_id)
+             VALUES ('p-uuid', 'haven', 'HV', 'Haven', 'pc')",
+            [],
+        )
+        .unwrap();
+        let project_id: i64 = conn
+            .query_row("SELECT id FROM projects WHERE key='haven'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        conn.execute(
+            "INSERT INTO nodes
+                (public_id, project_id, ref, title, body, type, status, owner_kind,
+                 committed, priority, client_id, done_looks_like, why, due_at, owner_eligible)
+             VALUES ('n1-uuid', ?1, 'HV-1', 'Carry me', 'a body', 'code', 'ready',
+                     'ai', 1, 2, 'nc1', 'ship it', 'because reasons', '2026-07-01', 'ai')",
+            [project_id],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO nodes
+                (public_id, project_id, ref, title, type, status, client_id)
+             VALUES ('n2-uuid', ?1, 'HV-2', 'Child node', 'code', 'ready', 'nc2')",
+            [project_id],
+        )
+        .unwrap();
+        let parent_id: i64 = conn
+            .query_row("SELECT id FROM nodes WHERE ref='HV-1'", [], |r| r.get(0))
+            .unwrap();
+        let child_id: i64 = conn
+            .query_row("SELECT id FROM nodes WHERE ref='HV-2'", [], |r| r.get(0))
+            .unwrap();
+        conn.execute(
+            "INSERT INTO decomposition_edges (parent_id, child_id, client_id)
+             VALUES (?1, ?2, 'edge-cid')",
+            [parent_id, child_id],
+        )
+        .unwrap();
+
+        // Migrate the SAME connection to latest (runs the 006 rebuild).
+        migrations().to_latest(&mut conn).unwrap();
+        let v6: i64 = conn
+            .pragma_query_value(None, "user_version", |r| r.get(0))
+            .unwrap();
+        assert_eq!(v6, latest_schema_migration());
+        assert_eq!(v6, 6);
+
+        // The column is GONE.
+        assert!(
+            conn.prepare("SELECT owner_eligible FROM nodes").is_err(),
+            "owner_eligible must not exist after migration 006"
+        );
+
+        // Every other column carried forward, id preserved.
+        let col = |sql: &str| -> Option<String> {
+            conn.query_row(sql, [], |r| r.get::<_, Option<String>>(0))
+                .unwrap()
+        };
+        let id: i64 = conn
+            .query_row("SELECT id FROM nodes WHERE ref='HV-1'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            id, parent_id,
+            "integer id MUST be preserved across the rebuild"
+        );
+        assert_eq!(
+            col("SELECT title FROM nodes WHERE ref='HV-1'").as_deref(),
+            Some("Carry me")
+        );
+        assert_eq!(
+            col("SELECT owner_kind FROM nodes WHERE ref='HV-1'").as_deref(),
+            Some("ai")
+        );
+        assert_eq!(
+            col("SELECT done_looks_like FROM nodes WHERE ref='HV-1'").as_deref(),
+            Some("ship it"),
+            "done_looks_like NOT dropped"
+        );
+        assert_eq!(
+            col("SELECT why FROM nodes WHERE ref='HV-1'").as_deref(),
+            Some("because reasons"),
+            "why NOT dropped"
+        );
+        assert_eq!(
+            col("SELECT due_at FROM nodes WHERE ref='HV-1'").as_deref(),
+            Some("2026-07-01"),
+            "due_at NOT dropped"
+        );
+
+        // The decomposition edge survived the child-FK-table rebuild, still
+        // pointing at the preserved ids.
+        let edges: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM decomposition_edges WHERE parent_id=?1 AND child_id=?2",
+                [parent_id, child_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(edges, 1, "the decomposition edge must survive the rebuild");
+
+        // FTS survived the rebuild — both rows are searchable.
+        let hits: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM node_fts WHERE node_fts MATCH 'Carry OR Child'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            hits, 2,
+            "FTS index must be rebuilt and populated for both rows"
+        );
     }
 
     #[test]
