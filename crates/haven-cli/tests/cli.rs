@@ -289,7 +289,7 @@ fn doctor_reports_install_health() {
         .as_str()
         .unwrap();
     assert!(
-        schema_detail.contains("binary supports v4"),
+        schema_detail.contains("binary supports v5"),
         "schema detail was: {schema_detail}"
     );
     assert_eq!(status_of(&before, "claude_mcp"), "warn");

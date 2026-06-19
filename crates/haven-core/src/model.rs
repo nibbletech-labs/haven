@@ -102,6 +102,16 @@ impl OwnerKind {
 }
 
 sql_enum! {
+    /// Which owner may auto-pull a node — the *eligibility* axis (HV-66),
+    /// distinct from [`OwnerKind`] (assignment). `Any` means either owner may
+    /// pull it; a node with no `owner_eligible` (NULL) is untriaged and is never
+    /// surfaced by a `next --owner <k>` query. Stored on `nodes.owner_eligible`
+    /// (CHECK-enforced); the `next` filter input stays an [`OwnerKind`], mapped
+    /// to `owner_eligible IN (<owner>, 'any')`.
+    OwnerEligible { Human => "human", Ai => "ai", Any => "any" }
+}
+
+sql_enum! {
     /// Why a node is parked (orthogonal to status).
     WaitState {
         OnHuman => "on_human", OnDependency => "on_dependency", OnExternal => "on_external",
@@ -331,6 +341,12 @@ pub struct Item {
     pub status: Status,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub owner_kind: Option<OwnerKind>,
+    /// Eligibility axis (HV-66): which owner may auto-pull this leaf — distinct
+    /// from `owner_kind` (assignment). NULL = untriaged (never auto-pulled).
+    /// Surfaced on full reads only, omitted when null; set via `item update
+    /// --owner-eligible`, never via `assign`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner_eligible: Option<OwnerEligible>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub assignee: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

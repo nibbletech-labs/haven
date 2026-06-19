@@ -17,11 +17,18 @@ const MIGRATION_001: &str = include_str!("../../../migrations/001_init.sql");
 const MIGRATION_002: &str = include_str!("../../../migrations/002_acceptance.sql");
 const MIGRATION_003: &str = include_str!("../../../migrations/003_anchor_type.sql");
 const MIGRATION_004: &str = include_str!("../../../migrations/004_due_at.sql");
+const MIGRATION_005: &str = include_str!("../../../migrations/005_owner_eligible.sql");
 
 /// The ordered migration SQL, embedded at compile time. Adding a migration here
 /// is the only edit needed: the supported schema version is this list's length,
 /// so it can never drift from `migrations()` (no hand-bumped constant to forget).
-const MIGRATION_SQL: &[&str] = &[MIGRATION_001, MIGRATION_002, MIGRATION_003, MIGRATION_004];
+const MIGRATION_SQL: &[&str] = &[
+    MIGRATION_001,
+    MIGRATION_002,
+    MIGRATION_003,
+    MIGRATION_004,
+    MIGRATION_005,
+];
 
 /// Highest `user_version` this binary can open, derived from `MIGRATION_SQL`.
 pub fn latest_schema_migration() -> i64 {
@@ -109,7 +116,157 @@ mod tests {
         // adding a migration forces a one-line edit here, a moment to confirm
         // intent (and to bump the release/version if needed).
         assert_eq!(latest_schema_migration(), MIGRATION_SQL.len() as i64);
-        assert_eq!(latest_schema_migration(), 4);
+        assert_eq!(latest_schema_migration(), 5);
+    }
+
+    /// HV-66: the migration-005 `nodes` REBUILD must preserve every row's
+    /// integer id and carry forward EVERY existing column — including HV-67's
+    /// `due_at` (added in place at 004), `done_looks_like`, and `why` — while the
+    /// new `owner_eligible` defaults NULL (no backfill). This is the test that
+    /// catches a botched rebuild: it stages a row at schema v4, then migrates the
+    /// SAME connection to v5 and asserts nothing was dropped.
+    #[test]
+    fn migration_005_rebuild_preserves_ids_and_carries_columns_forward() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+
+        // Apply migrations 001..=004 only (the pre-005 schema: `due_at` exists,
+        // `owner_eligible` does not).
+        let to_v4 = Migrations::new(
+            MIGRATION_SQL[..4]
+                .iter()
+                .copied()
+                .map(M::up)
+                .collect::<Vec<_>>(),
+        );
+        to_v4.to_latest(&mut conn).unwrap();
+        let v4: i64 = conn
+            .pragma_query_value(None, "user_version", |r| r.get(0))
+            .unwrap();
+        assert_eq!(v4, 4, "staged at schema v4");
+        // The column being added by 005 must NOT exist yet.
+        assert!(
+            conn.prepare("SELECT owner_eligible FROM nodes").is_err(),
+            "owner_eligible must not exist before migration 005"
+        );
+
+        // Stage a project + a fully-populated node, capturing its assigned id.
+        conn.execute(
+            "INSERT INTO projects (public_id, key, ref_prefix, title, client_id)
+             VALUES ('p-uuid', 'haven', 'HV', 'Haven', 'pc')",
+            [],
+        )
+        .unwrap();
+        let project_id: i64 = conn
+            .query_row("SELECT id FROM projects WHERE key='haven'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        conn.execute(
+            "INSERT INTO nodes
+                (public_id, project_id, ref, title, body, type, status, owner_kind,
+                 committed, priority, client_id, done_looks_like, why, due_at)
+             VALUES ('n-uuid', ?1, 'HV-1', 'Carry me', 'a body', 'code', 'ready',
+                     'ai', 1, 2, 'nc', 'ship it', 'because reasons', '2026-07-01')",
+            [project_id],
+        )
+        .unwrap();
+        let node_id: i64 = conn
+            .query_row("SELECT id FROM nodes WHERE ref='HV-1'", [], |r| r.get(0))
+            .unwrap();
+
+        // Now migrate the SAME connection to latest (runs the 005 rebuild).
+        migrations().to_latest(&mut conn).unwrap();
+        let v5: i64 = conn
+            .pragma_query_value(None, "user_version", |r| r.get(0))
+            .unwrap();
+        assert_eq!(v5, latest_schema_migration());
+        assert_eq!(v5, 5);
+
+        // The row survived: id PRESERVED, no column dropped, owner_eligible NULL.
+        // Read each carried column individually and assert nothing was lost.
+        let col = |sql: &str| -> Option<String> {
+            conn.query_row(sql, [], |r| r.get::<_, Option<String>>(0))
+                .unwrap()
+        };
+        let id: i64 = conn
+            .query_row("SELECT id FROM nodes WHERE ref='HV-1'", [], |r| r.get(0))
+            .unwrap();
+        let committed: i64 = conn
+            .query_row("SELECT committed FROM nodes WHERE ref='HV-1'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        let priority: Option<i64> = conn
+            .query_row("SELECT priority FROM nodes WHERE ref='HV-1'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(
+            id, node_id,
+            "integer id MUST be preserved across the rebuild"
+        );
+        assert_eq!(
+            col("SELECT title FROM nodes WHERE ref='HV-1'").as_deref(),
+            Some("Carry me")
+        );
+        assert_eq!(
+            col("SELECT body FROM nodes WHERE ref='HV-1'").as_deref(),
+            Some("a body")
+        );
+        assert_eq!(
+            col("SELECT status FROM nodes WHERE ref='HV-1'").as_deref(),
+            Some("ready")
+        );
+        assert_eq!(
+            col("SELECT owner_kind FROM nodes WHERE ref='HV-1'").as_deref(),
+            Some("ai")
+        );
+        assert_eq!(committed, 1);
+        assert_eq!(priority, Some(2));
+        assert_eq!(
+            col("SELECT done_looks_like FROM nodes WHERE ref='HV-1'").as_deref(),
+            Some("ship it"),
+            "done_looks_like NOT dropped"
+        );
+        assert_eq!(
+            col("SELECT why FROM nodes WHERE ref='HV-1'").as_deref(),
+            Some("because reasons"),
+            "why NOT dropped"
+        );
+        assert_eq!(
+            col("SELECT due_at FROM nodes WHERE ref='HV-1'").as_deref(),
+            Some("2026-07-01"),
+            "due_at NOT dropped"
+        );
+        assert_eq!(
+            col("SELECT owner_eligible FROM nodes WHERE ref='HV-1'"),
+            None,
+            "owner_eligible defaults NULL (no backfill)"
+        );
+
+        // The new CHECK constraint is live post-rebuild: a bad value is rejected,
+        // a valid one accepted.
+        assert!(
+            conn.execute(
+                "UPDATE nodes SET owner_eligible='nonsense' WHERE ref='HV-1'",
+                []
+            )
+            .is_err(),
+            "the owner_eligible CHECK must reject an out-of-domain value"
+        );
+        conn.execute("UPDATE nodes SET owner_eligible='any' WHERE ref='HV-1'", [])
+            .unwrap();
+
+        // FTS survived the rebuild — the row is searchable by title.
+        let hits: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM node_fts WHERE node_fts MATCH 'Carry'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(hits, 1, "FTS index must be rebuilt and populated");
     }
 
     #[test]

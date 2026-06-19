@@ -12,8 +12,8 @@ use std::io::{self, BufRead, Write};
 use haven_core::{
     Artifact, ArtifactKind, ArtifactRole, ArtifactSelector, CompleteInput, ContextPack, DueUpdate,
     EdgeKind, Edges, HandoffInput, HavenError, Include, Item, ItemFilter, ItemUpdate,
-    LineageDirection, LineageEvent, NewArtifact, NewItem, NodeType, OwnerKind, Result, RollupState,
-    Status, Store, WaitState, WaitUpdate,
+    LineageDirection, LineageEvent, NewArtifact, NewItem, NodeType, OwnerEligible,
+    OwnerEligibleUpdate, OwnerKind, Result, RollupState, Status, Store, WaitState, WaitUpdate,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -75,6 +75,11 @@ struct McpItem<'a> {
     owner_kind: Option<OwnerKind>,
     #[serde(skip_serializing_if = "Option::is_none")]
     wait_state: Option<WaitState>,
+    // Full-only: the eligibility axis (HV-66) — which owner may auto-pull this
+    // item, distinct from `owner_kind`. Omitted when null; absent from the lean
+    // compact/graph rows (a row already in `next` is eligible by construction).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    owner_eligible: Option<OwnerEligible>,
 
     // Full-only fields — `None` in the compact form. (`done_looks_like` is also
     // populated by the `graph` view — see `graph_node`.)
@@ -133,6 +138,7 @@ impl<'a> McpItem<'a> {
             priority: item.priority,
             owner_kind: item.owner_kind,
             wait_state: item.wait_state,
+            owner_eligible: None,
             body: None,
             done_looks_like: None,
             rollup_state: None,
@@ -178,6 +184,7 @@ impl<'a> McpItem<'a> {
             priority: item.priority,
             owner_kind: item.owner_kind,
             wait_state: item.wait_state,
+            owner_eligible: item.owner_eligible,
             body: item.body.as_deref(),
             done_looks_like: item.done_looks_like.as_deref(),
             rollup_state: item.rollup_state,
@@ -533,6 +540,11 @@ fn call_tool(store: &Store, name: &str, a: &Value) -> Result<Value> {
                 Some("none") => Some(DueUpdate::Clear),
                 Some(d) => Some(DueUpdate::Set(d.to_string())),
             };
+            let owner_eligible = match opt_str(a, "owner_eligible") {
+                None => None,
+                Some("none") => Some(OwnerEligibleUpdate::Clear),
+                Some(e) => Some(OwnerEligibleUpdate::Set(OwnerEligible::parse(e)?)),
+            };
             let upd = ItemUpdate {
                 title: opt_str(a, "title").map(String::from),
                 body: opt_str(a, "body").map(String::from),
@@ -543,6 +555,7 @@ fn call_tool(store: &Store, name: &str, a: &Value) -> Result<Value> {
                 node_type: opt_str(a, "type").map(NodeType::parse).transpose()?,
                 wait,
                 due,
+                owner_eligible,
             };
             let has_update = upd.title.is_some()
                 || upd.body.is_some()
@@ -552,7 +565,8 @@ fn call_tool(store: &Store, name: &str, a: &Value) -> Result<Value> {
                 || upd.priority.is_some()
                 || upd.node_type.is_some()
                 || upd.wait.is_some()
-                || upd.due.is_some();
+                || upd.due.is_some()
+                || upd.owner_eligible.is_some();
             if has_update {
                 store.update_item(project, reference, upd)?;
             }
@@ -899,8 +913,8 @@ fn tools_list() -> Value {
           "inputSchema": obj(json!({"ref":{"type":"string"},"project":{"type":"string"},"before":{"type":"string"},"after":{"type":"string"}}), json!(["ref"])) },
         { "name": "haven_add_item", "description": "Create a work-graph item (node). `done_looks_like` is the acceptance statement output is verified against; `why` is a one-line provenance trace. `due_at` is an optional deadline as a calendar date YYYY-MM-DD (no time/timezone), validated on write. Pass `if_absent: true` to return an existing live item with the same normalized title (marked `existing: true`) instead of creating a duplicate; responses may carry `similar` — up to 3 live items with overlapping titles (advisory).",
           "inputSchema": obj(json!({"title":{"type":"string"},"project":{"type":"string"},"type":{"type":"string"},"body":{"type":"string"},"done_looks_like":{"type":"string"},"why":{"type":"string"},"due_at":{"type":"string"},"status":{"type":"string"},"priority":{"type":"integer"},"commit":{"type":"boolean"},"assign":{"type":"string"},"parent":{"type":"string"},"depends_on":{"type":"string"},"group":{"type":"string"},"if_absent":{"type":"boolean"}}), json!(["title"])) },
-        { "name": "haven_update_item", "description": "Update maturity/commitment/ownership of an item. Set `done_looks_like` (acceptance) when it becomes ready so dispatch can verify against it. `due_at` sets the YYYY-MM-DD deadline (validated on write); pass `\"none\"` to clear it. Returns the updated item in full (same shape as haven_get_item).",
-          "inputSchema": obj(json!({"ref":{"type":"string"},"title":{"type":"string"},"body":{"type":"string"},"done_looks_like":{"type":"string"},"why":{"type":"string"},"due_at":{"type":"string"},"status":{"type":"string"},"priority":{"type":"integer"},"type":{"type":"string"},"wait":{"type":"string"},"commit":{"type":"boolean"},"assign":{"type":"string"},"actor":{"type":"string"},"project":{"type":"string"}}), json!(["ref"])) },
+        { "name": "haven_update_item", "description": "Update maturity/commitment/ownership of an item. Set `done_looks_like` (acceptance) when it becomes ready so dispatch can verify against it. `due_at` sets the YYYY-MM-DD deadline (validated on write); pass `\"none\"` to clear it. `owner_eligible` (human|ai|any) is the eligibility axis — which owner may auto-pull this item via `haven_next --owner` — distinct from `assign` (who owns it); pass `\"none\"` to clear it to untriaged. Returns the updated item in full (same shape as haven_get_item).",
+          "inputSchema": obj(json!({"ref":{"type":"string"},"title":{"type":"string"},"body":{"type":"string"},"done_looks_like":{"type":"string"},"why":{"type":"string"},"due_at":{"type":"string"},"owner_eligible":{"type":"string"},"status":{"type":"string"},"priority":{"type":"integer"},"type":{"type":"string"},"wait":{"type":"string"},"commit":{"type":"boolean"},"assign":{"type":"string"},"actor":{"type":"string"},"project":{"type":"string"}}), json!(["ref"])) },
         { "name": "haven_add_edge", "description": "Add/remove a decomposition|dependency|grouping edge.",
           "inputSchema": obj(json!({"kind":{"type":"string"},"from":{"type":"string"},"to":{"type":"string"},"remove":{"type":"boolean"},"project":{"type":"string"}}), json!(["kind","from","to"])) },
         { "name": "haven_evolve", "description": "Split/merge/supersede items (lineage).",
@@ -1055,7 +1069,7 @@ mod tests {
                     "arguments":{"title":"Dispatch me","status":"ready","commit":true,"assign":"ai","done_looks_like":"it works"}
                 }}),
                 json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{
-                    "name":"haven_next","arguments":{"owner":"ai"}
+                    "name":"haven_next","arguments":{}
                 }}),
             ],
         );
@@ -1084,7 +1098,7 @@ mod tests {
                 }}),
                 // 2: next → lean/compact row must NOT carry due_at.
                 json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{
-                    "name":"haven_next","arguments":{"owner":"ai"}
+                    "name":"haven_next","arguments":{}
                 }}),
                 // 3: get_item full → carries due_at.
                 json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{
@@ -1126,6 +1140,84 @@ mod tests {
 
         // 5: a calendar-impossible date is rejected.
         assert_eq!(out[4]["result"]["isError"], true);
+    }
+
+    /// HV-66: `owner_eligible` over the MCP surface — set via haven_update_item
+    /// (the has_update chain must include it, or the call is a silent no-op),
+    /// carried on the full get, filters haven_next per owner, cleared via "none",
+    /// and a bad value rejected.
+    #[test]
+    fn owner_eligible_via_tools_writes_filters_and_clears() {
+        let s = store();
+        let out = session(
+            &s,
+            &[
+                // 1: add a ready+committed leaf (eligibility starts NULL).
+                json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{
+                    "name":"haven_add_item",
+                    "arguments":{"title":"Eligible","status":"ready","commit":true,"done_looks_like":"done"}
+                }}),
+                // 2: NULL-eligible leaf is NOT pulled by next --owner ai.
+                json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{
+                    "name":"haven_next","arguments":{"owner":"ai"}
+                }}),
+                // 3: set owner_eligible=ai via update (exercises has_update chain).
+                json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{
+                    "name":"haven_update_item","arguments":{"ref":"HV-1","owner_eligible":"ai"}
+                }}),
+                // 4: now it IS pulled by next --owner ai.
+                json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{
+                    "name":"haven_next","arguments":{"owner":"ai"}
+                }}),
+                // 5: but NOT by next --owner human.
+                json!({"jsonrpc":"2.0","id":5,"method":"tools/call","params":{
+                    "name":"haven_next","arguments":{"owner":"human"}
+                }}),
+                // 6: full get carries owner_eligible.
+                json!({"jsonrpc":"2.0","id":6,"method":"tools/call","params":{
+                    "name":"haven_get_item","arguments":{"ref":"HV-1"}
+                }}),
+                // 7: clear via the "none" sentinel.
+                json!({"jsonrpc":"2.0","id":7,"method":"tools/call","params":{
+                    "name":"haven_update_item","arguments":{"ref":"HV-1","owner_eligible":"none"}
+                }}),
+                // 8: a bad eligibility value is rejected.
+                json!({"jsonrpc":"2.0","id":8,"method":"tools/call","params":{
+                    "name":"haven_update_item","arguments":{"ref":"HV-1","owner_eligible":"nobody"}
+                }}),
+            ],
+        );
+
+        // 2: NULL-eligible → absent from --owner ai.
+        assert_eq!(out[1]["result"]["isError"], false);
+        assert!(
+            tool_payload(&out[1]).as_array().unwrap().is_empty(),
+            "untriaged (NULL) leaf must not surface for --owner ai"
+        );
+        // 3: the update succeeded (has_update saw owner_eligible) and echoes it.
+        assert_eq!(out[2]["result"]["isError"], false);
+        assert_eq!(tool_payload(&out[2])["owner_eligible"], "ai");
+        // 4: now dispatchable to ai.
+        let ai_next = tool_payload(&out[3]);
+        assert_eq!(ai_next.as_array().unwrap().len(), 1);
+        assert_eq!(ai_next[0]["ref"], "HV-1");
+        // 5: never to human.
+        assert!(tool_payload(&out[4]).as_array().unwrap().is_empty());
+        // 6: full get carries it (and the lean next row above did NOT — HV-66
+        //    keeps eligibility off the compact dispatch view).
+        assert_eq!(tool_payload(&out[5])["owner_eligible"], "ai");
+        assert!(
+            ai_next[0].get("owner_eligible").is_none(),
+            "compact next row must omit owner_eligible"
+        );
+        // 7: cleared → absent from the full shape.
+        assert_eq!(out[6]["result"]["isError"], false);
+        assert!(
+            tool_payload(&out[6]).get("owner_eligible").is_none(),
+            "cleared owner_eligible must be absent from the full shape"
+        );
+        // 8: a bad value is rejected.
+        assert_eq!(out[7]["result"]["isError"], true);
     }
 
     #[test]
@@ -1615,7 +1707,7 @@ mod tests {
                 json!({"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"haven_get_item","arguments":{"ref":"HV-2","include":["edges"]}}}),
                 json!({"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"haven_get_item","arguments":{"ref":"HV-3"}}}),
                 json!({"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"haven_graph","arguments":{}}}),
-                json!({"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"haven_next","arguments":{"owner":"ai"}}}),
+                json!({"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"haven_next","arguments":{}}}),
             ],
         );
         // get_item on the packed leaf carries the one-hop pointer (container + name).
@@ -1720,7 +1812,7 @@ mod tests {
                     "arguments":{"title":"Dispatch","body":"prose","status":"ready","commit":true,"assign":"ai","done_looks_like":"it works"}
                 }}),
                 json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{
-                    "name":"haven_next","arguments":{"owner":"ai"}
+                    "name":"haven_next","arguments":{}
                 }}),
             ],
         );

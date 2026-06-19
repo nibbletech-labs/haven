@@ -85,7 +85,7 @@ fn collect_push_batch_inner(conn: &Connection) -> Result<PushBatch, SyncError> {
         "SELECT n.public_id, p.public_id, n.ref, n.title, n.body, n.type, n.status,
                 n.owner_kind, n.assignee, n.wait_state, n.committed, n.priority, n.sort_key,
                 n.metadata, n.created_at, n.updated_at, n.archived_at, n.client_id, n.revision,
-                n.done_looks_like, n.why, n.due_at
+                n.done_looks_like, n.why, n.due_at, n.owner_eligible
          FROM nodes n JOIN projects p ON p.id = n.project_id
          WHERE n.sync_state <> 'synced'",
         |r| {
@@ -112,6 +112,7 @@ fn collect_push_batch_inner(conn: &Connection) -> Result<PushBatch, SyncError> {
                 "done_looks_like": r.get::<_, Option<String>>(19)?,
                 "why": r.get::<_, Option<String>>(20)?,
                 "due_at": r.get::<_, Option<String>>(21)?,
+                "owner_eligible": r.get::<_, Option<String>>(22)?,
             }))
         },
     )?;
@@ -558,6 +559,7 @@ fn apply_nodes(conn: &Connection, rows: &[Value]) -> Result<usize, SyncError> {
         let dll = vstr(r, "done_looks_like");
         let why = vstr(r, "why");
         let due = vstr(r, "due_at");
+        let oe = vstr(r, "owner_eligible");
         let typ = vstr_req(r, "type")?;
         let status = vstr_req(r, "status")?;
         let owner = vstr(r, "owner_kind");
@@ -580,12 +582,13 @@ fn apply_nodes(conn: &Connection, rows: &[Value]) -> Result<usize, SyncError> {
                         priority=?12, sort_key=?13, metadata=?14,
                         updated_at=COALESCE(?15, datetime('now')), archived_at=?16,
                         client_id=?17, revision=?18, done_looks_like=?19, why=?20, due_at=?21,
+                        owner_eligible=?22,
                         sync_state='synced', last_synced_at=datetime('now')
                      WHERE public_id=?1",
                     params![
                         pid, project_id, reference, title, body, typ, status, owner, assignee,
                         wait, committed, priority, sort_key, metadata, updated, archived, cid, rev,
-                        dll, why, due
+                        dll, why, due, oe
                     ],
                 )?;
                 n += 1;
@@ -596,14 +599,14 @@ fn apply_nodes(conn: &Connection, rows: &[Value]) -> Result<usize, SyncError> {
                         (public_id, project_id, ref, title, body, type, status, owner_kind,
                          assignee, wait_state, committed, priority, sort_key, metadata,
                          created_at, updated_at, archived_at, client_id, revision, sync_state,
-                         last_synced_at, done_looks_like, why, due_at)
+                         last_synced_at, done_looks_like, why, due_at, owner_eligible)
                      VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,
                              COALESCE(?15, datetime('now')), COALESCE(?16, datetime('now')), ?17,
-                             ?18, ?19, 'synced', datetime('now'), ?20, ?21, ?22)",
+                             ?18, ?19, 'synced', datetime('now'), ?20, ?21, ?22, ?23)",
                     params![
                         pid, project_id, reference, title, body, typ, status, owner, assignee,
                         wait, committed, priority, sort_key, metadata, created, updated, archived,
-                        cid, rev, dll, why, due
+                        cid, rev, dll, why, due, oe
                     ],
                 )?;
                 n += 1;
@@ -815,7 +818,7 @@ fn apply_artifacts(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use haven_core::{NewItem, Store};
+    use haven_core::{ItemUpdate, NewItem, OwnerEligible, OwnerEligibleUpdate, Store};
 
     fn collect_value(values: &[Value], public_id: &str) -> Value {
         values
@@ -1139,6 +1142,68 @@ mod tests {
             Some("2026-07-01")
         );
         assert_eq!(due_of(&conn_b, &undated.public_id), None);
+    }
+
+    /// HV-66: `owner_eligible` survives a snapshot→apply cycle — a set value is
+    /// preserved (INSERT into empty B) and an unset (NULL) one stays NULL. Guards
+    /// the sync upload projection (must emit `owner_eligible`) and both apply
+    /// statements (must bind it without shifting a neighbouring column).
+    #[test]
+    fn pull_reconcile_round_trips_owner_eligible() {
+        let dir_a = tempfile::tempdir().unwrap();
+        let db_a = dir_a.path().join("haven.db");
+        let a = Store::open(&db_a, dir_a.path()).unwrap();
+        a.add_project("haven", Some("HV"), "Haven", None).unwrap();
+        a.use_project("haven").unwrap();
+
+        // `owner_eligible` is only settable via update (not add) — create then set.
+        let eligible = a
+            .add_item(
+                None,
+                NewItem {
+                    title: "Eligible".into(),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        a.update_item(
+            None,
+            &eligible.reference,
+            ItemUpdate {
+                owner_eligible: Some(OwnerEligibleUpdate::Set(OwnerEligible::Any)),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let untriaged = a
+            .add_item(
+                None,
+                NewItem {
+                    title: "Untriaged".into(),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+        let conn_a = haven_core::db::open(&db_a).unwrap();
+        let snap = snapshot_from_batch(collect_push_batch(&conn_a).unwrap());
+
+        let dir_b = tempfile::tempdir().unwrap();
+        let db_b = dir_b.path().join("haven.db");
+        let _b = Store::open(&db_b, dir_b.path()).unwrap();
+        let conn_b = haven_core::db::open(&db_b).unwrap();
+        apply_snapshot(&conn_b, &snap, dir_b.path()).unwrap();
+
+        let oe_of = |conn: &Connection, pid: &str| -> Option<String> {
+            conn.query_row(
+                "SELECT owner_eligible FROM nodes WHERE public_id = ?1",
+                [pid],
+                |r| r.get::<_, Option<String>>(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(oe_of(&conn_b, &eligible.public_id).as_deref(), Some("any"));
+        assert_eq!(oe_of(&conn_b, &untriaged.public_id), None);
     }
 
     #[test]

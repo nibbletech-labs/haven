@@ -187,6 +187,20 @@ fn anchors_are_living_docs_not_dispatch_work() {
             },
         )
         .unwrap();
+    // HV-66: `next --owner` now filters the eligibility axis, not assignment.
+    // Mark BOTH ai-eligible — the anchor must STILL be excluded (by type), and
+    // the work must surface: proves the exclusion is type-driven, not luck.
+    for r in [&anchor.reference, &work.reference] {
+        s.update_item(
+            None,
+            r,
+            ItemUpdate {
+                owner_eligible: Some(OwnerEligibleUpdate::Set(OwnerEligible::Ai)),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    }
 
     let next = s.next(None, Some(OwnerKind::Ai), None).unwrap();
     let refs: Vec<&str> = next.iter().map(|i| i.reference.as_str()).collect();
@@ -832,38 +846,178 @@ fn next_respects_ready_committed_wait_and_dependencies() {
     assert_eq!(refs[0], go.reference);
 }
 
+/// Create a ready+committed leaf and set its `owner_eligible` (HV-66). Returns
+/// the item ref. `eligible = None` leaves it untriaged (NULL).
+fn ready_eligible(s: &Store, title: &str, eligible: Option<OwnerEligible>) -> String {
+    let item = s
+        .add_item(
+            None,
+            NewItem {
+                title: title.into(),
+                status: Some(Status::Ready),
+                done_looks_like: Some(format!("{title} done")),
+                commit: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    if let Some(e) = eligible {
+        s.update_item(
+            None,
+            &item.reference,
+            ItemUpdate {
+                owner_eligible: Some(OwnerEligibleUpdate::Set(e)),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    }
+    item.reference
+}
+
+/// HV-66 headline: in ONE project with ready+committed leaves of every
+/// eligibility, `next --owner ai` surfaces {ai, any} only; `--owner human`
+/// surfaces {human, any} only; a NULL/untriaged leaf is in NEITHER owner query;
+/// `any` is in BOTH; and bare `next` (no owner) ignores eligibility entirely.
 #[test]
-fn next_owner_filter() {
+fn next_owner_eligibility_dispatch_matrix() {
     let s = store();
-    let ai = s
-        .add_item(
+    let ai = ready_eligible(&s, "ai work", Some(OwnerEligible::Ai));
+    let human = ready_eligible(&s, "human work", Some(OwnerEligible::Human));
+    let any = ready_eligible(&s, "any work", Some(OwnerEligible::Any));
+    let untriaged = ready_eligible(&s, "untriaged work", None);
+
+    let refs = |items: &[Item]| -> std::collections::HashSet<String> {
+        items.iter().map(|i| i.reference.clone()).collect()
+    };
+
+    // --owner ai → {ai, any}; never human, never untriaged.
+    let ai_q = refs(&s.next(None, Some(OwnerKind::Ai), None).unwrap());
+    assert_eq!(
+        ai_q,
+        std::collections::HashSet::from([ai.clone(), any.clone()]),
+        "next --owner ai must be exactly the ai + any leaves"
+    );
+    assert!(!ai_q.contains(&human));
+    assert!(!ai_q.contains(&untriaged));
+
+    // --owner human → {human, any}; never ai, never untriaged.
+    let human_q = refs(&s.next(None, Some(OwnerKind::Human), None).unwrap());
+    assert_eq!(
+        human_q,
+        std::collections::HashSet::from([human.clone(), any.clone()]),
+        "next --owner human must be exactly the human + any leaves"
+    );
+    assert!(!human_q.contains(&ai));
+    assert!(!human_q.contains(&untriaged));
+
+    // `any` appears for BOTH owners.
+    assert!(ai_q.contains(&any) && human_q.contains(&any));
+
+    // Bare next (no --owner) ignores eligibility — all four surface.
+    let bare = refs(&s.next(None, None, None).unwrap());
+    assert_eq!(
+        bare,
+        std::collections::HashSet::from([ai, human, any, untriaged]),
+        "bare next must ignore eligibility and return all four ready leaves"
+    );
+}
+
+/// HV-66 lockstep: `next --explain`'s dispatchable count must equal the real
+/// `next` length for each owner — the eligibility predicate is applied at the
+/// one shared seam in BOTH `next()` and `count_dispatchable`.
+#[test]
+fn next_explain_dispatchable_matches_next_per_owner() {
+    let s = store();
+    ready_eligible(&s, "ai work", Some(OwnerEligible::Ai));
+    ready_eligible(&s, "human work", Some(OwnerEligible::Human));
+    ready_eligible(&s, "any work", Some(OwnerEligible::Any));
+    ready_eligible(&s, "untriaged work", None);
+
+    for owner in [None, Some(OwnerKind::Ai), Some(OwnerKind::Human)] {
+        let n = s.next(None, owner, None).unwrap().len() as i64;
+        let explain = s.next_explain(None, owner).unwrap();
+        assert_eq!(
+            explain["dispatchable"].as_i64().unwrap(),
+            n,
+            "next_explain.dispatchable must equal next().len() for owner {owner:?}"
+        );
+    }
+}
+
+/// HV-66 three-valued logic: a NULL-eligibility ready leaf is absent from
+/// `next --owner ai` directly (the safety property `owner_eligible IN (?, 'any')`
+/// against NULL yields NULL ⇒ excluded), even though it surfaces in bare `next`.
+#[test]
+fn next_owner_excludes_untriaged_null_eligibility() {
+    let s = store();
+    let untriaged = ready_eligible(&s, "untriaged", None);
+
+    let ai_q = s.next(None, Some(OwnerKind::Ai), None).unwrap();
+    assert!(
+        !ai_q.iter().any(|i| i.reference == untriaged),
+        "a NULL-eligibility leaf must never appear in a --owner ai query"
+    );
+    let human_q = s.next(None, Some(OwnerKind::Human), None).unwrap();
+    assert!(
+        !human_q.iter().any(|i| i.reference == untriaged),
+        "a NULL-eligibility leaf must never appear in a --owner human query"
+    );
+    // But it IS dispatchable to a bare (owner-agnostic) next.
+    let bare = s.next(None, None, None).unwrap();
+    assert!(bare.iter().any(|i| i.reference == untriaged));
+}
+
+/// HV-66 write/clear round-trip: `update --owner-eligible any` sets the axis and
+/// bumps the revision; `none` clears it back to NULL (untriaged). `assign` does
+/// NOT touch eligibility (orthogonal axes).
+#[test]
+fn owner_eligible_write_and_clear_round_trip() {
+    let s = store();
+    let item = add(&s, "task");
+    assert!(item.owner_eligible.is_none(), "born untriaged");
+    let rev0 = item.revision;
+
+    // Set to `any`.
+    let set = s
+        .update_item(
             None,
-            NewItem {
-                title: "ai work".into(),
-                status: Some(Status::Ready),
-                done_looks_like: Some("ai work done".into()),
-                commit: true,
-                assign: Some(OwnerKind::Ai),
+            &item.reference,
+            ItemUpdate {
+                owner_eligible: Some(OwnerEligibleUpdate::Set(OwnerEligible::Any)),
                 ..Default::default()
             },
         )
         .unwrap();
-    let _human = s
-        .add_item(
+    assert_eq!(set.owner_eligible, Some(OwnerEligible::Any));
+    assert!(set.revision > rev0, "a write bumps the revision (LWW)");
+
+    // Assigning to ai must NOT change eligibility (orthogonal axes).
+    let assigned = s
+        .assign_item(None, &item.reference, OwnerKind::Ai, None)
+        .unwrap();
+    assert_eq!(
+        assigned.owner_eligible,
+        Some(OwnerEligible::Any),
+        "assign is the assignment axis; it must not touch owner_eligible"
+    );
+
+    // Clear back to NULL.
+    let cleared = s
+        .update_item(
             None,
-            NewItem {
-                title: "human work".into(),
-                status: Some(Status::Ready),
-                done_looks_like: Some("human work done".into()),
-                commit: true,
-                assign: Some(OwnerKind::Human),
+            &item.reference,
+            ItemUpdate {
+                owner_eligible: Some(OwnerEligibleUpdate::Clear),
                 ..Default::default()
             },
         )
         .unwrap();
-    let next = s.next(None, Some(OwnerKind::Ai), None).unwrap();
-    assert_eq!(next.len(), 1);
-    assert_eq!(next[0].reference, ai.reference);
+    assert!(
+        cleared.owner_eligible.is_none(),
+        "`none` clears owner_eligible back to untriaged (NULL)"
+    );
+    assert!(cleared.revision > set.revision);
 }
 
 #[test]

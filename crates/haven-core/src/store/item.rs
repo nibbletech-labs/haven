@@ -97,6 +97,16 @@ pub enum WaitUpdate {
     Clear,
 }
 
+/// How to change a node's `owner_eligible` (HV-66): set the eligibility, or
+/// clear it (`--owner-eligible none`) back to NULL/untriaged. Mirrors
+/// [`WaitUpdate`] so "clear" is explicit in the type and distinct from any
+/// concrete eligibility value.
+#[derive(Debug, Clone, Copy)]
+pub enum OwnerEligibleUpdate {
+    Set(OwnerEligible),
+    Clear,
+}
+
 /// How to change a node's `due_at`: set it to a date, or clear it
 /// (`--due-at none`). Mirrors [`WaitUpdate`] so "clear" is explicit in the type
 /// and never collides with a literal date string. The `Set` value is validated
@@ -174,6 +184,10 @@ pub struct ItemUpdate {
     /// `None` leaves `due_at` unchanged; `Some(DueUpdate::Set)` sets it (after
     /// boundary validation); `Some(DueUpdate::Clear)` sets it NULL.
     pub due: Option<DueUpdate>,
+    /// `None` leaves `owner_eligible` unchanged; `Some(OwnerEligibleUpdate::Set)`
+    /// sets the eligibility; `Some(OwnerEligibleUpdate::Clear)` sets it NULL
+    /// (untriaged). The only write path for the eligibility axis (HV-66).
+    pub owner_eligible: Option<OwnerEligibleUpdate>,
 }
 
 /// Filters for `item list`. `committed`/`icebox` are mutually-exclusive views.
@@ -555,6 +569,11 @@ impl Store {
                 set!("due_at", d);
             }
             Some(DueUpdate::Clear) => sets.push("due_at = NULL".into()),
+            None => {}
+        }
+        match upd.owner_eligible {
+            Some(OwnerEligibleUpdate::Set(e)) => set!("owner_eligible", e.as_str()),
+            Some(OwnerEligibleUpdate::Clear) => sets.push("owner_eligible = NULL".into()),
             None => {}
         }
         if sets.is_empty() {
