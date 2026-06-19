@@ -103,6 +103,7 @@ impl Store {
                 None, // owner
                 false,
                 None,
+                None, // due_at
                 &serde_json::json!({}),
             )?;
             new_ids.push(id);
@@ -172,6 +173,7 @@ impl Store {
             None, // owner
             false,
             None,
+            None, // due_at
             &serde_json::json!({}),
         )?;
         let edges: Vec<(i64, i64)> = source_ids.iter().map(|&from| (from, new_id)).collect();

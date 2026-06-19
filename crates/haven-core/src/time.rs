@@ -61,6 +61,47 @@ pub(crate) fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
     era * 146_097 + doe - 719_468
 }
 
+/// Validate a `due_at` calendar date: it must be exactly `YYYY-MM-DD`
+/// (four-two-two ASCII-digit fields, single `-` separators, no time, no words)
+/// **and** a real day on the proleptic Gregorian calendar.
+///
+/// The calendar check is a civil round-trip: parse to `(y, m, d)`, map to a day
+/// number with [`days_from_civil`], map back with [`civil_from_days`], and
+/// require equality. `days_from_civil` is pure arithmetic that *normalizes*
+/// out-of-range fields (e.g. `2026-02-30` → `2026-03-02`, `2026-13-01` →
+/// `2027-01-01`), so an impossible-but-shaped date fails the equality and is
+/// rejected — no `chrono`, no per-month/leap-year table. Returns the parsed
+/// `(y, m, d)` on success.
+pub(crate) fn parse_due_date(s: &str) -> Option<(i64, u32, u32)> {
+    // Exact shape `dddd-dd-dd`: three numeric fields of widths 4, 2, 2. This
+    // rejects `2026-7-1` (wrong widths), `2026/07/01` (wrong separator),
+    // `07-01-2026` (wrong widths), `2026-07-01T00:00` and `tomorrow` (non-digit
+    // characters), and the empty string.
+    let bytes = s.as_bytes();
+    if bytes.len() != 10 || bytes[4] != b'-' || bytes[7] != b'-' {
+        return None;
+    }
+    let digits =
+        |range: std::ops::Range<usize>| -> bool { s[range].bytes().all(|b| b.is_ascii_digit()) };
+    if !digits(0..4) || !digits(5..7) || !digits(8..10) {
+        return None;
+    }
+    let y: i64 = s[0..4].parse().ok()?;
+    let m: u32 = s[5..7].parse().ok()?;
+    let d: u32 = s[8..10].parse().ok()?;
+    // Guard against month/day = 00 before the arithmetic (a 0 field can't be a
+    // valid calendar date and isn't reliably caught by the round-trip on its
+    // own), then prove the date is real by the civil round-trip.
+    if m == 0 || d == 0 {
+        return None;
+    }
+    if civil_from_days(days_from_civil(y, m, d)) == (y, m, d) {
+        Some((y, m, d))
+    } else {
+        None
+    }
+}
+
 /// ISO-8601 week date for a `(year, month, day)`: returns
 /// `(iso_week_year, week_number)` with `week_number` in `1..=53`. The ISO week
 /// year can differ from the calendar year near January/December boundaries.
@@ -88,6 +129,31 @@ mod tests {
         // round-trips both ways
         for &(y, m, d) in &[(1970, 1, 1), (2000, 2, 29), (2026, 6, 19), (2027, 1, 1)] {
             assert_eq!(civil_from_days(days_from_civil(y, m, d)), (y, m, d));
+        }
+    }
+
+    #[test]
+    fn parse_due_date_accept_and_reject_table() {
+        // Accept: well-formed, civil-round-trippable calendar dates — including
+        // both leap-day cases (2024 and 2000 are leap years).
+        for &ok in &["2026-07-01", "2024-02-29", "2000-02-29", "1970-01-01"] {
+            assert!(parse_due_date(ok).is_some(), "should accept {ok:?}");
+        }
+        // Reject: wrong shape (widths/separators/extra chars/words/empty) AND
+        // shaped-but-impossible dates that fail the civil round-trip.
+        for &bad in &[
+            "2026-7-1",         // unpadded fields
+            "2026/07/01",       // wrong separator
+            "07-01-2026",       // wrong field widths / order
+            "2026-13-01",       // month 13
+            "2026-00-10",       // month 00
+            "2026-02-30",       // Feb 30 — impossible
+            "2026-02-29",       // 2026 is not a leap year
+            "2026-07-01T00:00", // trailing time
+            "tomorrow",         // a word
+            "",                 // empty
+        ] {
+            assert!(parse_due_date(bad).is_none(), "should reject {bad:?}");
         }
     }
 

@@ -194,6 +194,7 @@ impl Store {
                         parsed.assign,
                         item.commit,
                         item.priority,
+                        None, // due_at — not an import field
                         &serde_json::json!({}),
                     )?;
                     (id, false)

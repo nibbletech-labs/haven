@@ -30,6 +30,9 @@ pub struct NewItem {
     pub body: Option<String>,
     pub done_looks_like: Option<String>,
     pub why: Option<String>,
+    /// Optional deadline `YYYY-MM-DD`; validated at the Store boundary before any
+    /// write (see [`crate::time::parse_due_date`]).
+    pub due_at: Option<String>,
     pub status: Option<Status>,
     pub priority: Option<i64>,
     pub commit: bool,
@@ -91,6 +94,16 @@ pub(crate) fn fts_title_query(title: &str) -> Option<String> {
 #[derive(Debug, Clone, Copy)]
 pub enum WaitUpdate {
     Set(WaitState),
+    Clear,
+}
+
+/// How to change a node's `due_at`: set it to a date, or clear it
+/// (`--due-at none`). Mirrors [`WaitUpdate`] so "clear" is explicit in the type
+/// and never collides with a literal date string. The `Set` value is validated
+/// at the Store boundary before any write.
+#[derive(Debug, Clone)]
+pub enum DueUpdate {
+    Set(String),
     Clear,
 }
 
@@ -158,6 +171,9 @@ pub struct ItemUpdate {
     pub priority: Option<i64>,
     pub node_type: Option<NodeType>,
     pub wait: Option<WaitUpdate>,
+    /// `None` leaves `due_at` unchanged; `Some(DueUpdate::Set)` sets it (after
+    /// boundary validation); `Some(DueUpdate::Clear)` sets it NULL.
+    pub due: Option<DueUpdate>,
 }
 
 /// Filters for `item list`. `committed`/`icebox` are mutually-exclusive views.
@@ -191,6 +207,20 @@ fn acceptance_blank(done: Option<&str>) -> bool {
     }
 }
 
+/// The Store-boundary gate for `due_at`: accept only a well-formed,
+/// civil-round-trippable `YYYY-MM-DD`, else `HavenError::Invalid`. Reuses the
+/// hand-rolled civil math in [`crate::time`] — no `chrono`, no per-write CHECK.
+/// The DB column is plain `TEXT`, so this is the only place garbage is stopped.
+fn validate_due_at(value: &str) -> Result<()> {
+    if crate::time::parse_due_date(value).is_some() {
+        Ok(())
+    } else {
+        Err(HavenError::Invalid(format!(
+            "invalid due_at {value:?} — expected a calendar date YYYY-MM-DD"
+        )))
+    }
+}
+
 impl Store {
     /// Create a node. Mints a `ref` from the project counter, applies the
     /// requested axes, and wires any parent/dependency/group edges given.
@@ -208,6 +238,10 @@ impl Store {
                 "cannot create an item as ready without acceptance — set done_looks_like first"
                     .into(),
             ));
+        }
+        // Reject a malformed/impossible deadline before any write touches the DB.
+        if let Some(due) = new.due_at.as_deref() {
+            validate_due_at(due)?;
         }
         let (project_id, _key) = self.require_project(project)?;
         let tx = self.conn.unchecked_transaction()?;
@@ -231,6 +265,7 @@ impl Store {
             new.assign,
             new.commit,
             new.priority,
+            new.due_at.as_deref(),
             &metadata,
         )?;
 
@@ -511,6 +546,15 @@ impl Store {
         match upd.wait {
             Some(WaitUpdate::Set(w)) => set!("wait_state", w.as_str()),
             Some(WaitUpdate::Clear) => sets.push("wait_state = NULL".into()),
+            None => {}
+        }
+        match upd.due {
+            Some(DueUpdate::Set(d)) => {
+                // Validate at the boundary before binding — no garbage in the column.
+                validate_due_at(&d)?;
+                set!("due_at", d);
+            }
+            Some(DueUpdate::Clear) => sets.push("due_at = NULL".into()),
             None => {}
         }
         if sets.is_empty() {
@@ -1001,6 +1045,7 @@ impl Store {
         owner: Option<OwnerKind>,
         committed: bool,
         priority: Option<i64>,
+        due_at: Option<&str>,
         metadata: &serde_json::Value,
     ) -> Result<(i64, String)> {
         conn.execute(
@@ -1019,8 +1064,8 @@ impl Store {
         conn.execute(
             "INSERT INTO nodes
                (public_id, project_id, ref, title, body, done_looks_like, why,
-                type, status, owner_kind, committed, priority, metadata, client_id)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+                type, status, owner_kind, committed, priority, metadata, due_at, client_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
             params![
                 new_uuid(),
                 project_id,
@@ -1035,6 +1080,7 @@ impl Store {
                 committed as i64,
                 priority,
                 metadata.to_string(),
+                due_at,
                 new_uuid(),
             ],
         )?;

@@ -28,8 +28,8 @@ pub use edge::EdgeKind;
 pub use evolve::EvolveResult;
 pub use import::{ImportItem, ImportOutcome};
 pub use item::{
-    AddOutcome, CompleteInput, CompleteResult, HandoffInput, HandoffResult, Include, ItemFilter,
-    ItemUpdate, NewItem, SimilarItem, WaitUpdate,
+    AddOutcome, CompleteInput, CompleteResult, DueUpdate, HandoffInput, HandoffResult, Include,
+    ItemFilter, ItemUpdate, NewItem, SimilarItem, WaitUpdate,
 };
 pub use query::{
     DocAnchor, GraphEdge, GroomingPressure, LineageDirection, LineageGraph, LineageLink,
@@ -42,7 +42,7 @@ pub(crate) const ITEM_SELECT: &str = "\
     n.id, n.public_id, n.ref, p.key, n.title, n.body, n.type, n.status, \
     n.owner_kind, n.assignee, n.wait_state, n.committed, n.priority, n.sort_key, \
     n.metadata, n.created_at, n.updated_at, n.archived_at, n.revision, n.sync_state, \
-    n.done_looks_like, n.why";
+    n.done_looks_like, n.why, n.due_at";
 
 pub(crate) const ITEM_FROM: &str = "nodes n JOIN projects p ON p.id = n.project_id";
 
@@ -61,6 +61,7 @@ pub(crate) fn item_from_row(row: &Row<'_>) -> rusqlite::Result<Item> {
         body: row.get(5)?,
         done_looks_like: row.get(20)?,
         why: row.get(21)?,
+        due_at: row.get(22)?,
         node_type: row.get(6)?,
         status: row.get(7)?,
         owner_kind: row.get(8)?,

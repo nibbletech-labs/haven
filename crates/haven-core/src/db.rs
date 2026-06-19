@@ -16,11 +16,12 @@ use crate::error::{HavenError, Result};
 const MIGRATION_001: &str = include_str!("../../../migrations/001_init.sql");
 const MIGRATION_002: &str = include_str!("../../../migrations/002_acceptance.sql");
 const MIGRATION_003: &str = include_str!("../../../migrations/003_anchor_type.sql");
+const MIGRATION_004: &str = include_str!("../../../migrations/004_due_at.sql");
 
 /// The ordered migration SQL, embedded at compile time. Adding a migration here
 /// is the only edit needed: the supported schema version is this list's length,
 /// so it can never drift from `migrations()` (no hand-bumped constant to forget).
-const MIGRATION_SQL: &[&str] = &[MIGRATION_001, MIGRATION_002, MIGRATION_003];
+const MIGRATION_SQL: &[&str] = &[MIGRATION_001, MIGRATION_002, MIGRATION_003, MIGRATION_004];
 
 /// Highest `user_version` this binary can open, derived from `MIGRATION_SQL`.
 pub fn latest_schema_migration() -> i64 {
@@ -108,7 +109,7 @@ mod tests {
         // adding a migration forces a one-line edit here, a moment to confirm
         // intent (and to bump the release/version if needed).
         assert_eq!(latest_schema_migration(), MIGRATION_SQL.len() as i64);
-        assert_eq!(latest_schema_migration(), 3);
+        assert_eq!(latest_schema_migration(), 4);
     }
 
     #[test]

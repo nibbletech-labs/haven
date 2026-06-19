@@ -10,10 +10,10 @@
 use std::io::{self, BufRead, Write};
 
 use haven_core::{
-    Artifact, ArtifactKind, ArtifactRole, ArtifactSelector, CompleteInput, ContextPack, EdgeKind,
-    Edges, HandoffInput, HavenError, Include, Item, ItemFilter, ItemUpdate, LineageDirection,
-    LineageEvent, NewArtifact, NewItem, NodeType, OwnerKind, Result, RollupState, Status, Store,
-    WaitState, WaitUpdate,
+    Artifact, ArtifactKind, ArtifactRole, ArtifactSelector, CompleteInput, ContextPack, DueUpdate,
+    EdgeKind, Edges, HandoffInput, HavenError, Include, Item, ItemFilter, ItemUpdate,
+    LineageDirection, LineageEvent, NewArtifact, NewItem, NodeType, OwnerKind, Result, RollupState,
+    Status, Store, WaitState, WaitUpdate,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -91,6 +91,10 @@ struct McpItem<'a> {
     has_uncommitted_descendants: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     why: Option<&'a str>,
+    // Full-only: the optional `YYYY-MM-DD` deadline. Omitted when null; absent
+    // from the lean compact/graph rows (HV-67).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    due_at: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     assignee: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -134,6 +138,7 @@ impl<'a> McpItem<'a> {
             rollup_state: None,
             has_uncommitted_descendants: None,
             why: None,
+            due_at: None,
             assignee: None,
             created_at: None,
             updated_at: None,
@@ -178,6 +183,7 @@ impl<'a> McpItem<'a> {
             rollup_state: item.rollup_state,
             has_uncommitted_descendants: item.has_uncommitted_descendants,
             why: item.why.as_deref(),
+            due_at: item.due_at.as_deref(),
             assignee: item.assignee.as_deref(),
             created_at: Some(&item.created_at),
             updated_at: Some(&item.updated_at),
@@ -497,6 +503,7 @@ fn call_tool(store: &Store, name: &str, a: &Value) -> Result<Value> {
                 body: opt_str(a, "body").map(String::from),
                 done_looks_like: opt_str(a, "done_looks_like").map(String::from),
                 why: opt_str(a, "why").map(String::from),
+                due_at: opt_str(a, "due_at").map(String::from),
                 status: opt_str(a, "status").map(Status::parse).transpose()?,
                 priority: opt_i64(a, "priority"),
                 commit: opt_bool(a, "commit").unwrap_or(false),
@@ -521,6 +528,11 @@ fn call_tool(store: &Store, name: &str, a: &Value) -> Result<Value> {
                 Some("none") => Some(WaitUpdate::Clear),
                 Some(w) => Some(WaitUpdate::Set(WaitState::parse(w)?)),
             };
+            let due = match opt_str(a, "due_at") {
+                None => None,
+                Some("none") => Some(DueUpdate::Clear),
+                Some(d) => Some(DueUpdate::Set(d.to_string())),
+            };
             let upd = ItemUpdate {
                 title: opt_str(a, "title").map(String::from),
                 body: opt_str(a, "body").map(String::from),
@@ -530,6 +542,7 @@ fn call_tool(store: &Store, name: &str, a: &Value) -> Result<Value> {
                 priority: if commit == Some(true) { None } else { priority },
                 node_type: opt_str(a, "type").map(NodeType::parse).transpose()?,
                 wait,
+                due,
             };
             let has_update = upd.title.is_some()
                 || upd.body.is_some()
@@ -538,7 +551,8 @@ fn call_tool(store: &Store, name: &str, a: &Value) -> Result<Value> {
                 || upd.status.is_some()
                 || upd.priority.is_some()
                 || upd.node_type.is_some()
-                || upd.wait.is_some();
+                || upd.wait.is_some()
+                || upd.due.is_some();
             if has_update {
                 store.update_item(project, reference, upd)?;
             }
@@ -883,10 +897,10 @@ fn tools_list() -> Value {
           "inputSchema": obj(json!({"project":{"type":"string"},"owner":{"type":"string"}}), json!([])) },
         { "name": "haven_rank", "description": "Reorder an item within its priority band: place it immediately before or after another item (exactly one of `before`/`after`). Fine ordering for 'do X before Y' — use `haven_update_item {priority}` for coarse band moves.",
           "inputSchema": obj(json!({"ref":{"type":"string"},"project":{"type":"string"},"before":{"type":"string"},"after":{"type":"string"}}), json!(["ref"])) },
-        { "name": "haven_add_item", "description": "Create a work-graph item (node). `done_looks_like` is the acceptance statement output is verified against; `why` is a one-line provenance trace. Pass `if_absent: true` to return an existing live item with the same normalized title (marked `existing: true`) instead of creating a duplicate; responses may carry `similar` — up to 3 live items with overlapping titles (advisory).",
-          "inputSchema": obj(json!({"title":{"type":"string"},"project":{"type":"string"},"type":{"type":"string"},"body":{"type":"string"},"done_looks_like":{"type":"string"},"why":{"type":"string"},"status":{"type":"string"},"priority":{"type":"integer"},"commit":{"type":"boolean"},"assign":{"type":"string"},"parent":{"type":"string"},"depends_on":{"type":"string"},"group":{"type":"string"},"if_absent":{"type":"boolean"}}), json!(["title"])) },
-        { "name": "haven_update_item", "description": "Update maturity/commitment/ownership of an item. Set `done_looks_like` (acceptance) when it becomes ready so dispatch can verify against it. Returns the updated item in full (same shape as haven_get_item).",
-          "inputSchema": obj(json!({"ref":{"type":"string"},"title":{"type":"string"},"body":{"type":"string"},"done_looks_like":{"type":"string"},"why":{"type":"string"},"status":{"type":"string"},"priority":{"type":"integer"},"type":{"type":"string"},"wait":{"type":"string"},"commit":{"type":"boolean"},"assign":{"type":"string"},"actor":{"type":"string"},"project":{"type":"string"}}), json!(["ref"])) },
+        { "name": "haven_add_item", "description": "Create a work-graph item (node). `done_looks_like` is the acceptance statement output is verified against; `why` is a one-line provenance trace. `due_at` is an optional deadline as a calendar date YYYY-MM-DD (no time/timezone), validated on write. Pass `if_absent: true` to return an existing live item with the same normalized title (marked `existing: true`) instead of creating a duplicate; responses may carry `similar` — up to 3 live items with overlapping titles (advisory).",
+          "inputSchema": obj(json!({"title":{"type":"string"},"project":{"type":"string"},"type":{"type":"string"},"body":{"type":"string"},"done_looks_like":{"type":"string"},"why":{"type":"string"},"due_at":{"type":"string"},"status":{"type":"string"},"priority":{"type":"integer"},"commit":{"type":"boolean"},"assign":{"type":"string"},"parent":{"type":"string"},"depends_on":{"type":"string"},"group":{"type":"string"},"if_absent":{"type":"boolean"}}), json!(["title"])) },
+        { "name": "haven_update_item", "description": "Update maturity/commitment/ownership of an item. Set `done_looks_like` (acceptance) when it becomes ready so dispatch can verify against it. `due_at` sets the YYYY-MM-DD deadline (validated on write); pass `\"none\"` to clear it. Returns the updated item in full (same shape as haven_get_item).",
+          "inputSchema": obj(json!({"ref":{"type":"string"},"title":{"type":"string"},"body":{"type":"string"},"done_looks_like":{"type":"string"},"why":{"type":"string"},"due_at":{"type":"string"},"status":{"type":"string"},"priority":{"type":"integer"},"type":{"type":"string"},"wait":{"type":"string"},"commit":{"type":"boolean"},"assign":{"type":"string"},"actor":{"type":"string"},"project":{"type":"string"}}), json!(["ref"])) },
         { "name": "haven_add_edge", "description": "Add/remove a decomposition|dependency|grouping edge.",
           "inputSchema": obj(json!({"kind":{"type":"string"},"from":{"type":"string"},"to":{"type":"string"},"remove":{"type":"boolean"},"project":{"type":"string"}}), json!(["kind","from","to"])) },
         { "name": "haven_evolve", "description": "Split/merge/supersede items (lineage).",
@@ -1052,6 +1066,66 @@ mod tests {
         let next = tool_payload(&out[1]);
         assert_eq!(next.as_array().unwrap().len(), 1);
         assert_eq!(next[0]["ref"], "HV-1");
+    }
+
+    /// HV-67: `due_at` over the MCP surface — set on add (full carries it),
+    /// absent from the lean `next` compact row, cleared via `"none"`, and a
+    /// malformed value rejected as an error.
+    #[test]
+    fn due_at_via_tools_full_carries_lean_omits_and_clear() {
+        let s = store();
+        let out = session(
+            &s,
+            &[
+                // 1: add with a deadline → full response carries due_at.
+                json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{
+                    "name":"haven_add_item",
+                    "arguments":{"title":"Dated","status":"ready","commit":true,"assign":"ai","done_looks_like":"done","due_at":"2026-07-01"}
+                }}),
+                // 2: next → lean/compact row must NOT carry due_at.
+                json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{
+                    "name":"haven_next","arguments":{"owner":"ai"}
+                }}),
+                // 3: get_item full → carries due_at.
+                json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{
+                    "name":"haven_get_item","arguments":{"ref":"HV-1"}
+                }}),
+                // 4: clear via the `none` sentinel.
+                json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{
+                    "name":"haven_update_item","arguments":{"ref":"HV-1","due_at":"none"}
+                }}),
+                // 5: malformed due_at on add → error.
+                json!({"jsonrpc":"2.0","id":5,"method":"tools/call","params":{
+                    "name":"haven_add_item","arguments":{"title":"Bad","due_at":"2026-13-01"}
+                }}),
+            ],
+        );
+
+        // 1: add response (full shape) carries due_at.
+        assert_eq!(out[0]["result"]["isError"], false);
+        assert_eq!(tool_payload(&out[0])["due_at"], "2026-07-01");
+
+        // 2: next's compact row omits due_at entirely.
+        let next = tool_payload(&out[1]);
+        assert_eq!(next[0]["ref"], "HV-1");
+        assert!(
+            next[0].get("due_at").is_none(),
+            "lean next row must omit due_at, got: {}",
+            next[0]
+        );
+
+        // 3: full get carries it.
+        assert_eq!(tool_payload(&out[2])["due_at"], "2026-07-01");
+
+        // 4: clearing drops the key (skip_serializing_if on null).
+        assert_eq!(out[3]["result"]["isError"], false);
+        assert!(
+            tool_payload(&out[3]).get("due_at").is_none(),
+            "cleared due_at must be absent from the full shape"
+        );
+
+        // 5: a calendar-impossible date is rejected.
+        assert_eq!(out[4]["result"]["isError"], true);
     }
 
     #[test]

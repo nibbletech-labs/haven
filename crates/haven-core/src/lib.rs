@@ -20,8 +20,8 @@ pub use error::{HavenError, Result};
 pub use model::*;
 pub use store::{
     AddOutcome, ArtifactContent, BackupEntry, BackupReport, CompleteInput, CompleteResult,
-    EdgeKind, EvolveResult, GraphEdge, HandoffInput, HandoffResult, ImportItem, ImportOutcome,
-    Include, Integrity, ItemFilter, ItemUpdate, LineageDirection, LineageGraph, LineageLink,
-    NewArtifact, NewItem, ProjectArchive, ProjectGraph, RestoreReport, SimilarItem, Store,
-    WaitUpdate,
+    DueUpdate, EdgeKind, EvolveResult, GraphEdge, HandoffInput, HandoffResult, ImportItem,
+    ImportOutcome, Include, Integrity, ItemFilter, ItemUpdate, LineageDirection, LineageGraph,
+    LineageLink, NewArtifact, NewItem, ProjectArchive, ProjectGraph, RestoreReport, SimilarItem,
+    Store, WaitUpdate,
 };

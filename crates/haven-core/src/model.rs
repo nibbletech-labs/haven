@@ -320,6 +320,12 @@ pub struct Item {
     /// One-line provenance / vision trace — why this item exists.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub why: Option<String>,
+    /// Optional deadline as a calendar date `YYYY-MM-DD` (no time, no timezone),
+    /// validated at the Store boundary. A stored attribute only — it does NOT
+    /// influence `next()`'s ordering (the static-vs-computed ranking fork is
+    /// deferred; see HV-67's spec). Surfaced on full reads only, omitted when null.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub due_at: Option<String>,
     #[serde(rename = "type")]
     pub node_type: NodeType,
     pub status: Status,

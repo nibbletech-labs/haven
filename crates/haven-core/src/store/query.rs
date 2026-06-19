@@ -663,3 +663,22 @@ fn event_header(r: &Row<'_>) -> rusqlite::Result<LineageEvent> {
         to: Vec::new(),
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::ORDER;
+
+    /// HV-67 freeze guard: `due_at` deliberately does NOT enter the dispatch
+    /// ordering (the static-vs-computed ranking fork is deferred). This pins the
+    /// `ORDER` const byte-for-byte so any edit — adding `due_at`, a derived
+    /// urgency term, anything — fails the suite and forces a conscious decision.
+    /// `next()` and `next_explain` both reference this single const, so freezing
+    /// it freezes both in lockstep.
+    #[test]
+    fn order_const_is_byte_frozen() {
+        assert_eq!(
+            ORDER,
+            " ORDER BY n.priority IS NULL, n.priority, n.sort_key IS NULL, n.sort_key, n.created_at, n.id"
+        );
+    }
+}

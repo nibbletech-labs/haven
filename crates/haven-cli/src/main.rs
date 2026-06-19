@@ -9,9 +9,9 @@ use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use haven_core::{
-    ArtifactKind, ArtifactRole, ArtifactSelector, CompleteInput, HandoffInput, HavenError, Include,
-    IntegrityKind, ItemFilter, ItemUpdate, LineageDirection, NewArtifact, NewItem, NodeType,
-    OwnerKind, Result, Status, Store, WaitState, WaitUpdate,
+    ArtifactKind, ArtifactRole, ArtifactSelector, CompleteInput, DueUpdate, HandoffInput,
+    HavenError, Include, IntegrityKind, ItemFilter, ItemUpdate, LineageDirection, NewArtifact,
+    NewItem, NodeType, OwnerKind, Result, Status, Store, WaitState, WaitUpdate,
 };
 
 use output::Output;
@@ -502,6 +502,9 @@ struct ItemAddArgs {
     /// Add this item to a release/phase/gate group.
     #[arg(long)]
     group: Option<String>,
+    /// Deadline as a calendar date YYYY-MM-DD (no time, no timezone).
+    #[arg(long = "due-at")]
+    due_at: Option<String>,
     /// Return the existing live item (marked `existing: true`) instead of
     /// creating a duplicate, when a normalized-title match exists.
     #[arg(long = "if-absent")]
@@ -577,6 +580,9 @@ struct ItemUpdateArgs {
     /// on_human | on_dependency | on_external | none
     #[arg(long)]
     wait: Option<String>,
+    /// Deadline as a calendar date YYYY-MM-DD; `none` clears it.
+    #[arg(long = "due-at")]
+    due_at: Option<String>,
 }
 
 #[derive(Args)]
@@ -2027,6 +2033,7 @@ fn cmd_item(project: Option<&str>, cmd: &ItemCmd) -> Result<Output> {
                 body: a.body.clone(),
                 done_looks_like: a.done_looks_like.clone(),
                 why: a.why.clone(),
+                due_at: a.due_at.clone(),
                 status: opt_parse(&a.status, Status::parse)?,
                 priority: a.priority,
                 commit: a.commit,
@@ -2082,6 +2089,11 @@ fn cmd_item(project: Option<&str>, cmd: &ItemCmd) -> Result<Output> {
                 Some("none") => Some(WaitUpdate::Clear),
                 Some(w) => Some(WaitUpdate::Set(WaitState::parse(w)?)),
             };
+            let due = match a.due_at.as_deref() {
+                None => None,
+                Some("none") => Some(DueUpdate::Clear),
+                Some(d) => Some(DueUpdate::Set(d.to_string())),
+            };
             let upd = ItemUpdate {
                 title: a.title.clone(),
                 body: a.body.clone(),
@@ -2091,6 +2103,7 @@ fn cmd_item(project: Option<&str>, cmd: &ItemCmd) -> Result<Output> {
                 priority: a.priority,
                 node_type: opt_parse(&a.node_type, NodeType::parse)?,
                 wait,
+                due,
             };
             Ok(Output::Items(s.update_items(
                 project,

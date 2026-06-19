@@ -85,7 +85,7 @@ fn collect_push_batch_inner(conn: &Connection) -> Result<PushBatch, SyncError> {
         "SELECT n.public_id, p.public_id, n.ref, n.title, n.body, n.type, n.status,
                 n.owner_kind, n.assignee, n.wait_state, n.committed, n.priority, n.sort_key,
                 n.metadata, n.created_at, n.updated_at, n.archived_at, n.client_id, n.revision,
-                n.done_looks_like, n.why
+                n.done_looks_like, n.why, n.due_at
          FROM nodes n JOIN projects p ON p.id = n.project_id
          WHERE n.sync_state <> 'synced'",
         |r| {
@@ -111,6 +111,7 @@ fn collect_push_batch_inner(conn: &Connection) -> Result<PushBatch, SyncError> {
                 "revision": r.get::<_, i64>(18)?,
                 "done_looks_like": r.get::<_, Option<String>>(19)?,
                 "why": r.get::<_, Option<String>>(20)?,
+                "due_at": r.get::<_, Option<String>>(21)?,
             }))
         },
     )?;
@@ -556,6 +557,7 @@ fn apply_nodes(conn: &Connection, rows: &[Value]) -> Result<usize, SyncError> {
         let body = vstr(r, "body");
         let dll = vstr(r, "done_looks_like");
         let why = vstr(r, "why");
+        let due = vstr(r, "due_at");
         let typ = vstr_req(r, "type")?;
         let status = vstr_req(r, "status")?;
         let owner = vstr(r, "owner_kind");
@@ -577,13 +579,13 @@ fn apply_nodes(conn: &Connection, rows: &[Value]) -> Result<usize, SyncError> {
                         status=?7, owner_kind=?8, assignee=?9, wait_state=?10, committed=?11,
                         priority=?12, sort_key=?13, metadata=?14,
                         updated_at=COALESCE(?15, datetime('now')), archived_at=?16,
-                        client_id=?17, revision=?18, done_looks_like=?19, why=?20,
+                        client_id=?17, revision=?18, done_looks_like=?19, why=?20, due_at=?21,
                         sync_state='synced', last_synced_at=datetime('now')
                      WHERE public_id=?1",
                     params![
                         pid, project_id, reference, title, body, typ, status, owner, assignee,
                         wait, committed, priority, sort_key, metadata, updated, archived, cid, rev,
-                        dll, why
+                        dll, why, due
                     ],
                 )?;
                 n += 1;
@@ -594,14 +596,14 @@ fn apply_nodes(conn: &Connection, rows: &[Value]) -> Result<usize, SyncError> {
                         (public_id, project_id, ref, title, body, type, status, owner_kind,
                          assignee, wait_state, committed, priority, sort_key, metadata,
                          created_at, updated_at, archived_at, client_id, revision, sync_state,
-                         last_synced_at, done_looks_like, why)
+                         last_synced_at, done_looks_like, why, due_at)
                      VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,
                              COALESCE(?15, datetime('now')), COALESCE(?16, datetime('now')), ?17,
-                             ?18, ?19, 'synced', datetime('now'), ?20, ?21)",
+                             ?18, ?19, 'synced', datetime('now'), ?20, ?21, ?22)",
                     params![
                         pid, project_id, reference, title, body, typ, status, owner, assignee,
                         wait, committed, priority, sort_key, metadata, created, updated, archived,
-                        cid, rev, dll, why
+                        cid, rev, dll, why, due
                     ],
                 )?;
                 n += 1;
@@ -1080,6 +1082,63 @@ mod tests {
             count(&conn_b, "lineage_edges"),
             count(&conn_a, "lineage_edges")
         );
+    }
+
+    /// HV-67: `due_at` survives a snapshot→apply cycle — a set value is
+    /// preserved and an unset (NULL) one stays NULL. Guards every sync seam at
+    /// once: the snapshot SELECT must emit `due_at`, and both apply statements
+    /// (INSERT into empty B, then the UPDATE branch on a higher-revision
+    /// re-apply) must bind it without shifting a neighbouring column.
+    #[test]
+    fn pull_reconcile_round_trips_due_at() {
+        let dir_a = tempfile::tempdir().unwrap();
+        let db_a = dir_a.path().join("haven.db");
+        let a = Store::open(&db_a, dir_a.path()).unwrap();
+        a.add_project("haven", Some("HV"), "Haven", None).unwrap();
+        a.use_project("haven").unwrap();
+
+        let dated = a
+            .add_item(
+                None,
+                NewItem {
+                    title: "Dated".into(),
+                    due_at: Some("2026-07-01".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let undated = a
+            .add_item(
+                None,
+                NewItem {
+                    title: "Undated".into(),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+        let conn_a = haven_core::db::open(&db_a).unwrap();
+        let snap = snapshot_from_batch(collect_push_batch(&conn_a).unwrap());
+
+        let dir_b = tempfile::tempdir().unwrap();
+        let db_b = dir_b.path().join("haven.db");
+        let _b = Store::open(&db_b, dir_b.path()).unwrap();
+        let conn_b = haven_core::db::open(&db_b).unwrap();
+        apply_snapshot(&conn_b, &snap, dir_b.path()).unwrap();
+
+        let due_of = |conn: &Connection, pid: &str| -> Option<String> {
+            conn.query_row(
+                "SELECT due_at FROM nodes WHERE public_id = ?1",
+                [pid],
+                |r| r.get::<_, Option<String>>(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(
+            due_of(&conn_b, &dated.public_id).as_deref(),
+            Some("2026-07-01")
+        );
+        assert_eq!(due_of(&conn_b, &undated.public_id), None);
     }
 
     #[test]

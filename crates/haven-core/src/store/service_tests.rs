@@ -1801,3 +1801,130 @@ fn import_if_absent_dedupes_against_store_and_batch() {
         && e.from == outcomes[1].item.reference
         && e.to == "HV-1"));
 }
+
+// ---- HV-67: due_at ------------------------------------------------------
+
+#[test]
+fn due_at_set_on_add_round_trips() {
+    let s = store();
+    let item = s
+        .add_item(
+            None,
+            NewItem {
+                title: "Ship it".into(),
+                due_at: Some("2026-07-01".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(item.due_at.as_deref(), Some("2026-07-01"));
+    // Re-read confirms it persisted (read path / ITEM_SELECT index 22).
+    let read = s.get_item(None, &item.reference, &[]).unwrap();
+    assert_eq!(read.due_at.as_deref(), Some("2026-07-01"));
+}
+
+#[test]
+fn due_at_set_on_update_round_trips() {
+    let s = store();
+    let item = add(&s, "Plan launch");
+    assert_eq!(item.due_at, None);
+    let updated = s
+        .update_item(
+            None,
+            &item.reference,
+            ItemUpdate {
+                due: Some(DueUpdate::Set("2024-02-29".into())), // a real leap day
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(updated.due_at.as_deref(), Some("2024-02-29"));
+}
+
+#[test]
+fn due_at_clear_via_none_sets_null() {
+    let s = store();
+    let item = s
+        .add_item(
+            None,
+            NewItem {
+                title: "Has a deadline".into(),
+                due_at: Some("2026-12-31".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(item.due_at.as_deref(), Some("2026-12-31"));
+    // Clearing maps to DueUpdate::Clear → due_at = NULL.
+    let cleared = s
+        .update_item(
+            None,
+            &item.reference,
+            ItemUpdate {
+                due: Some(DueUpdate::Clear),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(cleared.due_at, None);
+}
+
+#[test]
+fn due_at_malformed_rejected_on_add_and_update() {
+    let s = store();
+    // add_item rejects a calendar-impossible-but-shaped date before any write.
+    let err = s
+        .add_item(
+            None,
+            NewItem {
+                title: "Bad add".into(),
+                due_at: Some("2026-13-01".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+    assert!(err.to_string().contains("invalid due_at"));
+
+    // update_item rejects a malformed shape too.
+    let item = add(&s, "Good item");
+    let err = s
+        .update_item(
+            None,
+            &item.reference,
+            ItemUpdate {
+                due: Some(DueUpdate::Set("2026/07/01".into())),
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+    assert!(err.to_string().contains("invalid due_at"));
+    // The rejected update left the column untouched (still NULL).
+    let read = s.get_item(None, &item.reference, &[]).unwrap();
+    assert_eq!(read.due_at, None);
+}
+
+#[test]
+fn due_at_read_shape_full_carries_it_and_null_is_omitted() {
+    let s = store();
+    // With a value: serialized JSON carries the key.
+    let with = s
+        .add_item(
+            None,
+            NewItem {
+                title: "Dated".into(),
+                due_at: Some("2026-07-01".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let j = serde_json::to_value(&with).unwrap();
+    assert_eq!(j["due_at"], serde_json::json!("2026-07-01"));
+
+    // Without a value: the key is omitted entirely (skip_serializing_if).
+    let without = add(&s, "Undated");
+    let j = serde_json::to_value(&without).unwrap();
+    assert!(
+        j.get("due_at").is_none(),
+        "null due_at must be omitted from the full read shape, got: {j}"
+    );
+}
