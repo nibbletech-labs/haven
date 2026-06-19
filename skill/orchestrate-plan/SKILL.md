@@ -87,6 +87,11 @@ loop:
    or you *could* seal it but only by **assuming** a load-bearing unknown (feasibility, fit,
    approach, mechanics, magnitude, an external answer, or whether it's worth doing at all) →
    **discover** — mint an AI-first discovery leaf and defer the dependent on it (step 7).
+   **Never seal architecturally-coupled siblings as independent leaves over an unmade shared
+   decision/contract** (the data model / API / convention they all assume): promote that
+   foundation to one node — *decided* now if you can, else a discovery leaf — and **defer the
+   dependents on it**, so the frontier predicate holds them until it resolves. Sealing fragments
+   over an undecided foundation is the piecemeal trap.
 6. **SPLIT** (one level): create each child wired to the parent via a decomposition
    edge; wire dependency edges where one child's output feeds another. Record a
    one-line rationale on the parent's `why` (or a `decision` artifact) when the
@@ -125,7 +130,10 @@ Create **single-parent** decomposition (each child has exactly one parent). Mode
 cross-branch sharing — a logo two pages both need — as a **dependency** edge to the
 one shared node, never as a second decomposition parent. This keeps "depth" a single
 well-defined number and the graph easy to reason about. (Haven's store *allows* a
-decomposition DAG; v1 deliberately doesn't use it.)
+decomposition DAG; v1 deliberately doesn't use it.) The same single-node-plus-dependency
+pattern models a shared **decision or architecture contract**, not just a shared artifact:
+emit the coupling as one dependency edge to the shared node, never as a duplicated assumption
+threaded across the leaves.
 
 ### Cycles are enforced by the store
 
@@ -176,7 +184,11 @@ The two skills **never talk directly — they meet only at the graph.** At conve
 2. a **sealed leaf** = `ready` + committed (priority 0–4) + concrete `done_looks_like`
    + an assigned owner (`ai` for the executor's queue, `human` for real-world tasks);
 3. dependency edges encode real ordering (`from` blocked-by `to`) and are acyclic;
-4. no orphaned half-decompositions at rest; depth ≤ 5; lineage intact (restructuring
+4. shared cross-cutting architecture — a decision/contract several leaves *assume* — is
+   reified as its own node with a dependency edge from every dependent, so **no leaf
+   presupposing an undecided foundation is dispatchable in isolation** (these are the edges
+   the executor's pack-first grouping folds on);
+5. no orphaned half-decompositions at rest; depth ≤ 5; lineage intact (restructuring
    went through evolve/archive with a rationale, never deletion).
 
 The future executor relies on `haven next --owner ai` as the AI dispatch queue and on

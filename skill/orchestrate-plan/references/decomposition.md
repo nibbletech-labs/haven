@@ -27,15 +27,25 @@ skill-discovery manifest, so judge grain by this heuristic, not by matching a
 catalogue of skills.)
 
 **3. Hidden cross-branch dependency.** Is there a sub-part that **several siblings or
-branches need** — a logo that blocks both the homepage and the about page, an API
-contract two features build against? Promote it to its own node so every dependent
-can unblock independently the moment it's done. Wire the dependents to it with
-dependency edges. This is what turns a flat list into a *stacked* graph.
+branches need** — whether a shared **deliverable** they each consume (a logo that blocks
+both the homepage and the about page) *or* a shared **decision/contract they each assume**
+(the data model they all read/write, an API two features build against, an auth/format
+convention)? Promote it to its own node so every dependent can unblock independently the
+moment it's done, and wire the dependents to it with dependency edges. The tell for the
+*assumed* case — sharper than ordinary grain — is that **each child's `done_looks_like` is
+individually writable and checkable, yet two children built apart against different guesses
+about the shared shape would each pass its own gate and still fail to compose.** When you see
+it, emit the **coupling** (the shared node + a dependency edge per dependent) — never group
+the dependents or write them a shared brief; that grouping is `create-context-pack`'s axis,
+not the planner's. This is what turns a flat list into a *stacked* graph.
 
 ## Split when
 
 - Mixed activity types (needs different tools / acceptance per part).
-- A hidden dependency several branches share (make it explicit and shared).
+- A hidden **deliverable** several branches share (make it an explicit shared node).
+- A shared **decision/contract** several branches *assume* (a data model, API, or
+  convention) — promote it to one node and depend the leaves on it *before* sealing them,
+  so none is sealed over an undecided foundation.
 - Too large for one agent/person to finish cleanly in one go.
 - Real parallelism to unlock (independent children that can proceed at once).
 
@@ -97,7 +107,9 @@ something to *find out*, not to *build*).
 - **Desirability / fit** — *is this the right thing — does anyone actually want it?* (the user,
   the partner, the team) — settled by validation, not assertion.
 - **Approach** — *which of several real options?* (buy vs build vs partner; which vendor / school
-  / treatment).
+  / treatment) — **including a cross-cutting architecture/contract several leaves share but that
+  isn't decided yet**: route it AI-first as **one shared design/decision node** and **defer the
+  dependents on it**, rather than sealing each leaf over its own guess at the shared shape.
 - **Mechanics** — *how does this system / process / person actually work?*
 - **Magnitude** — *how big or costly is this really?* — the sizing spike you can't plan the rest
   without ("audit the finances", "scope the renovation").
@@ -143,6 +155,10 @@ Tick by tick, this decomposes (abbreviated) to something like:
 - **Hero image** *depends-on* Logo + Visual design system (a visual-creation leaf).
 - **Storefront build** (mixed → split: catalog model / cart+checkout / CMS), each
   *depends-on* the Visual design system.
+- **Storefront API / data contract** (a design/decision node): catalog, cart, and CMS each
+  *depend-on* it — a shared **contract** they all *assume*, not a shared *artifact* they
+  consume; built apart they'd each invent an incompatible schema, so promote it and depend
+  them on it rather than letting each leaf guess.
 - **Product copy** *depends-on* Product definition.
 
 The stacking — logo feeds hero feeds homepage; brand feeds everything — is exactly
