@@ -373,7 +373,9 @@ impl Store {
         // can triage which ready leaves carry a pack (HV-75).
         for node in &mut nodes {
             if node.node_type.is_container() {
-                node.rollup_state = Some(self.rollup_state_for(node.id)?);
+                let (rollup, has_uncommitted) = self.container_rollup(node.id)?;
+                node.rollup_state = Some(rollup);
+                node.has_uncommitted_descendants = Some(has_uncommitted);
             } else {
                 let (pack, clash) = self.context_pack_for_node(node.id)?;
                 node.context_pack = pack;
@@ -390,12 +392,13 @@ impl Store {
         })
     }
 
-    /// Statuses of a container's LIVE committed descendants, walking the union of
-    /// decomposition (parent→child) and grouping (group→member) edges. The
-    /// recursive set dedups ids, so a node reachable via both edge kinds is counted
-    /// once; dead nodes (superseded/archived) are excluded so the rollup stays a
-    /// total function over live committed work.
-    pub(crate) fn committed_descendant_statuses(&self, node_id: i64) -> Result<Vec<Status>> {
+    /// A container's LIVE descendants as `(status, committed)` pairs, walking the
+    /// union of decomposition (parent→child) and grouping (group→member) edges.
+    /// The recursive set dedups ids, so a node reachable via both edge kinds is
+    /// counted once; dead nodes (superseded/archived) are excluded. One walk feeds
+    /// both derived signals (see [`Self::container_rollup`]) so they can never
+    /// disagree about what "live descendant" means.
+    pub(crate) fn live_descendants(&self, node_id: i64) -> Result<Vec<(Status, bool)>> {
         let mut stmt = self.conn.prepare(
             "WITH RECURSIVE sub(id) AS (
                  SELECT ?1
@@ -404,19 +407,27 @@ impl Store {
                  UNION
                  SELECT e.member_id FROM grouping_edges e JOIN sub ON e.group_id = sub.id
              )
-             SELECT n.status FROM nodes n
+             SELECT n.status, n.committed FROM nodes n
              WHERE n.id IN (SELECT id FROM sub) AND n.id <> ?1
-               AND n.committed = 1 AND n.status NOT IN ('superseded','archived')",
+               AND n.status NOT IN ('superseded','archived')",
         )?;
-        let rows = stmt.query_map([node_id], |r| r.get::<_, Status>(0))?;
+        let rows = stmt.query_map([node_id], |r| {
+            Ok((r.get::<_, Status>(0)?, r.get::<_, bool>(1)?))
+        })?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
-    /// The derived [`RollupState`] for one container node.
-    pub(crate) fn rollup_state_for(&self, node_id: i64) -> Result<RollupState> {
-        Ok(rollup_from_statuses(
-            &self.committed_descendant_statuses(node_id)?,
-        ))
+    /// The derived container signals for one node: its [`RollupState`] (classified
+    /// from the *committed* subtree only) plus `has_uncommitted_descendants` —
+    /// whether any live descendant is uncommitted. Because the rollup ignores
+    /// uncommitted floaters, a container can read `Done` while real work still sits
+    /// beneath it; the second signal keeps that honest (HV-104). Both come from a
+    /// single [`Self::live_descendants`] walk.
+    pub(crate) fn container_rollup(&self, node_id: i64) -> Result<(RollupState, bool)> {
+        let live = self.live_descendants(node_id)?;
+        let committed: Vec<Status> = live.iter().filter(|(_, c)| *c).map(|(s, _)| *s).collect();
+        let has_uncommitted = live.iter().any(|(_, c)| !*c);
+        Ok((rollup_from_statuses(&committed), has_uncommitted))
     }
 
     /// Project-level living docs: all live anchor nodes plus their artifacts.

@@ -151,6 +151,21 @@ pub enum RollupState {
     Done,
 }
 
+impl RollupState {
+    /// Lowercase wire name (matches the `serde(rename_all = "lowercase")` form).
+    /// `RollupState` is intentionally not a `sql_enum!` (it's a read-only
+    /// projection, never parsed back), so it has no `Display`/`FromSql`; this is
+    /// just for rendering, e.g. the `backlog.md` annotation.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            RollupState::Dormant => "dormant",
+            RollupState::Queued => "queued",
+            RollupState::Active => "active",
+            RollupState::Done => "done",
+        }
+    }
+}
+
 /// A project — namespace for a backlog, one per product/repo.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Project {
@@ -308,6 +323,14 @@ pub struct Item {
     /// hasn't been hydrated. Serializes out but is ignored on deserialize.
     #[serde(skip_serializing_if = "Option::is_none", skip_deserializing)]
     pub rollup_state: Option<RollupState>,
+
+    /// Sibling of `rollup_state` (HV-104): `Some(true)` when this container has at
+    /// least one LIVE uncommitted descendant — so a container reading `done` still
+    /// signals real remaining work beneath it (the rollup itself counts only
+    /// committed descendants). `Some` only for containers; `None` for leaves and
+    /// wherever it hasn't been hydrated. Serializes out, ignored on deserialize.
+    #[serde(skip_serializing_if = "Option::is_none", skip_deserializing)]
+    pub has_uncommitted_descendants: Option<bool>,
 
     // Optional includes (SPEC §2 `item get --include`).
     #[serde(skip_serializing_if = "Option::is_none")]

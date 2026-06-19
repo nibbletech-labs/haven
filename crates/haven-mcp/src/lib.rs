@@ -85,6 +85,10 @@ struct McpItem<'a> {
     // Graph + full views only: the derived container rollup (containers only).
     #[serde(skip_serializing_if = "Option::is_none")]
     rollup_state: Option<RollupState>,
+    // Sibling of `rollup_state`: live uncommitted work exists beneath the
+    // container, so a `done` rollup is never silently misleading (HV-104).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    has_uncommitted_descendants: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     why: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -128,6 +132,7 @@ impl<'a> McpItem<'a> {
             body: None,
             done_looks_like: None,
             rollup_state: None,
+            has_uncommitted_descendants: None,
             why: None,
             assignee: None,
             created_at: None,
@@ -149,6 +154,7 @@ impl<'a> McpItem<'a> {
         McpItem {
             done_looks_like: item.done_looks_like.as_deref(),
             rollup_state: item.rollup_state,
+            has_uncommitted_descendants: item.has_uncommitted_descendants,
             context_pack: item.context_pack.as_ref(),
             context_pack_clash: item.context_pack_clash.as_deref(),
             ..McpItem::compact(item)
@@ -170,6 +176,7 @@ impl<'a> McpItem<'a> {
             body: item.body.as_deref(),
             done_looks_like: item.done_looks_like.as_deref(),
             rollup_state: item.rollup_state,
+            has_uncommitted_descendants: item.has_uncommitted_descendants,
             why: item.why.as_deref(),
             assignee: item.assignee.as_deref(),
             created_at: Some(&item.created_at),
@@ -1491,6 +1498,31 @@ mod tests {
         // Leaves carry no rollup_state key.
         let child = nodes.iter().find(|n| n["ref"] == "HV-2").unwrap();
         assert!(child.get("rollup_state").is_none());
+    }
+
+    #[test]
+    fn graph_tool_flags_uncommitted_descendants() {
+        let s = store();
+        let out = session(
+            &s,
+            &[
+                json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"haven_add_item","arguments":{"title":"Track","type":"phase"}}}),
+                // Committed + done leaf → the committed subtree is all-done.
+                json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"haven_add_item","arguments":{"title":"shipped","parent":"HV-1","commit":true,"status":"done"}}}),
+                // Uncommitted floater → invisible to the rollup, but flips the flag.
+                json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"haven_add_item","arguments":{"title":"todo","parent":"HV-1"}}}),
+                json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"haven_graph","arguments":{}}}),
+            ],
+        );
+        let graph = tool_payload(&out[3]);
+        let nodes = graph["nodes"].as_array().unwrap();
+        let phase = nodes.iter().find(|n| n["ref"] == "HV-1").unwrap();
+        // A bare `done` never travels without the honesty flag beside it.
+        assert_eq!(phase["rollup_state"], "done");
+        assert_eq!(phase["has_uncommitted_descendants"], true);
+        // Leaves carry neither derived key.
+        let child = nodes.iter().find(|n| n["ref"] == "HV-2").unwrap();
+        assert!(child.get("has_uncommitted_descendants").is_none());
     }
 
     #[test]

@@ -641,8 +641,19 @@ impl Store {
         } else {
             format!(" — blocked by: {}", edges.depends_on.join(", "))
         };
+        // Containers carry a derived rollup; surface it plus a `+uncommitted`
+        // marker so a `done` rollup is never shown bare while live floaters remain
+        // beneath the container (HV-104). Terse + deterministic — backlog.md is a
+        // diffable projection (SPEC §4).
+        let rollup = if item.node_type.is_container() {
+            let (state, has_uncommitted) = self.container_rollup(item.id)?;
+            let mark = if has_uncommitted { " +uncommitted" } else { "" };
+            format!(" [rollup: {}{}]", state.as_str(), mark)
+        } else {
+            String::new()
+        };
         Ok(format!(
-            "- `{r}`{pri} {title} ({status}{owner}){blocked}\n",
+            "- `{r}`{pri} {title} ({status}{owner}){blocked}{rollup}\n",
             r = item.reference,
             title = item.title,
             status = item.status,
@@ -721,6 +732,68 @@ mod tests {
             .get_artifact(None, &item.reference, Some(ArtifactRole::Spec), None)
             .unwrap();
         assert_eq!(got.content.as_deref(), Some("# Spec\nhello\n"));
+    }
+
+    #[test]
+    fn backlog_line_annotates_container_rollup() {
+        let tmp = tempfile::tempdir().unwrap();
+        let s = store_with_root(tmp.path());
+        let phase = s
+            .add_item(
+                None,
+                NewItem {
+                    title: "Track".into(),
+                    node_type: Some(NodeType::Phase),
+                    commit: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        // Committed + done member → rollup Done; uncommitted floater → flag set.
+        s.add_item(
+            None,
+            NewItem {
+                title: "shipped".into(),
+                commit: true,
+                status: Some(crate::model::Status::Done),
+                parent: Some(phase.reference.clone()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        s.add_item(
+            None,
+            NewItem {
+                title: "not yet committed".into(),
+                parent: Some(phase.reference.clone()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        // The container line carries the rollup + uncommitted marker (the bare
+        // `done` never appears alone).
+        let line = s.backlog_line(&phase).unwrap();
+        assert!(
+            line.contains("[rollup: done +uncommitted]"),
+            "container line missing annotation: {line}"
+        );
+
+        // A leaf line carries no rollup annotation.
+        let leaf = s
+            .add_item(
+                None,
+                NewItem {
+                    title: "solo leaf".into(),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let leaf_line = s.backlog_line(&leaf).unwrap();
+        assert!(
+            !leaf_line.contains("[rollup:"),
+            "leaf line should not be annotated: {leaf_line}"
+        );
     }
 
     #[test]

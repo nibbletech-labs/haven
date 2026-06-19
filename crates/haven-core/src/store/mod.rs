@@ -76,6 +76,7 @@ pub(crate) fn item_from_row(row: &Row<'_>) -> rusqlite::Result<Item> {
         revision: row.get(18)?,
         sync_state: row.get(19)?,
         rollup_state: None,
+        has_uncommitted_descendants: None,
         edges: None,
         artifacts: None,
         lineage: None,

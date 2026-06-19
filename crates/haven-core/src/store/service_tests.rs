@@ -1445,6 +1445,80 @@ fn container_rollup_derives_from_committed_subtree() {
 }
 
 #[test]
+fn container_flags_uncommitted_descendants() {
+    // The HV-59 shape: a container can read `done` while real work sits beneath it
+    // as uncommitted floaters. `has_uncommitted_descendants` keeps that honest.
+    let s = store();
+    let phase = s
+        .add_item(
+            None,
+            NewItem {
+                title: "Track".into(),
+                node_type: Some(NodeType::Phase),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let signals = |s: &Store| {
+        let it = s.get_item(None, &phase.reference, &[]).unwrap();
+        (it.rollup_state, it.has_uncommitted_descendants)
+    };
+
+    // Only an uncommitted floater → Dormant (the rollup ignores uncommitted work),
+    // but the honesty flag fires.
+    let floater = s
+        .add_item(
+            None,
+            NewItem {
+                title: "behavioral work, not yet committed".into(),
+                parent: Some(phase.reference.clone()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(signals(&s), (Some(RollupState::Dormant), Some(true)));
+
+    // Add a committed, done child → the committed subtree is all-done so the
+    // rollup reads `Done`, yet the floater keeps `has_uncommitted` true.
+    let done_child = s
+        .add_item(
+            None,
+            NewItem {
+                title: "tooling leaf, shipped".into(),
+                commit: true,
+                status: Some(Status::Done),
+                parent: Some(phase.reference.clone()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(signals(&s), (Some(RollupState::Done), Some(true)));
+
+    // project_graph agrees with get_item for the same container.
+    let g = s.project_graph(None, false).unwrap();
+    let node = g
+        .nodes
+        .iter()
+        .find(|n| n.reference == phase.reference)
+        .unwrap();
+    assert_eq!(
+        (node.rollup_state, node.has_uncommitted_descendants),
+        (Some(RollupState::Done), Some(true))
+    );
+
+    // A leaf carries neither derived signal.
+    let leaf = s.get_item(None, &done_child.reference, &[]).unwrap();
+    assert_eq!(leaf.rollup_state, None);
+    assert_eq!(leaf.has_uncommitted_descendants, None);
+
+    // Dead (archived/superseded) descendants drop out of BOTH signals: archive the
+    // floater and the flag clears, while the committed done child still yields Done.
+    s.archive_item(None, &floater.reference, None, None)
+        .unwrap();
+    assert_eq!(signals(&s), (Some(RollupState::Done), Some(false)));
+}
+
+#[test]
 fn graph_walks_lineage_in_both_directions() {
     let s = store();
     let big = add(&s, "Big");
