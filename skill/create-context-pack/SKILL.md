@@ -106,10 +106,14 @@ pack's section layout + the verbatim preamble are in `references/pack-template.m
    is the leaf's contract.
    What groups a batch is simply that **you intend to
    build the members together** — neither a dependency between them nor shared architecture
-   is required. Shared architecture is the *bonus*: when members touch the same code,
-   contracts, or data model, the pack captures that write-once context; when they don't,
-   step 5's shared-context assessment records a one-line "simple batch — no pack" and you
-   still keep the grouping. Dependency is never the trigger.
+   is required (**the GROUP axis**). Shared architecture is the **PACK** trigger *within* that
+   group: when members touch the same code, contracts, or data model, the pack captures that
+   write-once context — and a dispatcher (`orchestrate-run`) establishes it **pack-first**,
+   before building any member; when they don't, step 5's shared-context assessment records a
+   one-line "simple batch — no pack" and you still keep the grouping. So "simple batch → no
+   pack" and "packless-shared-architecture → pack first" are the two arms of one rule, not a
+   contradiction: **build-together makes the group; shared architecture makes the pack within
+   it.** Dependency is never the trigger.
 2. **DEPENDENCY-CLOSURE CHECK.** Walk each member's dependency edges. For an
    external dependency `d` (not in the set): if `d` is `done`, pull its
    output/acceptance into the pack's foundation as **read-only context**; if `d` is
@@ -131,7 +135,12 @@ pack's section layout + the verbatim preamble are in `references/pack-template.m
    `haven_get_item` per member — read `body`/`why`/`done_looks_like` + edges.
 5. **SHARED-CONTEXT ASSESSMENT** (the `haven` workflow-5 heuristic). If members share
    no architecture, contracts, data model, or sequencing, it's a **simple batch**:
-   record a one-line "no pack needed" `decision` artifact on the container and exit.
+   record a one-line "no pack needed" `decision` artifact on the container and exit. If they
+   **do** share architecture/contracts/data model, **do not exit — continue to step 6** and
+   synthesise the pack (a dispatcher composing this skill is doing so **pack-first**, before any
+   member builds). A foundation that is its own **done** node is **read-only `section-3`
+   context** in the pack (an external dependency the members consume) — **never** re-asserted as
+   a `section-2` write-once requirement.
 6. **SYNTHESISE THE PACK** following `references/pack-template.md`: the verify-first
    preamble, foundation/why, cross-cutting requirements & shared behaviour (the
    write-once material), the external-dependency boundary, and a per-leaf

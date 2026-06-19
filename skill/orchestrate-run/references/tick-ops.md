@@ -34,15 +34,20 @@ filter further.
 
 ## 2–3. Group + select (pure reasoning on step-0 — no op)
 
-Fold the frontier by each leaf's `context_pack.container` → `{container → [ready leaves]}`.
-Skip any leaf carrying `context_pack_clash` (surface it). A batch is dispatchable iff every
-member is in the step-1 frontier. Take up to `MAX_PARALLEL` independent batches.
+Fold the frontier two ways: **packed** leaves by `context_pack.container` →
+`{container → [ready leaves]}` (skip any `context_pack_clash`, surface it); **packless** leaves
+(NULL container, no fold key) tentatively by a **shared `depends_on` producer** → a packless
+cluster sharing one routes to step 4 (pack-first). **Never** fold by decomposition parent. A
+batch is dispatchable iff every member is in the step-1 frontier. Take up to `MAX_PARALLEL`
+independent batches.
 
-## 4. Ensure-packed — compose create-context-pack if missing
+## 4. Ensure-packed — compose create-context-pack BEFORE claiming (pack-first)
 
-A selected multi-leaf cluster with shared architecture but **no** `context_pack` pointer:
-invoke `create-context-pack` on the member set, then re-tick (the leaves will then carry a
-pointer). Read a container's pack back with:
+A selected multi-leaf cluster whose members share an architecture but carry **no**
+`context_pack` pointer: invoke `create-context-pack` on the **member-ref set — before claiming
+any member** — then re-tick (the leaves will then carry a pointer and fold into one batch).
+Pass **only the member refs**; `create-context-pack` creates/reuses the container and wires the
+grouping. Read a container's pack back with:
 - CLI: `haven artifact get <CONTAINER> --role spec --path context-pack.md -p <P>`
 - MCP: `haven_get_artifact {"project":"<P>","ref":"<CONTAINER>","role":"spec"}` → `{path, role, content}`
 

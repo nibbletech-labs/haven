@@ -1,7 +1,8 @@
 ---
 name: orchestrate-run
 description: >-
-  Autonomously execute an already-planned, already-packed Haven graph: loop the
+  Autonomously execute an already-planned Haven graph (packing any still-packless
+  coupled cluster first, as it goes): loop the
   AI-owned ready frontier, build each batch in its own git worktree via native
   plan mode, gate it with a fresh verifier, merge to main, complete the leaves
   (which unblocks downstream), and converge — stepping around anything blocked on
@@ -16,9 +17,9 @@ description: >-
 
 # orchestrate-run — the executor half of orchestrate
 
-You take a graph that's already **planned** (`orchestrate-plan`) and **packed**
-(`create-context-pack`) and **build it** — autonomously, batch by batch, until the
-AI-owned frontier is empty. You own the **loop / worktree / gate / merge**; you do
+You take a graph that's already **planned** (`orchestrate-plan`) — **packed**
+(`create-context-pack`), or with any still-packless coupled cluster packed first as you
+go — and **build it** — autonomously, batch by batch, until the AI-owned frontier is empty. You own the **loop / worktree / gate / merge**; you do
 **not** write code. The code work is **native plan mode + ultracode**, handed the
 pack; you dial its effort and gate and integrate its output. The two halves meet
 only at the graph.
@@ -89,20 +90,36 @@ the git runbook is in `references/worktree-merge.md`; the effort/gate/strike kno
    (DISPATCHABLE_PREDICATE: committed + `ready` + ≠anchor + `wait_state` NULL + no open
    dependency). This **inherently steps around** human-owned work and AI work blocked by
    an unfinished dependency. Trust the predicate; never re-derive it.
-2. **GROUP.** Fold the flat frontier into batches by each leaf's derived
-   `context_pack.container` pointer (on every leaf in the graph read). A leaf with a
-   `context_pack_clash` (>1 packed container) is **skipped and surfaced**, never
-   auto-picked. A ready multi-leaf cluster with **no** pack → step 4. A ready packless
-   **singleton** → a degenerate batch, built directly under the deterministic gate.
+2. **GROUP.** Fold the frontier two ways. **Packed leaves** fold by their derived
+   `context_pack.container` pointer (the fold key for already-packed work); a leaf with a
+   `context_pack_clash` (>1 packed container) is **skipped and surfaced**, never auto-picked.
+   **Packless leaves** have a NULL `context_pack.container`, so they carry no fold key —
+   tentatively cluster them by a **shared `depends_on` producer** (the build-time mirror of the
+   planner's foundation node): a packless multi-leaf cluster sharing one → **step 4 (packed
+   first)**. **Never fold by decomposition parent** (that auto-bundles independent siblings). A
+   packless leaf sharing no producer with others, or a packless **singleton**, → a degenerate
+   batch, built directly under the deterministic gate.
 3. **SELECT.** A batch is dispatchable **now** iff every member is in the ready frontier
    (no member has an open cross-batch dependency — dependent batches simply aren't ready
    yet, so they don't appear). Take up to **MAX_PARALLEL** independent batches
    (`references/dispatch-policy.md`; **default 1** — see *Serial-first* below).
-4. **ENSURE-PACKED.** Before dispatch, confirm the selected batch's container carries a
-   `spec` `context-pack.md` (the pointer guarantees this; the assertion is the contract).
-   A ready multi-leaf cluster with shared architecture but no pack → **pause and invoke
-   `create-context-pack`** on it, then re-tick. You **compose** that skill; you never write
-   a pack yourself.
+4. **ENSURE-PACKED — pack-first is a precondition of CLAIM, never a fallback after it.**
+   For an **already-packed** batch this is the cheap assertion: the container carries a `spec`
+   `context-pack.md` (the pointer guarantees it). For a **ready packless cluster whose members
+   share an architecture** (signalled by a shared `depends_on` producer — the build-time mirror
+   of the planner's foundation node — and confirmed by `create-context-pack`'s shared-context
+   assessment) → **pause
+   before claiming any member** and **compose `create-context-pack`** on the member-ref set
+   (it owns the grouping axis — resolving/creating the container, grooming, clash-checking, and
+   writing the pack), then **re-tick** so the members fold by their new `context_pack.container`
+   into one batch — and only **then** reach CLAIM. You hand over the member set as a dispatch
+   **hint**; you **never** pre-create the container, add grouping edges, or write a pack
+   yourself. `create-context-pack` may return **"simple batch — no pack"** (no shared
+   architecture) → those members proceed to CLAIM as ordinary singletons. (A packed batch only
+   ever holds **mutually-ready** members — step 3 excludes any leaf with an open dependency — so
+   it co-builds independent members that share a *brief*, never a dependent with its unmerged
+   foundation; that ordering is the **dependency edge's** job, not the pack's. The pack groups
+   the batch's shared **context** the verifier reads; it does not change dispatch granularity.)
 5. **CLAIM.** Soft-claim every member of the batch: `haven_update_item {ref,
    status:in_progress}`, one call per leaf. This removes them from `next`, so a re-read
    this same tick won't re-pick them. **Claim before you spawn — never spawn before claim.**
@@ -169,6 +186,13 @@ gated step** (`references/dispatch-policy.md`): do it only once the serial path 
 real run, because the parallel-merge + re-gate seam is where a missed re-gate can silently
 land broken code on `main` as "done" — the failure mode the whole design is organized to
 prevent, and the one you cannot observe in a parallel soup.
+
+**Pack-first stays serial too.** A packless coupled cluster takes **two ticks** — tick N
+composes `create-context-pack` to establish the pack, tick N+1 dispatches the now-packed batch
+— with **never more than one batch in flight** and no added concurrency. And because coupled leaves
+are ordered by their shared foundation's dependency edge, they never build as separate
+worktrees over an undecided architecture, so the cross-worktree semantic-conflict seam
+(invariant 2) cannot arise for them.
 
 ## Convergence / fresh-session handoff
 

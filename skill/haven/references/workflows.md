@@ -218,8 +218,9 @@ an integrated execution view first:
 - The release/phase node is the delivery container; member items remain the value
   or scope contributors. Don't lose the user's original items just because the
   execution slice needs a different shape.
-- A Context Pack is optional, not automatic. It is warranted when shared context
-  is the main risk.
+- A Context Pack is **conditional, not blanket**: skipped for a simple batch, but
+  established **pack-first** (before building any member) once members share an
+  architecture / contract / data model.
 - If the pack introduces execution-local items, map them back to Haven refs or
   create child/member items before work starts. Don't let the pack become a second
   hidden backlog.
