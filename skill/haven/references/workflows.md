@@ -352,6 +352,10 @@ writing), infer-and-`[VERIFY]` only when headless. Don't dead-end at "wrote a fi
 - **Register** (`artifact add`) durable, referenceable work products someone will
   find via the graph: `spec`, `research`, `design`, `decision`, `handoff`,
   `vision`, `source`, `delivery`.
+- **Role for a leaf you're building = `spec`, full stop** (one `spec.md`, holding
+  boundary + constraints + design detail). `design`/`research`/`source`/`vision` are
+  anchor-side living-doc roles — *not* a leaf's contract. See `spec-quality.md`
+  ("One leaf, one `spec`"); picking `design` for a leaf is the common mistake.
 - **Don't register** throwaway scratch/working notes — write them into `notes/` or
   use `haven note`. `notes/` is a free filesystem; over-registering clutters the
   queryable layer.

@@ -26,6 +26,25 @@ A Haven item is not one document. The product context spreads across **node fiel
 So "writing the spec" never means restating `why` and `done_looks_like` — it means the
 *boundary, constraints, and detail* the node fields can't carry.
 
+## One leaf, one `spec` — which *role* to use (read this; it's the common mistake)
+
+A buildable item gets **exactly one authored artifact, role `spec`** (filename `spec.md`). That
+single file carries the scope boundary, constraints, and all design/approach detail — there is
+**no separate `design` artifact on a leaf**. If an item arrived from capture with a
+`design`/sketch artifact, **grooming re-roles it to `spec`** (or writes `spec.md` and removes the
+old one) — never leave a leaf's contract under the `design` role.
+
+The other roles are **not** leaf-grooming choices — don't reach for them when readying a leaf:
+- **`design`** — architecture / the *why it's built this way*. Belongs on an **anchor** node (a
+  project's living-docs hub: `ARCHITECTURE.md` beside `SPEC.md`), *not* on a thing you're about
+  to build. This is the role most often picked by mistake for a leaf — use `spec` instead.
+- **`research` / `source` / `vision`** — reference and living-doc roles, also anchor-side.
+- **`decision`** — a recorded call (e.g. a "simple batch — no pack" note); **`handoff`** — an
+  ai↔human handover note; **`delivery`** — the evidence stamped at `complete`.
+
+Rule of thumb: **grooming/prep authors a leaf's `spec` and nothing else.** Design depth lives
+*inside* that spec (the free-form detail), not in a second artifact.
+
 ## The quality bar — good / bad / check
 
 Apply per field while grooming. The **check** is the one question that tells you if it's done.
