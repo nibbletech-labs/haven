@@ -23,6 +23,19 @@ fn add(s: &Store, title: &str) -> Item {
     .unwrap()
 }
 
+/// A container node (release/phase/gate) — a valid grouping target.
+fn container(s: &Store, title: &str, node_type: NodeType) -> Item {
+    s.add_item(
+        None,
+        NewItem {
+            title: title.into(),
+            node_type: Some(node_type),
+            ..Default::default()
+        },
+    )
+    .unwrap()
+}
+
 #[test]
 fn handoff_records_artifact_flips_owner_and_sets_state() {
     // A real content root: handoff writes a `handoff` artifact to disk.
@@ -447,10 +460,18 @@ fn project_graph_returns_all_nodes_and_edges_in_one_call() {
         .edges
         .iter()
         .any(|e| e.kind == EdgeKind::Decomposition && e.from == "HV-1" && e.to == "HV-2"));
+    // HV-126: superseding HV-3 with HV-5 forwarded HV-2's dependency onto HV-5 (the
+    // live replacement) and dropped the dangling edge to the superseded HV-3.
     assert!(g
         .edges
         .iter()
-        .any(|e| e.kind == EdgeKind::Dependency && e.from == "HV-2" && e.to == "HV-3"));
+        .any(|e| e.kind == EdgeKind::Dependency && e.from == "HV-2" && e.to == "HV-5"));
+    assert!(
+        !g.edges
+            .iter()
+            .any(|e| e.kind == EdgeKind::Dependency && e.to == "HV-3"),
+        "the dependency on the superseded HV-3 must not survive"
+    );
     assert!(g
         .edges
         .iter()
@@ -1112,6 +1133,278 @@ fn merge_and_supersede() {
     let live = s.resolve_live(None, &merged.reference).unwrap();
     assert_eq!(live.len(), 1);
     assert_eq!(live[0].reference, replacement.reference);
+}
+
+/// HV-126: evolve merge forwards the sources' structural edges onto the survivor.
+/// The survivor inherits the decomposition parent + the inbound dependency (so it
+/// is not orphaned), and a dependent of a merged-away prerequisite stays blocked —
+/// dispatch must NOT treat the superseded source as satisfied — until the survivor
+/// is completed.
+#[test]
+fn merge_forwards_edges_and_keeps_dependents_blocked() {
+    let s = store();
+    let parent = add(&s, "Parent epic");
+    let s1 = ready_assigned(&s, "source one", None);
+    let s2 = ready_assigned(&s, "source two", None);
+    let dep = ready_assigned(&s, "dependent", None);
+    s.decompose(None, &parent.reference, &s1, false).unwrap();
+    s.decompose(None, &parent.reference, &s2, false).unwrap();
+    s.depend(None, &dep, &s1, false).unwrap(); // dep depends on s1
+
+    let res = s
+        .evolve_merge(None, &[s1.clone(), s2.clone()], "Unified", None, None)
+        .unwrap();
+    let survivor = res.new[0].reference.clone();
+
+    // Survivor inherits BOTH the parent (decomposition) and the dependent (blocks) —
+    // it is not the orphaned zero-edge node HV-126 describes.
+    let edges = s
+        .get_item(None, &survivor, &[Include::Edges])
+        .unwrap()
+        .edges
+        .unwrap();
+    assert!(
+        edges.parents.contains(&parent.reference),
+        "survivor must inherit the decomposition parent (not orphaned)"
+    );
+    assert!(
+        edges.blocks.contains(&dep),
+        "survivor must inherit the dependent (dep now depends on survivor)"
+    );
+
+    // The merged-away source is stripped of its structural edges.
+    let s1_edges = s
+        .get_item(None, &s1, &[Include::Edges])
+        .unwrap()
+        .edges
+        .unwrap();
+    assert!(
+        s1_edges.parents.is_empty() && s1_edges.blocks.is_empty(),
+        "a merged-away source keeps no structural edges"
+    );
+
+    // dep now depends on the live survivor, not the superseded source.
+    let dep_edges = s
+        .get_item(None, &dep, &[Include::Edges])
+        .unwrap()
+        .edges
+        .unwrap();
+    assert_eq!(
+        dep_edges.depends_on,
+        vec![survivor.clone()],
+        "dependent re-pointed onto the survivor"
+    );
+
+    // Dispatch: dep must NOT be dispatchable while the survivor is incomplete.
+    // (Before HV-126, merging s1 away silently made dep dispatchable — the dispatch
+    // predicate treats a superseded prerequisite as satisfied.)
+    let blocked: Vec<String> = s
+        .next(None, None, None)
+        .unwrap()
+        .into_iter()
+        .map(|i| i.reference)
+        .collect();
+    assert!(
+        !blocked.contains(&dep),
+        "dependent must stay blocked on the live survivor"
+    );
+
+    // Ready + commit + complete the survivor → dep unblocks.
+    s.update_item(
+        None,
+        &survivor,
+        ItemUpdate {
+            status: Some(Status::Ready),
+            done_looks_like: Some("merged work done".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    s.commit_items(None, &[survivor.as_str()], None).unwrap();
+    s.complete_item(None, &survivor, CompleteInput::default())
+        .unwrap();
+
+    let unblocked: Vec<String> = s
+        .next(None, None, None)
+        .unwrap()
+        .into_iter()
+        .map(|i| i.reference)
+        .collect();
+    assert!(
+        unblocked.contains(&dep),
+        "dependent must dispatch once the survivor completes"
+    );
+}
+
+/// HV-126: evolve supersede --with forwards the source's structural edges onto the
+/// live replacement, so the replacement inherits the source's parent + dependents
+/// and is not left orphaned.
+#[test]
+fn supersede_forwards_edges_onto_replacement() {
+    let s = store();
+    let parent = add(&s, "parent");
+    let old = add(&s, "old approach");
+    let newer = add(&s, "new approach");
+    let dependent = ready_assigned(&s, "downstream", None);
+    s.decompose(None, &parent.reference, &old.reference, false)
+        .unwrap();
+    s.depend(None, &dependent, &old.reference, false).unwrap(); // dependent depends on old
+
+    s.evolve_supersede(None, &old.reference, &newer.reference, Some("redo"), None)
+        .unwrap();
+
+    let newer_edges = s
+        .get_item(None, &newer.reference, &[Include::Edges])
+        .unwrap()
+        .edges
+        .unwrap();
+    assert!(
+        newer_edges.parents.contains(&parent.reference),
+        "replacement inherits the source's decomposition parent"
+    );
+    assert!(
+        newer_edges.blocks.contains(&dependent),
+        "replacement inherits the source's dependent"
+    );
+    let old_edges = s
+        .get_item(None, &old.reference, &[Include::Edges])
+        .unwrap()
+        .edges
+        .unwrap();
+    assert!(
+        old_edges.parents.is_empty() && old_edges.blocks.is_empty(),
+        "superseded source keeps no structural edges"
+    );
+}
+
+/// HV-126: superseding a group MEMBER forwards its inbound grouping onto the
+/// replacement — the replacement joins the source's group, the source leaves it.
+#[test]
+fn supersede_forwards_inbound_grouping_to_replacement() {
+    let s = store();
+    let phase = container(&s, "phase", NodeType::Phase);
+    let old = add(&s, "old member");
+    let new = add(&s, "new member");
+    s.group(None, &phase.reference, &old.reference, false)
+        .unwrap();
+
+    s.evolve_supersede(None, &old.reference, &new.reference, Some("redo"), None)
+        .unwrap();
+
+    let new_edges = s
+        .get_item(None, &new.reference, &[Include::Edges])
+        .unwrap()
+        .edges
+        .unwrap();
+    assert!(
+        new_edges.groups.contains(&phase.reference),
+        "replacement must join the source's group"
+    );
+    let old_edges = s
+        .get_item(None, &old.reference, &[Include::Edges])
+        .unwrap()
+        .edges
+        .unwrap();
+    assert!(
+        old_edges.groups.is_empty(),
+        "superseded member must leave the group"
+    );
+}
+
+/// HV-126: superseding a CONTAINER that groups members with another container
+/// forwards the outbound grouping — the replacement container inherits the members
+/// (the survivor is a valid grouping target, so members are re-homed, not orphaned).
+#[test]
+fn supersede_forwards_outbound_grouping_to_container_survivor() {
+    let s = store();
+    let p1 = container(&s, "phase one", NodeType::Phase);
+    let p2 = container(&s, "phase two", NodeType::Phase);
+    let member = add(&s, "member");
+    s.group(None, &p1.reference, &member.reference, false)
+        .unwrap();
+
+    s.evolve_supersede(
+        None,
+        &p1.reference,
+        &p2.reference,
+        Some("consolidate"),
+        None,
+    )
+    .unwrap();
+
+    let p2_edges = s
+        .get_item(None, &p2.reference, &[Include::Edges])
+        .unwrap()
+        .edges
+        .unwrap();
+    assert!(
+        p2_edges.members.contains(&member.reference),
+        "container replacement must inherit the source's members"
+    );
+    let member_edges = s
+        .get_item(None, &member.reference, &[Include::Edges])
+        .unwrap()
+        .edges
+        .unwrap();
+    assert_eq!(
+        member_edges.groups,
+        vec![p2.reference.clone()],
+        "member is now grouped under the live replacement, not the superseded one"
+    );
+}
+
+/// HV-126: re-homing a container's members onto a NON-container survivor is
+/// impossible (a Task can't be a grouping target). Rather than silently orphan
+/// them, the op is rejected and the whole transaction rolls back — no source is
+/// superseded, no edge is dropped. Guards the merge case (the survivor is always a
+/// Task) and supersede --with a non-container.
+#[test]
+fn evolve_rejects_grouping_member_orphan_into_noncontainer_survivor() {
+    let s = store();
+    let phase = container(&s, "phase", NodeType::Phase);
+    let member = add(&s, "member");
+    let other = add(&s, "other source");
+    s.group(None, &phase.reference, &member.reference, false)
+        .unwrap();
+
+    // Merge the phase (with a member) + another node → a fresh Task survivor.
+    let err = s
+        .evolve_merge(
+            None,
+            &[phase.reference.clone(), other.reference.clone()],
+            "merged",
+            None,
+            None,
+        )
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("orphaned"),
+        "merge that would orphan a member must be rejected, got: {err}"
+    );
+
+    // Rolled back: the phase still groups the member and is NOT superseded.
+    let phase_edges = s
+        .get_item(None, &phase.reference, &[Include::Edges])
+        .unwrap()
+        .edges
+        .unwrap();
+    assert!(
+        phase_edges.members.contains(&member.reference),
+        "rejected merge must roll back — the member is still grouped"
+    );
+    assert_eq!(
+        s.get_item(None, &phase.reference, &[]).unwrap().status,
+        Status::Discovery,
+        "rejected merge must not supersede the source"
+    );
+
+    // supersede --with a Task survivor is rejected the same way.
+    let task = add(&s, "task survivor");
+    assert!(
+        s.evolve_supersede(None, &phase.reference, &task.reference, None, None)
+            .is_err(),
+        "supersede that would orphan a member must be rejected too"
+    );
 }
 
 #[test]

@@ -68,6 +68,163 @@ impl Store {
         Ok(())
     }
 
+    /// The other endpoint of every `table` row whose `match_col` = `id`.
+    fn edge_neighbors(
+        &self,
+        conn: &Connection,
+        table: &str,
+        match_col: &str,
+        other_col: &str,
+        id: i64,
+    ) -> Result<Vec<i64>> {
+        let sql = format!("SELECT {other_col} FROM {table} WHERE {match_col} = ?1");
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map([id], |r| r.get::<_, i64>(0))?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// HV-126: re-point every structural edge (decomposition / dependency /
+    /// grouping, both directions) from the superseded `sources` onto `survivor`,
+    /// then delete the sources' now-dead edges. Without this, merging/superseding a
+    /// node left the survivor orphaned (zero edges) and silently un-blocked the
+    /// sources' dependents — the dispatch query treats a superseded prerequisite as
+    /// satisfied (`status NOT IN done/superseded/archived`), so a dependent of a
+    /// merged-away node loses its ordering the moment its prerequisite is retired.
+    ///
+    /// Reuses the cycle-guarded, idempotent `insert_*` helpers, so a re-pointed edge
+    /// that already exists is a no-op and a re-pointed edge that would close a cycle
+    /// is rejected (a genuinely cyclic merge fails loudly rather than corrupting the
+    /// DAG). An edge between two sources — or between a source and the survivor —
+    /// remaps to a self-loop and is skipped. Grouping members are re-homed only when
+    /// the survivor is itself a container (a `Task` survivor — the merge case — can
+    /// never be a grouping target).
+    fn forward_structural_edges(
+        &self,
+        conn: &Connection,
+        sources: &[i64],
+        survivor: i64,
+    ) -> Result<()> {
+        let source_set: std::collections::HashSet<i64> = sources.iter().copied().collect();
+        let remap = |id: i64| {
+            if source_set.contains(&id) {
+                survivor
+            } else {
+                id
+            }
+        };
+
+        let survivor_type: NodeType =
+            conn.query_row("SELECT type FROM nodes WHERE id = ?1", [survivor], |r| {
+                r.get(0)
+            })?;
+        let survivor_is_container = matches!(
+            survivor_type,
+            NodeType::Release | NodeType::Phase | NodeType::Gate
+        );
+
+        // A non-container survivor cannot be a grouping target, so a source's
+        // members have nowhere to be re-homed. The cleanup below deletes the
+        // source's grouping edges either way — so rather than SILENTLY orphan those
+        // members, reject the whole op up front (the transaction rolls back). The
+        // merge survivor is always a Task, so this guards "merge a phase/release
+        // that has members"; supersede --with a non-container hits it too. Members
+        // that are themselves sources (they remap to the survivor) don't count.
+        if !survivor_is_container {
+            for &src in sources {
+                for member in
+                    self.edge_neighbors(conn, "grouping_edges", "group_id", "member_id", src)?
+                {
+                    if remap(member) != survivor {
+                        return Err(HavenError::GraphRule(
+                            "cannot merge/supersede a node that groups members into a \
+                             non-container survivor — its members would be orphaned; regroup \
+                             the members first, or supersede with a container survivor"
+                                .into(),
+                        ));
+                    }
+                }
+            }
+        }
+
+        for &src in sources {
+            // decomposition: inbound parents (src is a child) → parent of survivor.
+            for parent in
+                self.edge_neighbors(conn, "decomposition_edges", "child_id", "parent_id", src)?
+            {
+                let p = remap(parent);
+                if p != survivor {
+                    self.insert_decomposition(conn, p, survivor)?;
+                }
+            }
+            // decomposition: outbound children (src is a parent) → children of survivor.
+            for child in
+                self.edge_neighbors(conn, "decomposition_edges", "parent_id", "child_id", src)?
+            {
+                let c = remap(child);
+                if c != survivor {
+                    self.insert_decomposition(conn, survivor, c)?;
+                }
+            }
+            // dependency: inbound dependents (X depends on src) → X depends on survivor.
+            for dependent in
+                self.edge_neighbors(conn, "dependency_edges", "depends_on_id", "node_id", src)?
+            {
+                let d = remap(dependent);
+                if d != survivor {
+                    self.insert_dependency(conn, d, survivor)?;
+                }
+            }
+            // dependency: outbound prereqs (src depends on Y) → survivor depends on Y.
+            for prereq in
+                self.edge_neighbors(conn, "dependency_edges", "node_id", "depends_on_id", src)?
+            {
+                let p = remap(prereq);
+                if p != survivor {
+                    self.insert_dependency(conn, survivor, p)?;
+                }
+            }
+            // grouping: inbound groups (G groups src) → G groups survivor.
+            for group in
+                self.edge_neighbors(conn, "grouping_edges", "member_id", "group_id", src)?
+            {
+                let g = remap(group);
+                if g != survivor {
+                    self.insert_grouping(conn, g, survivor)?;
+                }
+            }
+            // grouping: outbound members (src groups M) → survivor groups M, only if
+            // the survivor is a container (else those members are left un-grouped —
+            // their group was superseded and the survivor cannot be a group target).
+            if survivor_is_container {
+                for member in
+                    self.edge_neighbors(conn, "grouping_edges", "group_id", "member_id", src)?
+                {
+                    let m = remap(member);
+                    if m != survivor {
+                        self.insert_grouping(conn, survivor, m)?;
+                    }
+                }
+            }
+        }
+
+        // Drop the sources' now-dead structural edges — the survivor carries them.
+        for &src in sources {
+            conn.execute(
+                "DELETE FROM decomposition_edges WHERE parent_id = ?1 OR child_id = ?1",
+                [src],
+            )?;
+            conn.execute(
+                "DELETE FROM dependency_edges WHERE node_id = ?1 OR depends_on_id = ?1",
+                [src],
+            )?;
+            conn.execute(
+                "DELETE FROM grouping_edges WHERE group_id = ?1 OR member_id = ?1",
+                [src],
+            )?;
+        }
+        Ok(())
+    }
+
     /// Split one node into N new nodes (titles given). The source is superseded;
     /// lineage edges point source → each new node.
     pub fn evolve_split(
@@ -186,6 +343,9 @@ impl Store {
             &serde_json::json!({ "into": new_ref }),
             &edges,
         )?;
+        // HV-126: the survivor inherits the sources' structural edges, so it is not
+        // orphaned and the sources' dependents stay blocked on it.
+        self.forward_structural_edges(&tx, &source_ids, new_id)?;
         for &id in &source_ids {
             self.mark_superseded(&tx, id)?;
         }
@@ -230,6 +390,9 @@ impl Store {
             &serde_json::json!({ "from": source_ref, "with": with_ref }),
             &[(source_id, with_id)],
         )?;
+        // HV-126: the replacement inherits the source's structural edges, so the
+        // source's dependents stay blocked on the live replacement.
+        self.forward_structural_edges(&tx, &[source_id], with_id)?;
         self.mark_superseded(&tx, source_id)?;
         tx.commit()?;
 
