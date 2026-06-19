@@ -253,7 +253,7 @@ impl Store {
     }
 
     /// Derive the context pack governing a leaf (HV-75): the LIVE grouping
-    /// containers it belongs to that carry a `spec` [`CONTEXT_PACK_ARTIFACT`],
+    /// containers it belongs to that carry a `context-pack` artifact (HV-124),
     /// deduped by container. Returns `(pack, clash)` of which at most one is
     /// `Some` — zero containers → `(None, None)`; exactly one → the pack; more
     /// than one → a clash (the conflicting container refs). Pure read: the
@@ -270,15 +270,12 @@ impl Store {
                JOIN nodes c ON c.id = ge.group_id
                JOIN artifacts a ON a.node_id = c.id
               WHERE ge.member_id = ?1
-                AND a.role = 'spec'
-                AND a.path LIKE '%/' || ?2
+                AND a.role = 'context-pack'
                 AND c.status NOT IN ('archived', 'superseded')
               ORDER BY c.ref",
         )?;
         let containers: Vec<String> = stmt
-            .query_map(params![node_id, CONTEXT_PACK_ARTIFACT], |r| {
-                r.get::<_, String>(0)
-            })?
+            .query_map([node_id], |r| r.get::<_, String>(0))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(match containers.len() {
             0 => (None, None),
@@ -306,8 +303,8 @@ impl Store {
     }
 
     /// Read-only graph-integrity scan over context packs and artifact rows (HV-105),
-    /// surfaced by `haven doctor`. Across every project it flags: a `spec`
-    /// `context-pack.md` whose content is a relocation tombstone (left behind when a
+    /// surfaced by `haven doctor`. Across every project it flags: a `context-pack`
+    /// artifact whose content is a relocation tombstone (left behind when a
     /// subset build-batch is carved out — see `create-context-pack`); a node whose
     /// derived `context_pack` (HV-75) resolves to such a tombstone; and duplicate
     /// `(node, path)` artifact rows. Pure diagnostic — never mutates.
@@ -320,21 +317,18 @@ impl Store {
         for proj in self.list_projects()? {
             let base = self.project_dir(&proj.key);
 
-            // (1) Tombstone packs: live containers holding a `spec` context-pack.md
+            // (1) Tombstone packs: live containers holding a `context-pack` artifact
             // whose file content opens with a relocation marker.
             let mut stmt = self.conn.prepare(
                 "SELECT a.node_id, n.ref, a.path
                    FROM artifacts a
                    JOIN nodes n ON n.id = a.node_id
                   WHERE n.project_id = ?1
-                    AND a.role = 'spec'
-                    AND a.path LIKE '%/' || ?2
+                    AND a.role = 'context-pack'
                     AND n.status NOT IN ('archived', 'superseded')",
             )?;
             let packs: Vec<(i64, String, Option<String>)> = stmt
-                .query_map(params![proj.id, CONTEXT_PACK_ARTIFACT], |r| {
-                    Ok((r.get(0)?, r.get(1)?, r.get(2)?))
-                })?
+                .query_map([proj.id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
 
             let mut tombstone_nodes: Vec<(i64, String)> = Vec::new();
@@ -1372,7 +1366,7 @@ mod tests {
                 None,
                 container,
                 NewArtifact {
-                    role: ArtifactRole::Spec,
+                    role: ArtifactRole::ContextPack,
                     content: Some(body.into()),
                     name: Some(CONTEXT_PACK_ARTIFACT.into()),
                     replace: true,
@@ -2070,7 +2064,7 @@ mod tests {
             None,
             &broad.reference,
             NewArtifact {
-                role: ArtifactRole::Spec,
+                role: ArtifactRole::ContextPack,
                 kind: ArtifactKind::File,
                 content: Some("MOVED: the pack now lives on the build batch. See HV-73.".into()),
                 name: Some(CONTEXT_PACK_ARTIFACT.into()),
@@ -2079,11 +2073,14 @@ mod tests {
         )
         .unwrap();
         // Collision-safe add_artifact can't create a duplicate (node,path) row, so
-        // insert one directly to simulate pre-HV-95/97 legacy data.
+        // insert one directly to simulate legacy data. Role `context-pack` (matching
+        // the tombstone) keeps this test a tight guard for the role-keyed tombstone
+        // query (HV-124): a regression to the old `role='spec'` predicate would find
+        // neither row and the TombstonePack assertion below would fail.
         s.conn
             .execute(
                 "INSERT INTO artifacts (public_id, node_id, role, kind, path, client_id)
-                 VALUES ('dup-legacy-row', ?1, 'spec', 'file', ?2, 'test')",
+                 VALUES ('dup-legacy-row', ?1, 'context-pack', 'file', ?2, 'test')",
                 params![
                     broad.id,
                     format!("items/{}/context-pack.md", broad.reference)

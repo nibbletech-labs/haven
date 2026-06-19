@@ -28,8 +28,8 @@ If it carries a `context_pack`, load the container's pack for the **shared-requi
 section (an **input**, not a precondition — a leaf with no pack is judged on its own
 `done_looks_like`):
 
-- CLI: `haven artifact get <CONTAINER> --role spec --path context-pack.md -p <P>`
-- MCP: `haven_get_artifact {"project":"<P>","ref":"<CONTAINER>","role":"spec"}` → `{path, role, content}`
+- CLI: `haven artifact get <CONTAINER> --role context-pack --path context-pack.md -p <P>`
+- MCP: `haven_get_artifact {"project":"<P>","ref":"<CONTAINER>","role":"context-pack"}` → `{path, role, content}`
 
 > A **container** target is a verdict-only **rollup** — never auto-completed.
 

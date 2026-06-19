@@ -32,7 +32,8 @@ values error.
 - **Wait state** (`--wait`): `on_human`, `on_dependency`, `on_external`, and
   `none` to clear.
 - **Artifact role** (`--role`): `spec`, `research`, `design`, `decision`,
-  `handoff`, `vision`, `source`, `delivery`, `scratch`.
+  `handoff`, `vision`, `source`, `delivery`, `scratch`, `context-pack` (the
+  build-ready brief on a grouping container — HV-124; resolution keys on the role).
 - **Artifact kind** (`--kind`, usually inferred): `file`, `external`, `delivery`.
 
 **Global CLI flags:** `--project/-p <key>` (defaults to the current project),

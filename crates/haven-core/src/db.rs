@@ -19,6 +19,7 @@ const MIGRATION_003: &str = include_str!("../../../migrations/003_anchor_type.sq
 const MIGRATION_004: &str = include_str!("../../../migrations/004_due_at.sql");
 const MIGRATION_005: &str = include_str!("../../../migrations/005_owner_eligible.sql");
 const MIGRATION_006: &str = include_str!("../../../migrations/006_drop_owner_eligible.sql");
+const MIGRATION_007: &str = include_str!("../../../migrations/007_context_pack_role.sql");
 
 /// The ordered migration SQL, embedded at compile time. Adding a migration here
 /// is the only edit needed: the supported schema version is this list's length,
@@ -30,6 +31,7 @@ const MIGRATION_SQL: &[&str] = &[
     MIGRATION_004,
     MIGRATION_005,
     MIGRATION_006,
+    MIGRATION_007,
 ];
 
 /// Highest `user_version` this binary can open, derived from `MIGRATION_SQL`.
@@ -118,7 +120,7 @@ mod tests {
         // adding a migration forces a one-line edit here, a moment to confirm
         // intent (and to bump the release/version if needed).
         assert_eq!(latest_schema_migration(), MIGRATION_SQL.len() as i64);
-        assert_eq!(latest_schema_migration(), 6);
+        assert_eq!(latest_schema_migration(), 7);
     }
 
     /// HV-66: the migration-005 `nodes` REBUILD must preserve every row's
@@ -354,12 +356,20 @@ mod tests {
         )
         .unwrap();
 
-        // Migrate the SAME connection to latest (runs the 006 rebuild).
-        migrations().to_latest(&mut conn).unwrap();
+        // Migrate the SAME connection through 006 (the rebuild under test). Pinned
+        // to v6: later migrations (007+) don't touch nodes, so this test owns the
+        // 006-era invariant and migration_007_* owns its own.
+        let to_v6 = Migrations::new(
+            MIGRATION_SQL[..6]
+                .iter()
+                .copied()
+                .map(M::up)
+                .collect::<Vec<_>>(),
+        );
+        to_v6.to_latest(&mut conn).unwrap();
         let v6: i64 = conn
             .pragma_query_value(None, "user_version", |r| r.get(0))
             .unwrap();
-        assert_eq!(v6, latest_schema_migration());
         assert_eq!(v6, 6);
 
         // The column is GONE.
@@ -426,6 +436,116 @@ mod tests {
         assert_eq!(
             hits, 2,
             "FTS index must be rebuilt and populated for both rows"
+        );
+    }
+
+    /// HV-124: migration 007 adds the `context-pack` role and reclassifies exactly
+    /// the magic-filename packs (role='spec' + a `context-pack.md` path) — leaving a
+    /// real spec.md and every other role untouched, preserving all rows, and making
+    /// the expanded CHECK accept `context-pack` while still rejecting a bad role.
+    #[test]
+    fn migration_007_reclassifies_context_pack_artifacts() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+
+        // Stage at schema v6 (pre-007: no `context-pack` role).
+        let to_v6 = Migrations::new(
+            MIGRATION_SQL[..6]
+                .iter()
+                .copied()
+                .map(M::up)
+                .collect::<Vec<_>>(),
+        );
+        to_v6.to_latest(&mut conn).unwrap();
+        assert_eq!(
+            conn.pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))
+                .unwrap(),
+            6,
+            "staged at schema v6"
+        );
+
+        conn.execute(
+            "INSERT INTO projects (public_id, key, ref_prefix, title, client_id)
+             VALUES ('p', 'haven', 'HV', 'Haven', 'pc')",
+            [],
+        )
+        .unwrap();
+        let pid: i64 = conn
+            .query_row("SELECT id FROM projects WHERE key='haven'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        // A container node + a leaf node.
+        conn.execute(
+            "INSERT INTO nodes (public_id, project_id, ref, title, type, client_id)
+             VALUES ('n1', ?1, 'HV-1', 'phase', 'phase', 'nc1'),
+                    ('n2', ?1, 'HV-2', 'leaf', 'task', 'nc2')",
+            [pid],
+        )
+        .unwrap();
+        let container: i64 = conn
+            .query_row("SELECT id FROM nodes WHERE ref='HV-1'", [], |r| r.get(0))
+            .unwrap();
+        let leaf: i64 = conn
+            .query_row("SELECT id FROM nodes WHERE ref='HV-2'", [], |r| r.get(0))
+            .unwrap();
+        // Three artifacts, all role='spec' at v6: a context-pack.md on the container
+        // (to be reclassified), a real spec.md on the leaf (must stay spec), and a
+        // design artifact (a different role — must be untouched).
+        conn.execute(
+            "INSERT INTO artifacts (public_id, node_id, role, path, client_id) VALUES
+                ('a1', ?1, 'spec',   'items/HV-1/context-pack.md', 'ac1'),
+                ('a2', ?2, 'spec',   'items/HV-2/spec.md',         'ac2'),
+                ('a3', ?2, 'design', 'items/HV-2/design.md',       'ac3')",
+            [container, leaf],
+        )
+        .unwrap();
+
+        // Migrate to latest (runs 007).
+        migrations().to_latest(&mut conn).unwrap();
+        let v7: i64 = conn
+            .pragma_query_value(None, "user_version", |r| r.get(0))
+            .unwrap();
+        assert_eq!(v7, latest_schema_migration());
+        assert_eq!(v7, 7);
+
+        let role_of = |pubid: &str| -> String {
+            conn.query_row(
+                "SELECT role FROM artifacts WHERE public_id = ?1",
+                [pubid],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(
+            role_of("a1"),
+            "context-pack",
+            "the context-pack.md pack must be reclassified"
+        );
+        assert_eq!(role_of("a2"), "spec", "a real spec.md must stay spec");
+        assert_eq!(role_of("a3"), "design", "an unrelated role is untouched");
+        // All three rows preserved.
+        let count: i64 = conn
+            .query_row("SELECT count(*) FROM artifacts", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 3, "no artifact row dropped by the rebuild");
+
+        // The expanded CHECK now accepts `context-pack`...
+        conn.execute(
+            "INSERT INTO artifacts (public_id, node_id, role, path, client_id)
+             VALUES ('a4', ?1, 'context-pack', 'items/HV-1/context-pack.md', 'ac4')",
+            [container],
+        )
+        .unwrap();
+        // ...and still rejects a bad role.
+        assert!(
+            conn.execute(
+                "INSERT INTO artifacts (public_id, node_id, role, client_id)
+                 VALUES ('a5', ?1, 'nonsense', 'ac5')",
+                [container],
+            )
+            .is_err(),
+            "the role CHECK must still reject an out-of-domain value"
         );
     }
 

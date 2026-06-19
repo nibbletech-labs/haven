@@ -4,7 +4,7 @@ description: >-
   Create a build-ready spec (a "context pack") for an already-planned group of
   Haven items: enrich them into one integrated brief — shared foundation,
   cross-cutting requirements, sharpened acceptance, and a verify-first preamble —
-  written as a `spec` artifact onto the group's top node, ready to hand to plan
+  written as a `context-pack` artifact onto the group's top node, ready to hand to plan
   mode. The headline case is a greenfield build: one large spec for the whole of
   a phase-1 build, establishing the contracts the leaves conform to. Use when you
   have a set of planned leaves you're about to build together and want one brief —
@@ -41,7 +41,7 @@ native **plan mode** (the code-level plan + the human "go").
 - Plan mode does the **code-grain** layer (which files, what approach) that goes
   stale the instant code moves — so it's never frozen into the graph.
 
-The pack lives **in the graph** (a `spec` artifact on the group's top node + the
+The pack lives **in the graph** (a `context-pack` artifact on the group's top node + the
 members' own fields), never a separate frozen file. Leaves inherit the shared
 material by reading **up** their one grouping edge to the top node.
 
@@ -87,23 +87,22 @@ pack's section layout + the verbatim preamble are in `references/pack-template.m
      must land on this batch container: a phase holds **one** `context-pack.md`, so writing
      a subset's pack onto the broad phase mis-scopes it (a pack covering 2 of 7 members)
      **and** a later batch from the same phase would **clobber** it.
-     - **The broad phase must NOT keep a live `spec` `context-pack.md`.** If it already
+     - **The broad phase must NOT keep a live `context-pack` artifact.** If it already
        holds one (e.g. from an earlier whole-phase prep), **remove it** —
-       `haven artifact rm <broad-phase> --role spec --name context-pack.md` (or `--id`
-       if duplicated). A stale pack left on the broad phase misroutes the pointer
+       `haven artifact rm <broad-phase> --role context-pack --name context-pack.md` (or
+       `--id` if duplicated). A stale pack left on the broad phase misroutes the pointer
        (HV-75): every still-grouped member resolves its `context_pack` to that pack
        (now a dead redirect). If you want a "moved to `<BATCH>`" breadcrumb, record it
-       as a **non-`spec`** artifact (a `scratch` note) or in the container body — **never**
-       as a `spec` `context-pack.md` (a prose "MOVED" note left as the pack is exactly the
-       tombstone `haven doctor`'s `context_pack_integrity` check flags).
+       as a **non-`context-pack`** artifact (a `scratch` note) or in the container body —
+       **never** as a `context-pack` artifact (a prose "MOVED" note left as the pack is
+       exactly the tombstone `haven doctor`'s `context_pack_integrity` check flags).
    A single item is a **degenerate group**: there is nothing cross-cutting to
    synthesise, so just **groom that one leaf** (wf 3 — firm acceptance + write/firm
    the leaf's **own** `spec` artifact `spec.md` via wf 10 where warranted) and stop.
-   **No container, and no separate `context-pack.md` artifact** — a pack only exists
-   to govern a *group* from its container, so on a lone leaf it would merely co-reside
-   with the leaf's own `spec.md` (two `role=spec` artifacts on one node, one of them
-   pointless) and could shadow the real spec on read. Firm `spec.md` in place; that
-   is the leaf's contract.
+   **No container, and no separate `context-pack` artifact** — a pack only exists
+   to govern a *group* from its container, so on a lone leaf it would just co-reside
+   with the leaf's own `spec.md` as a pointless `context-pack` artifact with no group
+   to govern. Firm `spec.md` in place; that is the leaf's contract.
    What groups a batch is simply that **you intend to
    build the members together** — neither a dependency between them nor shared architecture
    is required (**the GROUP axis**). Shared architecture is the **PACK** trigger *within* that
@@ -152,15 +151,15 @@ pack's section layout + the verbatim preamble are in `references/pack-template.m
      warranted (`haven item update` / `haven_update_item`; wf 3 + wf 10);
    - add **dependency edges** for any real ordering you found (`haven depend` /
      `haven_add_edge {kind:"grouping"|"dependency"}`);
-   - write the pack as a `spec` artifact `context-pack.md` on the **container**
-     (`haven artifact add … --role spec --name context-pack.md --replace` /
-     `haven_add_artifact {… role:"spec", name:"context-pack.md", replace:true}`) —
+   - write the pack as a `context-pack` artifact `context-pack.md` on the **container**
+     (`haven artifact add … --role context-pack --name context-pack.md --replace` /
+     `haven_add_artifact {… role:"context-pack", name:"context-pack.md", replace:true}`) —
      **`--replace` is required for idempotent re-prep**: a re-run overwrites the
      container's existing `context-pack.md` in place instead of erroring on the
      `(container, context-pack.md)` collision;
    - set the container's `why` to a one-line pointer at the pack.
 8. **HAND OFF.** Report the container ref and tell the next session / plan mode to
-   take its `spec` `context-pack.md` as input. The two skills meet only at the graph.
+   take its `context-pack` artifact `context-pack.md` as input. The two skills meet only at the graph.
    Each prepped leaf now **advertises** its pack: `haven_get_item` / `haven_graph` return a
    derived `context_pack {container, artifact}` pointer, so a dispatcher loads the pack
    *before* building rather than building the member naked. A leaf surfacing a

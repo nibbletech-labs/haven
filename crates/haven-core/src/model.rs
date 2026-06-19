@@ -117,11 +117,14 @@ sql_enum! {
 }
 
 sql_enum! {
-    /// Artifact role — what kind of content a node points at.
+    /// Artifact role — what kind of content a node points at. `context-pack` (HV-124)
+    /// is the build-ready brief on a grouping container; it is a first-class role
+    /// (not a `spec` disambiguated by filename) so pack resolution keys on the role.
     ArtifactRole {
         Spec => "spec", Research => "research", Design => "design",
         Handoff => "handoff", Decision => "decision", Scratch => "scratch",
         Source => "source", Delivery => "delivery", Vision => "vision",
+        ContextPack => "context-pack",
     }
 }
 
@@ -181,7 +184,7 @@ pub struct IntegrityIssue {
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum IntegrityKind {
-    /// A `spec` `context-pack.md` whose content is a relocation tombstone, not a
+    /// A `context-pack` artifact whose content is a relocation tombstone, not a
     /// real pack — so the pack-pointer derivation (HV-75) resolves it as live.
     TombstonePack,
     /// A node whose derived `context_pack` resolves to a tombstone container.
@@ -399,13 +402,13 @@ pub struct LineageEvent {
 
 /// The context pack that governs building a leaf: the grouping container that
 /// carries it, plus the pack artifact's name. Derived on read from
-/// `member --grouping--> container` where the container holds a `spec`
-/// `context-pack.md` artifact — never stored, so there is no second source of
+/// `member --grouping--> container` where the container holds a `context-pack`
+/// artifact (HV-124) — never stored, so there is no second source of
 /// truth. A leaf claimed by more than one packed container surfaces a clash
 /// instead (see `Item::context_pack_clash`).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ContextPack {
-    /// The release/phase container whose `spec` artifact is the pack.
+    /// The release/phase container whose `context-pack` artifact is the pack.
     pub container: String,
     /// The pack artifact's name (always `context-pack.md`).
     pub artifact: String,

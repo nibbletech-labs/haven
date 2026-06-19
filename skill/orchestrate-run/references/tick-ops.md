@@ -48,8 +48,8 @@ A selected multi-leaf cluster whose members share an architecture but carry **no
 any member** — then re-tick (the leaves will then carry a pointer and fold into one batch).
 Pass **only the member refs**; `create-context-pack` creates/reuses the container and wires the
 grouping. Read a container's pack back with:
-- CLI: `haven artifact get <CONTAINER> --role spec --path context-pack.md -p <P>`
-- MCP: `haven_get_artifact {"project":"<P>","ref":"<CONTAINER>","role":"spec"}` → `{path, role, content}`
+- CLI: `haven artifact get <CONTAINER> --role context-pack --path context-pack.md -p <P>`
+- MCP: `haven_get_artifact {"project":"<P>","ref":"<CONTAINER>","role":"context-pack"}` → `{path, role, content}`
 
 ## 5. Claim — soft-claim every member (claim before spawn)
 

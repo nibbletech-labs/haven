@@ -1,6 +1,6 @@
 # Pack template — the canonical `context-pack.md` layout
 
-`create-context-pack` writes one `spec`-role artifact named `context-pack.md` onto the
+`create-context-pack` writes one `context-pack`-role artifact named `context-pack.md` onto the
 group's **container** node (the release/phase). Use this exact section order. Section 0
 (the verify-first preamble) is **copied verbatim** into every pack — it is the
 instruction plan mode follows. Everything else is synthesised from the members.

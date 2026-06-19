@@ -34,11 +34,11 @@ pick the pack's home by comparing your target set to that container's **full** m
   **additive / many-to-many**, so you *add* the batch edge and **never remove** the
   member's original group (a leaf can sit in its theme phase *and* a build batch at once).
   - **Strip any live pack off the broad phase.** If the broad phase already carries a
-    `spec` `context-pack.md`, remove it — `haven artifact rm <BROAD> --role spec --name
-    context-pack.md` (or `--id <pid>` if duplicated) — else its still-grouped members
+    `context-pack` artifact, remove it — `haven artifact rm <BROAD> --role context-pack
+    --name context-pack.md` (or `--id <pid>` if duplicated) — else its still-grouped members
     keep resolving `context_pack` to a now-mis-scoped pack (HV-75). Any "moved to
-    `<BATCH>`" breadcrumb goes in a **non-`spec`** artifact or the container body, never a
-    `spec` `context-pack.md` (`haven doctor` flags such a tombstone via `context_pack_integrity`).
+    `<BATCH>`" breadcrumb goes in a **non-`context-pack`** artifact or the container body,
+    never a `context-pack` artifact (`haven doctor` flags such a tombstone via `context_pack_integrity`).
   - CLI: `haven item add "<batch title> — dev batch" --type phase -p <P>` → returns
     `<CONTAINER>`; then `haven group <CONTAINER> --add <ref> --add <ref> … -p <P>`.
   - MCP: `haven_add_item {"project":"<P>","title":"…","type":"phase"}` → `<CONTAINER>`;
@@ -125,13 +125,13 @@ write/firm a `spec` artifact on the member where it warrants one (workflow 10).
 - MCP: `haven_add_edge {"project":"<P>","kind":"dependency","from":"<consumer>","to":"<producer>"}`
 
 **c. Write the pack onto the container** (the content channel writes the bytes):
-- CLI: `haven artifact add <CONTAINER> --role spec --name context-pack.md --content "<pack>" -p <P>`
+- CLI: `haven artifact add <CONTAINER> --role context-pack --name context-pack.md --content "<pack>" -p <P>`
   (or `--file <path>` if you wrote it to disk under the item dir)
-- MCP: `haven_add_artifact {"project":"<P>","ref":"<CONTAINER>","role":"spec","name":"context-pack.md","content":"<pack>"}`
+- MCP: `haven_add_artifact {"project":"<P>","ref":"<CONTAINER>","role":"context-pack","name":"context-pack.md","content":"<pack>"}`
 
 **d. Point the container's `why` at the pack:**
-- CLI: `haven item update <CONTAINER> --why "Context pack: see spec artifact context-pack.md" -p <P>`
-- MCP: `haven_update_item {"project":"<P>","ref":"<CONTAINER>","why":"Context pack: see spec artifact context-pack.md"}`
+- CLI: `haven item update <CONTAINER> --why "Context pack: see context-pack artifact context-pack.md" -p <P>`
+- MCP: `haven_update_item {"project":"<P>","ref":"<CONTAINER>","why":"Context pack: see context-pack artifact context-pack.md"}`
 
 > **No status flips.** Do **not** set any member `in_progress` and do **not** complete
 > anything — execution is plan mode's, not this skill's.
@@ -139,15 +139,15 @@ write/firm a `spec` artifact on the member where it warrants one (workflow 10).
 ## 8. Hand off + read-back
 
 Report the container ref. The next session / plan mode takes the pack as input:
-- CLI: `haven artifact get <CONTAINER> --role spec --path context-pack.md -p <P>`
-- MCP: `haven_get_artifact {"project":"<P>","ref":"<CONTAINER>","role":"spec"}` → `{path, role, content}`
+- CLI: `haven artifact get <CONTAINER> --role context-pack --path context-pack.md -p <P>`
+- MCP: `haven_get_artifact {"project":"<P>","ref":"<CONTAINER>","role":"context-pack"}` → `{path, role, content}`
 
 A leaf now **advertises** its pack: `haven_get_item {ref}` returns a derived `context_pack`
 `{container, artifact}` (and `haven_graph` carries it per leaf), so a dispatcher reads one
 pointer instead of walking `edges.groups` and guessing which container holds the pack.
 
 > **Consumer rule — load the pack before building.** Any dev / plan-mode session that pulls
-> a leaf MUST read its `context_pack` and load that container's `spec` `context-pack.md`
-> (`haven_get_artifact {ref: container, role:"spec"}`) **before building** — never build a
+> a leaf MUST read its `context_pack` and load that container's `context-pack` artifact
+> (`haven_get_artifact {ref: container, role:"context-pack"}`) **before building** — never build a
 > member naked. If the leaf carries `context_pack_clash` instead of `context_pack`, do
 > **not** build: route back to create-context-pack to resolve the clash first.

@@ -125,7 +125,7 @@ the git runbook is in `references/worktree-merge.md`; the effort/gate/strike kno
    this same tick won't re-pick them. **Claim before you spawn — never spawn before claim.**
 6. **DISPATCH.** Per batch, create an isolated worktree off `main`
    (`references/worktree-merge.md`) and spawn **one** native build agent into it, handed:
-   the container's `context-pack.md` (`haven_get_artifact {ref:container, role:spec}`), the
+   the container's `context-pack.md` (`haven_get_artifact {ref:container, role:context-pack}`), the
    members' `done_looks_like`, the **effort/model** and **gate mode** per
    `references/dispatch-policy.md`, and — for each leaf — a **2–5 step self-check derived
    from its `done_looks_like`** (a green global build is not proof a specific leaf's

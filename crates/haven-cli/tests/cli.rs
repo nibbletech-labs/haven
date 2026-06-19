@@ -289,7 +289,7 @@ fn doctor_reports_install_health() {
         .as_str()
         .unwrap();
     assert!(
-        schema_detail.contains("binary supports v6"),
+        schema_detail.contains("binary supports v7"),
         "schema detail was: {schema_detail}"
     );
     assert_eq!(status_of(&before, "claude_mcp"), "warn");
@@ -374,7 +374,7 @@ fn doctor_flags_context_pack_tombstone() {
         "add",
         "DM-1",
         "--role",
-        "spec",
+        "context-pack",
         "--content",
         "MOVED: pack now lives on the build batch. See HV-73.",
         "--name",
