@@ -9,7 +9,7 @@ use std::collections::HashSet;
 use std::fmt::Write as _;
 use std::path::PathBuf;
 
-use rusqlite::params;
+use rusqlite::{params, OptionalExtension};
 use sha2::{Digest, Sha256};
 
 use crate::error::{HavenError, Result};
@@ -23,6 +23,169 @@ use super::{new_uuid, ItemFilter, Store};
 /// (HV-75) reads it. This string is the contract between the skill and the store
 /// — keep them in sync.
 pub const CONTEXT_PACK_ARTIFACT: &str = "context-pack.md";
+
+/// The recognized `xref.store` allowlist (HV-69). `store` is a free string —
+/// stores legitimately proliferate — so an unrecognized value is only a doctor
+/// *lint*, never a write-time rejection. Seeded with the known stores; easy to
+/// extend.
+pub const RECOGNIZED_STORES: &[&str] = &["servo", "vault", "github", "haven"];
+
+/// Validate a `metadata.xref` payload on the write path (HV-69). Rejects an
+/// unknown `relation` (the closed [`XrefRelation`] enum) or a missing/empty
+/// `target`. `store` is free (never rejected) and `canonical` is optional. A
+/// metadata object with no `xref` key, or whose `xref` is an empty array, is
+/// vacuously valid. The whole `metadata` object must be a JSON object (or null).
+pub(crate) fn validate_xref_metadata(meta: &serde_json::Value) -> Result<()> {
+    if meta.is_null() {
+        return Ok(());
+    }
+    let obj = meta
+        .as_object()
+        .ok_or_else(|| HavenError::Invalid("artifact metadata must be a JSON object".into()))?;
+    let Some(xref) = obj.get("xref") else {
+        return Ok(());
+    };
+    let arr = xref.as_array().ok_or_else(|| {
+        HavenError::Invalid("metadata.xref must be an array of xref objects".into())
+    })?;
+    for (i, entry) in arr.iter().enumerate() {
+        let e = entry
+            .as_object()
+            .ok_or_else(|| HavenError::Invalid(format!("metadata.xref[{i}] must be an object")))?;
+        // `relation` — required, must be a valid closed-enum value.
+        let relation = e.get("relation").ok_or_else(|| {
+            HavenError::Invalid(format!("metadata.xref[{i}] missing required `relation`"))
+        })?;
+        if serde_json::from_value::<XrefRelation>(relation.clone()).is_err() {
+            return Err(HavenError::Invalid(format!(
+                "metadata.xref[{i}] has unknown `relation` {relation} — \
+                 must be one of canonical-source|mirror|derived-from|discussed-in"
+            )));
+        }
+        // `target` — required non-empty string.
+        match e.get("target").and_then(|t| t.as_str()) {
+            Some(t) if !t.trim().is_empty() => {}
+            _ => {
+                return Err(HavenError::Invalid(format!(
+                    "metadata.xref[{i}] missing required non-empty `target`"
+                )))
+            }
+        }
+        // `store` — when present, must be a string (free value; not allowlisted here).
+        if let Some(store) = e.get("store") {
+            if !store.is_string() {
+                return Err(HavenError::Invalid(format!(
+                    "metadata.xref[{i}] `store` must be a string"
+                )));
+            }
+        }
+        // `canonical` — when present, must be a bool.
+        if let Some(c) = e.get("canonical") {
+            if !c.is_boolean() {
+                return Err(HavenError::Invalid(format!(
+                    "metadata.xref[{i}] `canonical` must be a boolean"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Whether `target` is shaped like a Haven ref for `prefix` — i.e. `<prefix>-<N>`
+/// with a positive integer (HV-69). Used to decide whether a target is *intended*
+/// as a Haven ref (existence-checked) vs an opaque cross-store locator
+/// (shape-checked only), so a cross-store locator like `Entity:meal/abc` is never
+/// false-flagged as dangling.
+fn is_haven_ref(prefix: &str, target: &str) -> bool {
+    target
+        .strip_prefix(prefix)
+        .and_then(|rest| rest.strip_prefix('-'))
+        .is_some_and(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
+}
+
+/// Normalize a `(store, target)` key component for the canonical-conflict group:
+/// trim surrounding whitespace and a single trailing slash so `servo:X` and
+/// `servo:X/` collide, but distinct stores/targets never do (HV-69).
+fn normalize_key(s: &str) -> String {
+    s.trim().trim_end_matches('/').to_string()
+}
+
+/// One xref object folded from an artifact's `metadata.xref[]`, parsed
+/// **leniently** from raw JSON so a malformed payload (bad `relation`, missing
+/// `target`) is carried through and reported by the doctor scan rather than
+/// failing the load (HV-69).
+struct RawXref {
+    node_ref: String,
+    artifact: String,
+    role: ArtifactRole,
+    path: Option<String>,
+    /// The raw `relation` string as stored (for diagnostics), `None` if absent.
+    relation_raw: Option<String>,
+    /// True when `relation` is present but not a valid [`XrefRelation`].
+    relation_invalid: bool,
+    /// The parsed relation, when valid.
+    relation: Option<XrefRelation>,
+    store: Option<String>,
+    target: Option<String>,
+    canonical: bool,
+}
+
+impl RawXref {
+    /// Lenient parse of one `xref` array entry. Never errors — a non-object entry
+    /// yields an all-`None` shell that the doctor reports as structurally invalid.
+    fn parse(
+        node_ref: String,
+        artifact: String,
+        role: ArtifactRole,
+        path: Option<String>,
+        entry: &serde_json::Value,
+    ) -> Self {
+        let obj = entry.as_object();
+        let get_str = |k: &str| -> Option<String> {
+            obj.and_then(|o| o.get(k))
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+        };
+        let relation_value = obj.and_then(|o| o.get("relation"));
+        let relation_raw = relation_value.and_then(|v| v.as_str()).map(str::to_string);
+        let relation =
+            relation_value.and_then(|v| serde_json::from_value::<XrefRelation>(v.clone()).ok());
+        // Invalid only when a relation IS present but doesn't parse. An absent
+        // relation is reported via the missing-target/`relation_raw` path; we
+        // treat a present-but-bad relation as the dangling trigger.
+        let relation_invalid = relation_value.is_some() && relation.is_none();
+        let target = get_str("target").filter(|t| !t.trim().is_empty());
+        let canonical = obj
+            .and_then(|o| o.get("canonical"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        RawXref {
+            node_ref,
+            artifact,
+            role,
+            path,
+            relation_raw,
+            relation_invalid,
+            relation,
+            store: get_str("store"),
+            target,
+            canonical,
+        }
+    }
+
+    /// Project a well-formed raw xref into the typed [`Xref`] for the read verb.
+    /// Returns `None` for a structurally-invalid entry (no valid relation or no
+    /// target) — the verb reports only well-formed links; the doctor reports the
+    /// malformed ones.
+    fn to_xref(&self) -> Option<Xref> {
+        Some(Xref {
+            relation: self.relation?,
+            store: self.store.clone().unwrap_or_default(),
+            target: self.target.clone()?,
+            canonical: self.canonical,
+        })
+    }
+}
 
 /// Parameters for `artifact add`.
 #[derive(Debug, Default, Clone)]
@@ -45,6 +208,11 @@ pub struct NewArtifact {
     pub from_owner: Option<OwnerKind>,
     pub to_owner: Option<OwnerKind>,
     pub created_by: Option<String>,
+    /// Free-form JSON sidecar persisted to `artifacts.metadata`. Carries the
+    /// typed `xref[]` vocabulary (HV-69). `None` writes the DDL default `'{}'`;
+    /// a present `xref` array is validated on write (unknown `relation` /
+    /// missing `target` rejected — see [`validate_xref_metadata`]).
+    pub metadata: Option<serde_json::Value>,
     /// When the destination `(node, path)` already exists: `false` rejects the
     /// add (the safe default — a duplicate would shadow on read); `true` updates
     /// the existing row in place (rewrite file, recompute hash, bump revision).
@@ -258,6 +426,254 @@ impl Store {
         Ok(issues)
     }
 
+    // ---- xref (HV-69): typed cross-store links in `artifacts.metadata.xref[]` --
+
+    /// Every artifact in a project that carries a `metadata.xref` array, folded
+    /// into a flat list of [`RawXref`]s — one per xref object, parsed **leniently**
+    /// from raw `serde_json::Value` (not the typed [`Xref`] struct) so a malformed
+    /// xref arriving via raw DB / sync is *carried through* (and reported by the
+    /// doctor) rather than failing the load. This is the single fold both
+    /// [`Store::xref_integrity`] and [`Store::xref`]'s inbound scan share, so the
+    /// checker and the verb can never drift.
+    fn collect_project_xrefs(&self, project_id: i64) -> Result<Vec<RawXref>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT n.ref, a.public_id, a.role, a.path, a.metadata
+               FROM artifacts a
+               JOIN nodes n ON n.id = a.node_id
+              WHERE n.project_id = ?1
+                AND n.status NOT IN ('archived', 'superseded')
+              ORDER BY n.ref, a.public_id",
+        )?;
+        let rows: Vec<(String, String, ArtifactRole, Option<String>, String)> = stmt
+            .query_map([project_id], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+
+        let mut out = Vec::new();
+        for (node_ref, artifact, role, path, metadata) in rows {
+            // Lenient: a metadata cell that isn't valid JSON, or whose `xref` is
+            // not an array, simply yields no xrefs (it is not a load failure).
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(metadata.trim()) else {
+                continue;
+            };
+            let Some(arr) = value.get("xref").and_then(|x| x.as_array()) else {
+                continue;
+            };
+            for entry in arr {
+                out.push(RawXref::parse(
+                    node_ref.clone(),
+                    artifact.clone(),
+                    role,
+                    path.clone(),
+                    entry,
+                ));
+            }
+        }
+        Ok(out)
+    }
+
+    /// CLI-only `xref_integrity` doctor check (HV-69): a within-Haven, shape-only
+    /// scan over every artifact's `metadata.xref[]`. It flags (1) a canonical
+    /// conflict — more than one `canonical:true` xref for the same logical
+    /// `(store, target)`; (2) a dangling xref — a Haven-ref `target` resolving to
+    /// no live node, OR a structurally-invalid xref (missing `target`, or a
+    /// `relation` that fails the closed enum); (3) an unknown-`store` lint (warn
+    /// only). Cross-store targets are shape-checked only — Haven ships no client
+    /// to other stores, so their existence is structurally unverifiable. A clean
+    /// store returns an empty vec.
+    pub fn xref_integrity(&self) -> Result<Vec<IntegrityIssue>> {
+        let mut issues = Vec::new();
+        for proj in self.list_projects()? {
+            let raws = self.collect_project_xrefs(proj.id)?;
+
+            // (1) Canonical conflict: group canonical:true xrefs by (store, target)
+            // and flag any logical key claimed canonical by more than one.
+            let mut canonical_by_key: std::collections::BTreeMap<(String, String), Vec<String>> =
+                std::collections::BTreeMap::new();
+            for raw in &raws {
+                if raw.canonical {
+                    if let (Some(store), Some(target)) = (&raw.store, &raw.target) {
+                        canonical_by_key
+                            .entry((normalize_key(store), normalize_key(target)))
+                            .or_default()
+                            .push(raw.node_ref.clone());
+                    }
+                }
+            }
+            for ((store, target), nodes) in &canonical_by_key {
+                // Dedup node refs so the same node carrying two canonical xrefs to
+                // the same key still reads as one conflicting party per node.
+                let mut uniq: Vec<&String> = nodes.iter().collect();
+                uniq.sort();
+                uniq.dedup();
+                if uniq.len() > 1 {
+                    let names: Vec<String> = uniq.iter().map(|n| (*n).clone()).collect();
+                    for node in &names {
+                        issues.push(IntegrityIssue {
+                            kind: IntegrityKind::CanonicalConflict,
+                            node: node.clone(),
+                            detail: format!(
+                                "{} artifacts claim canonical:true for the same ({store}, {target}): {}",
+                                names.len(),
+                                names.join(", ")
+                            ),
+                        });
+                    }
+                }
+            }
+
+            // (2) Dangling + (3) unknown-store lint, per xref.
+            for raw in &raws {
+                // Structurally invalid: missing `target`, or a `relation` that is
+                // absent or fails the closed enum. `relation.is_none()` covers BOTH
+                // an absent relation and an unparseable one (both are required-field
+                // violations only reachable via raw DB / sync, since the write path
+                // rejects them).
+                if raw.target.is_none() || raw.relation.is_none() {
+                    let why = if raw.target.is_none() {
+                        "missing required `target`".to_string()
+                    } else if raw.relation_invalid {
+                        format!(
+                            "unknown `relation` {:?} (not one of canonical-source|mirror|derived-from|discussed-in)",
+                            raw.relation_raw.as_deref().unwrap_or("")
+                        )
+                    } else {
+                        "missing required `relation`".to_string()
+                    };
+                    issues.push(IntegrityIssue {
+                        kind: IntegrityKind::DanglingXref,
+                        node: raw.node_ref.clone(),
+                        detail: format!("{}: structurally-invalid xref — {why}", raw.node_ref),
+                    });
+                } else if let Some(target) = &raw.target {
+                    // A target shaped like this project's `<prefix>-N` is intended
+                    // as a Haven ref → existence-check it against a live node.
+                    // Anything else is an opaque cross-store locator (shape only).
+                    if is_haven_ref(&proj.ref_prefix, target)
+                        && self.resolve_live_node(proj.id, target)?.is_none()
+                    {
+                        issues.push(IntegrityIssue {
+                            kind: IntegrityKind::DanglingXref,
+                            node: raw.node_ref.clone(),
+                            detail: format!(
+                                "{}: xref target {target} is a Haven ref resolving to no live node",
+                                raw.node_ref
+                            ),
+                        });
+                    }
+                }
+
+                // (3) Unknown-store lint (warn only, never the sole rejecter).
+                if let Some(store) = &raw.store {
+                    if !RECOGNIZED_STORES.contains(&store.as_str()) {
+                        issues.push(IntegrityIssue {
+                            kind: IntegrityKind::UnknownStore,
+                            node: raw.node_ref.clone(),
+                            detail: format!(
+                                "{}: xref store {store:?} is not a recognized store ({})",
+                                raw.node_ref,
+                                RECOGNIZED_STORES.join(", ")
+                            ),
+                        });
+                    }
+                }
+            }
+        }
+        Ok(issues)
+    }
+
+    /// The dual-surface `haven xref <ref>` / `haven_xref` read verb (HV-69):
+    /// a deterministic, sorted report of every xref on the node's artifacts
+    /// (outbound) plus every other Haven artifact whose xref `target` resolves to
+    /// this node (inbound backlinks). Read-only; the inbound scan reuses the same
+    /// flat fold as [`Store::xref_integrity`].
+    pub fn xref(&self, project: Option<&str>, selector: &str) -> Result<XrefReport> {
+        let (project_id, _key) = self.require_project(project)?;
+        let node_id = self.resolve_node_id(project_id, selector)?;
+        let node_ref = self.node_ref(node_id)?;
+        let proj = self
+            .list_projects()?
+            .into_iter()
+            .find(|p| p.id == project_id)
+            .ok_or_else(|| HavenError::NotFound("project".into()))?;
+
+        let raws = self.collect_project_xrefs(project_id)?;
+
+        // Outbound: every (well-formed) xref on this node's own artifacts.
+        let mut outbound: Vec<XrefOut> = raws
+            .iter()
+            .filter(|r| r.node_ref == node_ref)
+            .filter_map(|r| {
+                r.to_xref().map(|xref| XrefOut {
+                    artifact: r.artifact.clone(),
+                    role: r.role,
+                    path: r.path.clone(),
+                    xref,
+                })
+            })
+            .collect();
+        outbound.sort_by(|a, b| {
+            (&a.path, &a.xref.store, &a.xref.target, &a.artifact).cmp(&(
+                &b.path,
+                &b.xref.store,
+                &b.xref.target,
+                &b.artifact,
+            ))
+        });
+
+        // Inbound: every OTHER node's artifact whose Haven-ref target resolves to
+        // this node. Cross-store locators never produce a backlink (they don't
+        // resolve to a Haven node).
+        let mut inbound: Vec<XrefIn> = Vec::new();
+        for r in &raws {
+            if r.node_ref == node_ref {
+                continue;
+            }
+            let Some(target) = &r.target else { continue };
+            if !is_haven_ref(&proj.ref_prefix, target) {
+                continue;
+            }
+            if self.resolve_live_node(project_id, target)? == Some(node_id) {
+                if let Some(xref) = r.to_xref() {
+                    inbound.push(XrefIn {
+                        source: r.node_ref.clone(),
+                        artifact: r.artifact.clone(),
+                        role: r.role,
+                        path: r.path.clone(),
+                        xref,
+                    });
+                }
+            }
+        }
+        inbound.sort_by(|a, b| {
+            (&a.source, &a.xref.store, &a.artifact).cmp(&(&b.source, &b.xref.store, &b.artifact))
+        });
+
+        Ok(XrefReport {
+            node: node_ref,
+            outbound,
+            inbound,
+        })
+    }
+
+    /// Resolve a selector to a **live** (not archived/superseded) node id within a
+    /// project, or `None`. Unlike [`Store::resolve_node_id`] this filters dead
+    /// nodes (so a dangling-xref scan treats an archived target as dangling) and
+    /// never errors on a non-match.
+    fn resolve_live_node(&self, project_id: i64, selector: &str) -> Result<Option<i64>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT id FROM nodes
+                  WHERE (public_id = ?1 OR (project_id = ?2 AND ref = ?1))
+                    AND status NOT IN ('archived', 'superseded')",
+                params![selector, project_id],
+                |r| r.get(0),
+            )
+            .optional()?)
+    }
+
     /// Register an artifact on a node. For `kind = file`, the content is written
     /// into `items/<ref>/` (or `items/<ref>/notes/` for handoffs) and its sha256
     /// recorded — from either a source `file` (copied) or inline `content` (the
@@ -279,6 +695,18 @@ impl Store {
                 "a handoff artifact must carry --from and --to".into(),
             ));
         }
+
+        // Validate any `metadata.xref` on the write path (reject an unknown
+        // `relation` or a missing `target`) and serialize for binding. An empty /
+        // absent metadata serializes to the DDL default `'{}'` so it reads back as
+        // `None` — byte-stable.
+        if let Some(meta) = &new.metadata {
+            validate_xref_metadata(meta)?;
+        }
+        let metadata_json = match &new.metadata {
+            Some(m) if !m.is_null() => m.to_string(),
+            _ => "{}".to_string(),
+        };
 
         // Resolve the row fields plus, for file kinds, the pending on-disk write —
         // deferred so the (node, path) collision check below can reject *before*
@@ -383,8 +811,9 @@ impl Store {
                 "UPDATE artifacts
                     SET role = ?1, kind = ?2, uri = ?3, title = ?4, excerpt = ?5,
                         from_owner = ?6, to_owner = ?7, content_hash = ?8,
+                        metadata = ?9,
                         revision = revision + 1, sync_state = 'local'
-                  WHERE id = ?9",
+                  WHERE id = ?10",
                 params![
                     new.role,
                     new.kind,
@@ -394,6 +823,7 @@ impl Store {
                     new.from_owner,
                     new.to_owner,
                     content_hash,
+                    metadata_json,
                     existing.id,
                 ],
             )?;
@@ -403,8 +833,8 @@ impl Store {
             self.conn.execute(
                 "INSERT INTO artifacts
                    (public_id, node_id, role, kind, path, uri, title, excerpt,
-                    from_owner, to_owner, content_hash, created_by, client_id)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                    from_owner, to_owner, content_hash, metadata, created_by, client_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
                 params![
                     public_id,
                     node_id,
@@ -417,6 +847,7 @@ impl Store {
                     new.from_owner,
                     new.to_owner,
                     content_hash,
+                    metadata_json,
                     new.created_by,
                     new_uuid(),
                 ],
@@ -1693,6 +2124,443 @@ mod tests {
                 .iter()
                 .any(|i| i.node == batch.reference || i.node == healthy_member.reference),
             "healthy pack/member must stay clean: {issues:?}"
+        );
+    }
+
+    // ---- HV-69: artifact metadata + typed xref vocabulary ------------------
+
+    /// Add an external artifact carrying the given metadata JSON on `item`.
+    fn add_xref_artifact(
+        s: &Store,
+        item: &str,
+        role: ArtifactRole,
+        metadata: serde_json::Value,
+    ) -> Artifact {
+        s.add_artifact(
+            None,
+            item,
+            NewArtifact {
+                role,
+                kind: ArtifactKind::External,
+                uri: Some("https://example.test/x".into()),
+                metadata: Some(metadata),
+                ..Default::default()
+            },
+        )
+        .unwrap()
+    }
+
+    fn new_node(s: &Store, title: &str) -> Item {
+        s.add_item(
+            None,
+            NewItem {
+                title: title.into(),
+                ..Default::default()
+            },
+        )
+        .unwrap()
+    }
+
+    /// (1) Round-trip: an artifact with an xref array reads back identically.
+    #[test]
+    fn artifact_metadata_xref_roundtrip() {
+        let tmp = tempfile::tempdir().unwrap();
+        let s = store_with_root(tmp.path());
+        let node = new_node(&s, "node with xref");
+
+        let meta = serde_json::json!({
+            "xref": [
+                { "relation": "canonical-source", "store": "servo",
+                  "target": "Entity:meal/abc123", "canonical": true }
+            ]
+        });
+        let added = add_xref_artifact(&s, &node.reference, ArtifactRole::Source, meta.clone());
+        assert_eq!(
+            added.metadata.as_ref(),
+            Some(&meta),
+            "metadata round-trips on the returned row"
+        );
+
+        // And on a fresh load.
+        let reloaded = s
+            .list_artifacts(None, &node.reference, None)
+            .unwrap()
+            .into_iter()
+            .find(|a| a.public_id == added.public_id)
+            .unwrap();
+        assert_eq!(reloaded.metadata.as_ref(), Some(&meta));
+
+        // The typed view parses the xref back into the closed vocabulary.
+        let report = s.xref(None, &node.reference).unwrap();
+        assert_eq!(report.outbound.len(), 1);
+        assert_eq!(
+            report.outbound[0].xref.relation,
+            XrefRelation::CanonicalSource
+        );
+        assert_eq!(report.outbound[0].xref.store, "servo");
+        assert_eq!(report.outbound[0].xref.target, "Entity:meal/abc123");
+        assert!(report.outbound[0].xref.canonical);
+    }
+
+    /// (4) An artifact with no metadata serializes byte-identically to before the
+    /// `metadata` field existed: no `metadata` key in the JSON, and the stored
+    /// cell is the DDL default `{}`.
+    #[test]
+    fn empty_metadata_artifact_is_byte_stable() {
+        let tmp = tempfile::tempdir().unwrap();
+        let s = store_with_root(tmp.path());
+        let node = new_node(&s, "plain node");
+
+        let art = s
+            .add_artifact(
+                None,
+                &node.reference,
+                NewArtifact {
+                    role: ArtifactRole::Spec,
+                    kind: ArtifactKind::File,
+                    content: Some("body".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        // Read path: metadata is None.
+        assert!(art.metadata.is_none(), "empty metadata reads as None");
+        // Serialize path: no `metadata` key at all.
+        let json = serde_json::to_value(&art).unwrap();
+        assert!(
+            json.get("metadata").is_none(),
+            "an empty-metadata artifact must not serialize a `metadata` key: {json}"
+        );
+        // Storage path: the cell holds the DDL default, not a written-through value.
+        let stored: String = s
+            .conn
+            .query_row(
+                "SELECT metadata FROM artifacts WHERE public_id = ?1",
+                params![art.public_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored, "{}", "empty metadata is stored as the DDL default");
+    }
+
+    /// The write path REJECTS an unknown `relation` and a missing `target`.
+    #[test]
+    fn add_artifact_rejects_invalid_xref_on_write() {
+        let tmp = tempfile::tempdir().unwrap();
+        let s = store_with_root(tmp.path());
+        let node = new_node(&s, "node");
+
+        let bad_relation = serde_json::json!({
+            "xref": [ { "relation": "totally-made-up", "store": "servo", "target": "x" } ]
+        });
+        let err = s.add_artifact(
+            None,
+            &node.reference,
+            NewArtifact {
+                role: ArtifactRole::Source,
+                kind: ArtifactKind::External,
+                uri: Some("https://x".into()),
+                metadata: Some(bad_relation),
+                ..Default::default()
+            },
+        );
+        assert_eq!(
+            err.unwrap_err().code(),
+            "invalid",
+            "bad relation rejected on write"
+        );
+
+        let missing_target = serde_json::json!({
+            "xref": [ { "relation": "mirror", "store": "servo" } ]
+        });
+        let err = s.add_artifact(
+            None,
+            &node.reference,
+            NewArtifact {
+                role: ArtifactRole::Source,
+                kind: ArtifactKind::External,
+                uri: Some("https://x".into()),
+                metadata: Some(missing_target),
+                ..Default::default()
+            },
+        );
+        assert_eq!(
+            err.unwrap_err().code(),
+            "invalid",
+            "missing target rejected on write"
+        );
+    }
+
+    /// (3) The verb lists OUTBOUND xrefs and INBOUND backlinks correctly, and
+    /// (5) a cross-store target produces no backlink (it doesn't resolve to a node).
+    #[test]
+    fn xref_verb_outbound_and_inbound_backlinks() {
+        let tmp = tempfile::tempdir().unwrap();
+        let s = store_with_root(tmp.path());
+        let hub = new_node(&s, "hub");
+        let linker = new_node(&s, "linker");
+
+        // hub's own artifact has an outbound xref to a cross-store locator.
+        add_xref_artifact(
+            &s,
+            &hub.reference,
+            ArtifactRole::Source,
+            serde_json::json!({
+                "xref": [ { "relation": "mirror", "store": "vault", "target": "vault://note/42" } ]
+            }),
+        );
+        // linker's artifact xrefs the hub by its Haven ref → an inbound backlink for hub.
+        add_xref_artifact(
+            &s,
+            &linker.reference,
+            ArtifactRole::Source,
+            serde_json::json!({
+                "xref": [ { "relation": "derived-from", "store": "haven", "target": hub.reference } ]
+            }),
+        );
+
+        let report = s.xref(None, &hub.reference).unwrap();
+        // Outbound: hub's one cross-store xref.
+        assert_eq!(report.outbound.len(), 1, "{report:?}");
+        assert_eq!(report.outbound[0].xref.target, "vault://note/42");
+        // Inbound: the backlink from linker.
+        assert_eq!(report.inbound.len(), 1, "{report:?}");
+        assert_eq!(report.inbound[0].source, linker.reference);
+        assert_eq!(report.inbound[0].xref.relation, XrefRelation::DerivedFrom);
+
+        // The cross-store target on hub is shape-checked only — never existence-
+        // flagged by doctor, and never produces a (false) backlink.
+        let issues = s.xref_integrity().unwrap();
+        assert!(
+            !issues.iter().any(|i| i.kind == IntegrityKind::DanglingXref),
+            "cross-store + live-ref targets must not dangle: {issues:?}"
+        );
+    }
+
+    /// (2) The doctor flags a canonical conflict, a dangling Haven-ref target, a
+    /// structurally-invalid xref, and an unknown-store lint; a CLEAN store passes.
+    #[test]
+    fn xref_integrity_flags_conflict_dangling_invalid_and_unknown_store() {
+        let tmp = tempfile::tempdir().unwrap();
+        let s = store_with_root(tmp.path());
+
+        // Clean baseline: a single well-formed xref to a live Haven node passes.
+        let target_node = new_node(&s, "target");
+        let pointer = new_node(&s, "pointer");
+        add_xref_artifact(
+            &s,
+            &pointer.reference,
+            ArtifactRole::Source,
+            serde_json::json!({
+                "xref": [ { "relation": "discussed-in", "store": "github",
+                            "target": target_node.reference } ]
+            }),
+        );
+        assert!(
+            s.xref_integrity().unwrap().is_empty(),
+            "a well-formed xref to a live node + known store must pass"
+        );
+
+        // (a) Canonical conflict: two artifacts both claim canonical:true for the
+        // same (store, target).
+        let a1 = new_node(&s, "canon-1");
+        let a2 = new_node(&s, "canon-2");
+        add_xref_artifact(
+            &s,
+            &a1.reference,
+            ArtifactRole::Source,
+            serde_json::json!({
+                "xref": [ { "relation": "canonical-source", "store": "servo",
+                            "target": "Entity:meal/x", "canonical": true } ]
+            }),
+        );
+        add_xref_artifact(
+            &s,
+            &a2.reference,
+            ArtifactRole::Source,
+            serde_json::json!({
+                "xref": [ { "relation": "canonical-source", "store": "servo",
+                            "target": "Entity:meal/x", "canonical": true } ]
+            }),
+        );
+
+        // (b) Dangling Haven-ref target: a `HV-9999` that resolves to no live node.
+        let dangler = new_node(&s, "dangler");
+        add_xref_artifact(
+            &s,
+            &dangler.reference,
+            ArtifactRole::Source,
+            serde_json::json!({
+                "xref": [ { "relation": "mirror", "store": "haven", "target": "HV-9999" } ]
+            }),
+        );
+
+        // (c) Structurally-invalid xref (bad relation) injected via raw DB, since
+        // the write path would reject it — simulates a malformed row from sync.
+        let raw_bad = new_node(&s, "raw-bad");
+        s.conn
+            .execute(
+                "INSERT INTO artifacts (public_id, node_id, role, kind, uri, metadata, client_id)
+                 VALUES ('raw-bad-art', ?1, 'source', 'external', 'https://x', ?2, 'test')",
+                params![
+                    raw_bad.id,
+                    r#"{"xref":[{"relation":"not-a-real-relation","store":"servo","target":"z"}]}"#
+                ],
+            )
+            .unwrap();
+
+        // (d) Unknown-store lint.
+        let oddstore = new_node(&s, "oddstore");
+        add_xref_artifact(
+            &s,
+            &oddstore.reference,
+            ArtifactRole::Source,
+            serde_json::json!({
+                "xref": [ { "relation": "mirror", "store": "notion", "target": "page/7" } ]
+            }),
+        );
+
+        let issues = s.xref_integrity().unwrap();
+        let has =
+            |k: IntegrityKind, node: &str| issues.iter().any(|i| i.kind == k && i.node == node);
+        assert!(
+            has(IntegrityKind::CanonicalConflict, &a1.reference)
+                && has(IntegrityKind::CanonicalConflict, &a2.reference),
+            "both canonical claimants flagged: {issues:?}"
+        );
+        assert!(
+            has(IntegrityKind::DanglingXref, &dangler.reference),
+            "dangling Haven-ref target flagged: {issues:?}"
+        );
+        assert!(
+            has(IntegrityKind::DanglingXref, &raw_bad.reference),
+            "structurally-invalid (bad relation) xref flagged: {issues:?}"
+        );
+        assert!(
+            has(IntegrityKind::UnknownStore, &oddstore.reference),
+            "unknown-store lint flagged: {issues:?}"
+        );
+        // The clean pointer→live-node xref is never flagged.
+        assert!(
+            !issues.iter().any(|i| i.node == pointer.reference),
+            "the clean pointer must stay clean: {issues:?}"
+        );
+        // The malformed-relation load did not error the scan — it was REPORTED.
+        // (Proven by reaching here with the assertion above passing.)
+    }
+
+    /// A raw-DB xref with a valid target but NO `relation` is structurally
+    /// invalid → dangling (the write path rejects it, so it only arrives via sync).
+    #[test]
+    fn xref_missing_relation_is_dangling() {
+        let tmp = tempfile::tempdir().unwrap();
+        let s = store_with_root(tmp.path());
+        let live = new_node(&s, "live target");
+        let bad = new_node(&s, "missing-relation");
+        // Inject directly: a well-formed-looking xref to a LIVE node but with no
+        // `relation`. Without the missing-relation check this would pass (target
+        // resolves), silently accepting a required-field violation.
+        s.conn
+            .execute(
+                "INSERT INTO artifacts (public_id, node_id, role, kind, uri, metadata, client_id)
+                 VALUES ('no-rel-art', ?1, 'source', 'external', 'https://x', ?2, 'test')",
+                params![
+                    bad.id,
+                    format!(
+                        r#"{{"xref":[{{"store":"haven","target":"{}"}}]}}"#,
+                        live.reference
+                    )
+                ],
+            )
+            .unwrap();
+        let issues = s.xref_integrity().unwrap();
+        assert!(
+            issues.iter().any(|i| i.kind == IntegrityKind::DanglingXref
+                && i.node == bad.reference
+                && i.detail.contains("missing required `relation`")),
+            "an xref with no `relation` must be flagged dangling: {issues:?}"
+        );
+    }
+
+    /// A live-node target that is later ARCHIVED becomes dangling (resolve_live).
+    #[test]
+    fn xref_to_archived_target_is_dangling() {
+        let tmp = tempfile::tempdir().unwrap();
+        let s = store_with_root(tmp.path());
+        let target = new_node(&s, "soon-archived");
+        let pointer = new_node(&s, "pointer");
+        add_xref_artifact(
+            &s,
+            &pointer.reference,
+            ArtifactRole::Source,
+            serde_json::json!({
+                "xref": [ { "relation": "mirror", "store": "haven", "target": target.reference } ]
+            }),
+        );
+        assert!(s.xref_integrity().unwrap().is_empty(), "live target passes");
+
+        s.archive_item(None, &target.reference, None, None).unwrap();
+        let issues = s.xref_integrity().unwrap();
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.kind == IntegrityKind::DanglingXref && i.node == pointer.reference),
+            "an xref to an archived target is dangling: {issues:?}"
+        );
+        // And the backlink disappears from the verb (archived node not scanned;
+        // the pointer's target no longer resolves live).
+        // (The pointer's own outbound xref still shows, but no inbound on target.)
+    }
+
+    /// `--replace` re-write of an artifact updates its metadata (UPDATE path binds it).
+    #[test]
+    fn replace_artifact_updates_metadata() {
+        let tmp = tempfile::tempdir().unwrap();
+        let s = store_with_root(tmp.path());
+        let node = new_node(&s, "node");
+
+        let first = s
+            .add_artifact(
+                None,
+                &node.reference,
+                NewArtifact {
+                    role: ArtifactRole::Spec,
+                    kind: ArtifactKind::File,
+                    content: Some("v1".into()),
+                    name: Some("doc.md".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert!(first.metadata.is_none());
+
+        let updated = s
+            .add_artifact(
+                None,
+                &node.reference,
+                NewArtifact {
+                    role: ArtifactRole::Spec,
+                    kind: ArtifactKind::File,
+                    content: Some("v2".into()),
+                    name: Some("doc.md".into()),
+                    metadata: Some(serde_json::json!({
+                        "xref": [ { "relation": "mirror", "store": "vault", "target": "v://1" } ]
+                    })),
+                    replace: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(updated.public_id, first.public_id, "replace keeps identity");
+        assert_eq!(
+            updated
+                .metadata
+                .as_ref()
+                .and_then(|m| m.get("xref"))
+                .map(|x| x.as_array().unwrap().len()),
+            Some(1),
+            "replace UPDATE binds the new metadata: {:?}",
+            updated.metadata
         );
     }
 }

@@ -87,6 +87,8 @@ enum Command {
     Next(NextArgs),
     /// Untriaged floaters: uncommitted, live, no acceptance yet — the triage queue.
     Inbox(InboxArgs),
+    /// Cross-store links on a node's artifacts: outbound xrefs + inbound backlinks.
+    Xref(XrefArgs),
     /// Decomposition edges: HV-3 is composed of HV-7, HV-8.
     Decompose(DecomposeArgs),
     /// Dependency edges: HV-5 depends on (is blocked by) HV-4.
@@ -770,6 +772,13 @@ struct GraphArgs {
     lineage: bool,
 }
 
+#[derive(Args)]
+struct XrefArgs {
+    /// The item whose artifacts' cross-store links to report (a `ref` or public_id).
+    #[arg(value_name = "REF")]
+    reference: String,
+}
+
 fn main() {
     let cli = Cli::parse();
     // Loud, on every command: a quarantined snapshot freezes rotation until the
@@ -850,6 +859,12 @@ fn run(cli: &Cli) -> Result<Output> {
             let s = config::open_store()?;
             Ok(Output::Json(serde_json::to_value(
                 s.project_graph(project, a.lineage)?,
+            )?))
+        }
+        Command::Xref(a) => {
+            let s = config::open_store()?;
+            Ok(Output::Json(serde_json::to_value(
+                s.xref(project, &a.reference)?,
             )?))
         }
         Command::Docs => {
@@ -1064,6 +1079,9 @@ fn cmd_artifact(project: Option<&str>, cmd: &ArtifactCmd) -> Result<Output> {
                 from_owner: opt_parse(&a.from, OwnerKind::parse)?,
                 to_owner: opt_parse(&a.to, OwnerKind::parse)?,
                 created_by: a.by.clone(),
+                // No xref write flag yet — xref metadata is authored via the core
+                // NewArtifact path (the read verb + doctor only need read). HV-69.
+                metadata: None,
                 replace: a.replace,
             };
             Ok(Output::Json(serde_json::to_value(s.add_artifact(
@@ -1852,6 +1870,11 @@ fn cmd_doctor() -> Result<Output> {
                     IntegrityKind::TombstonePack => tombstones.push(i.node.as_str()),
                     IntegrityKind::PointerToTombstone => pointers.push(i.node.as_str()),
                     IntegrityKind::DuplicateArtifactRow => dupes.push(i.node.as_str()),
+                    // xref kinds are produced only by `xref_integrity`, reported in
+                    // its own block below — never by `context_pack_integrity`.
+                    IntegrityKind::CanonicalConflict
+                    | IntegrityKind::DanglingXref
+                    | IntegrityKind::UnknownStore => {}
                 }
             }
             let mut parts = Vec::new();
@@ -1882,6 +1905,61 @@ fn cmd_doctor() -> Result<Output> {
             "context_pack_integrity",
             "warn",
             format!("integrity scan failed: {e}"),
+        )),
+    }
+
+    // Xref integrity (HV-69): canonical conflicts, dangling/structurally-invalid
+    // xrefs, and unrecognized-store lints across every artifact's metadata.xref[].
+    // CLI-only (no haven_doctor), a warn — never store-fatal.
+    match s.xref_integrity() {
+        Ok(issues) if issues.is_empty() => checks.push(check(
+            "xref_integrity",
+            "ok",
+            "no canonical conflicts, dangling xrefs, or unknown-store lints".into(),
+        )),
+        Ok(issues) => {
+            let mut conflicts = Vec::new();
+            let mut dangling = Vec::new();
+            let mut unknown = Vec::new();
+            for i in &issues {
+                match i.kind {
+                    IntegrityKind::CanonicalConflict => conflicts.push(i.node.as_str()),
+                    IntegrityKind::DanglingXref => dangling.push(i.node.as_str()),
+                    IntegrityKind::UnknownStore => unknown.push(i.node.as_str()),
+                    // Context-pack kinds come from a different scan, never here.
+                    IntegrityKind::TombstonePack
+                    | IntegrityKind::PointerToTombstone
+                    | IntegrityKind::DuplicateArtifactRow => {}
+                }
+            }
+            let mut parts = Vec::new();
+            if !conflicts.is_empty() {
+                parts.push(format!(
+                    "{} canonical conflict(s) [{}]",
+                    conflicts.len(),
+                    conflicts.join(", ")
+                ));
+            }
+            if !dangling.is_empty() {
+                parts.push(format!(
+                    "{} dangling xref(s) [{}]",
+                    dangling.len(),
+                    dangling.join(", ")
+                ));
+            }
+            if !unknown.is_empty() {
+                parts.push(format!(
+                    "{} unknown-store lint(s) [{}]",
+                    unknown.len(),
+                    unknown.join(", ")
+                ));
+            }
+            checks.push(check("xref_integrity", "warn", parts.join("; ")));
+        }
+        Err(e) => checks.push(check(
+            "xref_integrity",
+            "warn",
+            format!("xref scan failed: {e}"),
         )),
     }
 

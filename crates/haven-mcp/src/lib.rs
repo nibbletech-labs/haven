@@ -471,6 +471,10 @@ fn call_tool(store: &Store, name: &str, a: &Value) -> Result<Value> {
                 "items": items,
             }))
         }
+        // Cross-store links on a node's artifacts (HV-69): outbound xrefs + inbound
+        // backlinks, as one deterministic, sorted report. Read-only; same core
+        // method as CLI `haven xref`.
+        "haven_xref" => to_value(store.xref(project, req_str(a, "ref")?)?),
         "haven_get_item" => {
             let includes = str_array(a, "include")
                 .iter()
@@ -733,6 +737,9 @@ fn call_tool(store: &Store, name: &str, a: &Value) -> Result<Value> {
                 from_owner: opt_str(a, "from").map(OwnerKind::parse).transpose()?,
                 to_owner: opt_str(a, "to").map(OwnerKind::parse).transpose()?,
                 created_by: opt_str(a, "by").map(String::from),
+                // No xref write flag yet — xref metadata is authored via the core
+                // NewArtifact path (the read verb + doctor only need read). HV-69.
+                metadata: None,
                 replace: opt_bool(a, "replace").unwrap_or(false),
             };
             to_value(store.add_artifact(project, req_str(a, "ref")?, new)?)
@@ -903,6 +910,8 @@ fn tools_list() -> Value {
           "inputSchema": obj(json!({"project":{"type":"string"},"status":{"type":"string"},"type":{"type":"string"},"owner":{"type":"string"},"committed":{"type":"boolean"},"icebox":{"type":"boolean"},"group":{"type":"string"},"wait":{"type":"string"},"stale":{"type":"integer"},"limit":{"type":"integer"},"offset":{"type":"integer"}}), json!([])) },
         { "name": "haven_inbox", "description": "Untriaged floaters: uncommitted, live (not archived/superseded), with no acceptance (done_looks_like) set yet — the triage queue behind capture→triage→next. Same compact, paginated {total, count, offset, items[]} envelope as haven_list_items.",
           "inputSchema": obj(json!({"project":{"type":"string"},"owner":{"type":"string"},"limit":{"type":"integer"},"offset":{"type":"integer"}}), json!([])) },
+        { "name": "haven_xref", "description": "Cross-store links (HV-69) on a node's artifacts: a deterministic, sorted {node, outbound[], inbound[]} report. `outbound` is every typed xref {relation, store, target, canonical?} on this node's own artifacts; `inbound` is every other Haven artifact whose xref `target` resolves to this node (backlinks). Read-only. Cross-store targets are reported as-is; only Haven-ref targets resolve to nodes.",
+          "inputSchema": obj(json!({"ref":{"type":"string"},"project":{"type":"string"}}), json!(["ref"])) },
         { "name": "haven_get_item", "description": "Fetch one item in full (prose + requested edges/artifacts/lineage); internal sync fields (public_id/sync_state/revision) are omitted. The detail door for an item shown compactly by haven_list_items/haven_next.",
           "inputSchema": obj(json!({"ref":{"type":"string"},"project":{"type":"string"},"include":{"type":"array","items":{"type":"string"}}}), json!(["ref"])) },
         { "name": "haven_next", "description": "Items ready to dispatch (committed, ready, unblocked). Returns a compact view per item (identity + axes, no prose — fetch full via haven_get_item).",
@@ -1008,8 +1017,9 @@ mod tests {
         assert_eq!(out.len(), 2);
         assert_eq!(out[0]["result"]["serverInfo"]["name"], "haven");
         let tools = out[1]["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 26);
+        assert_eq!(tools.len(), 27);
         assert!(tools.iter().any(|t| t["name"] == "haven_inbox"));
+        assert!(tools.iter().any(|t| t["name"] == "haven_xref"));
         assert!(tools.iter().any(|t| t["name"] == "haven_next"));
         assert!(tools.iter().any(|t| t["name"] == "haven_next_explain"));
         assert!(tools.iter().any(|t| t["name"] == "haven_resolve_live"));

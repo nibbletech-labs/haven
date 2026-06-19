@@ -198,6 +198,111 @@ pub enum IntegrityKind {
     PointerToTombstone,
     /// More than one artifact row for the same `(node, path)`.
     DuplicateArtifactRow,
+    /// More than one `canonical:true` xref for the same logical `(store, target)`
+    /// — two artifacts both claim to be the canonical copy (HV-69).
+    CanonicalConflict,
+    /// An xref whose `target` is a Haven ref resolving to no live node, OR a
+    /// structurally-invalid xref (missing `target`, or a `relation` that fails to
+    /// deserialize into the closed [`XrefRelation`] enum) — the latter can only
+    /// arrive via raw DB / sync from another client (HV-69).
+    DanglingXref,
+    /// An xref whose `store` is not in the recognized allowlist — a warn-only
+    /// lint, never the sole basis for rejection (HV-69).
+    UnknownStore,
+}
+
+/// The closed relation vocabulary on a [`Xref`]. A plain serde enum (kebab-case
+/// wire form), validated on the metadata write path — *not* a `sql_enum!` DB
+/// column, since `relation` is a JSON sub-field of `artifacts.metadata`, not a
+/// column. An unknown value fails to deserialize and is rejected on write (HV-69).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum XrefRelation {
+    /// This artifact is the authoritative origin the cross-store copy derives from.
+    CanonicalSource,
+    /// A mirror of content that lives canonically elsewhere.
+    Mirror,
+    /// Content derived/transformed from the target.
+    DerivedFrom,
+    /// The target is a discussion / thread about this artifact.
+    DiscussedIn,
+}
+
+/// A typed cross-store link living in `artifacts.metadata.xref[]` (HV-69). Turns
+/// the loose provenance convention into a machine-checkable invariant: which
+/// store holds the canonical copy, and what relation this artifact bears to it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Xref {
+    /// What relation this artifact bears to `target` — closed enum, rejected on
+    /// write when the wire value is unknown.
+    pub relation: XrefRelation,
+    /// The store the target lives in (`servo` / `vault` / `github` / `haven` / …)
+    /// — a free string; an unrecognized value is a doctor *lint* only, never
+    /// rejected (stores legitimately proliferate).
+    pub store: String,
+    /// The target locator — required. When it parses as a Haven ref (this
+    /// project's `<prefix>-N` shape) it is existence-checked against a live node;
+    /// otherwise it is an opaque cross-store locator, shape-checked only.
+    pub target: String,
+    /// Whether this artifact points at the canonical copy. Defaults `false`;
+    /// more than one `canonical:true` for the same `(store, target)` is a
+    /// [`IntegrityKind::CanonicalConflict`].
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub canonical: bool,
+}
+
+/// `serde` skip predicate for a `bool` that defaults `false` — keeps a
+/// non-canonical xref serializing without a `canonical` key (byte-stability).
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
+/// One outbound xref in a [`XrefReport`], carrying the owning artifact's identity
+/// for traceability.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct XrefOut {
+    /// The owning artifact's `public_id`.
+    pub artifact: String,
+    /// The owning artifact's role.
+    pub role: ArtifactRole,
+    /// The owning artifact's `path` (None for external artifacts).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    /// The xref itself.
+    #[serde(flatten)]
+    pub xref: Xref,
+}
+
+/// One inbound backlink in a [`XrefReport`]: another Haven artifact whose xref
+/// `target` resolves to the queried node.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct XrefIn {
+    /// The `ref` of the node owning the back-linking artifact.
+    pub source: String,
+    /// The back-linking artifact's `public_id`.
+    pub artifact: String,
+    /// The back-linking artifact's role.
+    pub role: ArtifactRole,
+    /// The back-linking artifact's `path` (None for external artifacts).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    /// The xref pointing at the queried node.
+    #[serde(flatten)]
+    pub xref: Xref,
+}
+
+/// The deterministic report returned by `haven xref <ref>` / `haven_xref`: every
+/// xref on the node's artifacts (outbound) plus every other Haven artifact whose
+/// xref `target` resolves to this node (inbound backlinks). Read-only, sorted, so
+/// the JSON is vault-diffable (HV-69).
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct XrefReport {
+    /// The queried node's `ref`.
+    pub node: String,
+    /// Every xref on every artifact of the queried node, sorted.
+    pub outbound: Vec<XrefOut>,
+    /// Every other Haven artifact whose xref `target` resolves to this node, sorted.
+    pub inbound: Vec<XrefIn>,
 }
 
 /// A project — namespace for a backlog, one per product/repo.
@@ -263,6 +368,12 @@ pub struct Artifact {
     pub content_hash: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub remote_path: Option<String>,
+    /// Free-form JSON sidecar (the `artifacts.metadata` column). Carries the
+    /// typed `xref[]` vocabulary (HV-69). `None` when the column is empty/`{}`,
+    /// and skipped on serialize so an artifact with no metadata reads
+    /// byte-identically to before this field existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<serde_json::Value>,
     pub created_at: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub created_by: Option<String>,

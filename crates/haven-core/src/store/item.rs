@@ -1113,10 +1113,18 @@ impl Store {
         let mut stmt = self.conn.prepare(
             "SELECT id, public_id, role, kind, path, uri, title, excerpt,
                     from_owner, to_owner, content_hash, remote_path,
-                    created_at, created_by, revision, sync_state
+                    created_at, created_by, revision, sync_state, metadata
              FROM artifacts WHERE node_id = ?1 ORDER BY id",
         )?;
         let rows = stmt.query_map([node_id], |row: &Row<'_>| {
+            let metadata_str: String = row.get(16)?;
+            let metadata = parse_metadata(&metadata_str).map_err(|e| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    16,
+                    rusqlite::types::Type::Text,
+                    Box::new(e),
+                )
+            })?;
             Ok(Artifact {
                 id: row.get(0)?,
                 public_id: row.get(1)?,
@@ -1131,6 +1139,7 @@ impl Store {
                 to_owner: row.get(9)?,
                 content_hash: row.get(10)?,
                 remote_path: row.get(11)?,
+                metadata,
                 created_at: row.get(12)?,
                 created_by: row.get(13)?,
                 revision: row.get(14)?,
@@ -1139,6 +1148,25 @@ impl Store {
         })?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
+}
+
+/// Parse the `artifacts.metadata` TEXT column into `Option<Value>`. The DDL
+/// default is `'{}'`, and we normalize empty / `{}` / `null` to `None` so an
+/// artifact carrying no metadata serializes byte-identically to before the
+/// field existed. Parsed leniently as a raw [`serde_json::Value`] (not the typed
+/// xref struct) so a malformed xref arriving via raw DB / sync still loads and is
+/// reported by the doctor scan rather than failing the whole read.
+pub(crate) fn parse_metadata(s: &str) -> serde_json::Result<Option<serde_json::Value>> {
+    let trimmed = s.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    let value: serde_json::Value = serde_json::from_str(trimmed)?;
+    Ok(match &value {
+        serde_json::Value::Null => None,
+        serde_json::Value::Object(map) if map.is_empty() => None,
+        _ => Some(value),
+    })
 }
 
 /// What to hydrate on `item get` (SPEC §2 `--include`).

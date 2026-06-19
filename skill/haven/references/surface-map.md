@@ -115,6 +115,7 @@ haven sync [status] [--watch]
 |---|---|
 | `haven_list_items` | `status?, type?, owner?, committed?, icebox?, group?, wait?, stale?, limit?, offset?` — returns a compact, paginated envelope `{total, count, offset, items[]}` (default `limit` 100) |
 | `haven_inbox` | `owner?, limit?, offset?` — untriaged floaters (uncommitted, live, no `done_looks_like` yet); same compact paginated envelope as `haven_list_items` |
+| `haven_xref` | **`ref`** — cross-store links on the node's artifacts: a sorted `{node, outbound[], inbound[]}` report (outbound xrefs + inbound backlinks); read-only |
 | `haven_get_item` | **`ref`**, `include?: ["edges","artifacts","lineage"]` — the full item (prose + includes); the detail door |
 | `haven_next` | `owner?, limit?` — compact items |
 | `haven_next_explain` | `owner?` — diagnose an empty queue (counts by reason + hint) |
@@ -177,6 +178,7 @@ The collapses that catch people out:
 | `search`, `status`, `artifact get`/`add` | `haven_search`, `haven_status`, `haven_get_artifact`/`haven_add_artifact` |
 | `artifact rm` / `mv` | `haven_rm_artifact` / `haven_mv_artifact` |
 | `graph` | `haven_graph` |
+| `xref` | `haven_xref` |
 | `docs` | `haven_docs` |
 | `project list` / `add` | `haven_list_projects` / `haven_add_project` |
 
