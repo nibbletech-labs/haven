@@ -5,6 +5,7 @@
 //! `Store::content_root()` is the `~/.haven` root; per-project content lives at
 //! `<root>/<project-key>/`, and artifact `path`s are stored relative to that.
 
+use std::collections::HashSet;
 use std::fmt::Write as _;
 use std::path::PathBuf;
 
@@ -134,6 +135,127 @@ impl Store {
         let (project_id, _key) = self.require_project(project)?;
         let node_id = self.resolve_node_id(project_id, selector)?;
         self.context_pack_for_node(node_id)
+    }
+
+    /// Read-only graph-integrity scan over context packs and artifact rows (HV-105),
+    /// surfaced by `haven doctor`. Across every project it flags: a `spec`
+    /// `context-pack.md` whose content is a relocation tombstone (left behind when a
+    /// subset build-batch is carved out — see `create-context-pack`); a node whose
+    /// derived `context_pack` (HV-75) resolves to such a tombstone; and duplicate
+    /// `(node, path)` artifact rows. Pure diagnostic — never mutates.
+    pub fn context_pack_integrity(&self) -> Result<Vec<IntegrityIssue>> {
+        // A context-pack.md whose content opens with one of these (leading
+        // whitespace trimmed, case-insensitive) is a relocation tombstone.
+        const RELOCATION_MARKERS: &[&str] = &["MOVED", "RELOCATED"];
+
+        let mut issues = Vec::new();
+        for proj in self.list_projects()? {
+            let base = self.project_dir(&proj.key);
+
+            // (1) Tombstone packs: live containers holding a `spec` context-pack.md
+            // whose file content opens with a relocation marker.
+            let mut stmt = self.conn.prepare(
+                "SELECT a.node_id, n.ref, a.path
+                   FROM artifacts a
+                   JOIN nodes n ON n.id = a.node_id
+                  WHERE n.project_id = ?1
+                    AND a.role = 'spec'
+                    AND a.path LIKE '%/' || ?2
+                    AND n.status NOT IN ('archived', 'superseded')",
+            )?;
+            let packs: Vec<(i64, String, Option<String>)> = stmt
+                .query_map(params![proj.id, CONTEXT_PACK_ARTIFACT], |r| {
+                    Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+
+            let mut tombstone_nodes: Vec<(i64, String)> = Vec::new();
+            let mut tombstone_refs: HashSet<String> = HashSet::new();
+            for (node_id, node_ref, rel) in &packs {
+                let Some(rel) = rel else { continue };
+                let full = base.join(rel);
+                if !full.starts_with(&base) {
+                    continue; // tampered path escaping the project tree — skip
+                }
+                if let Ok(text) = std::fs::read_to_string(&full) {
+                    let head = text.trim_start().to_uppercase();
+                    // Dedup by node: a container with two context-pack.md rows (a
+                    // duplicate-row case, reported separately) is one tombstone.
+                    if RELOCATION_MARKERS.iter().any(|m| head.starts_with(m))
+                        && tombstone_refs.insert(node_ref.clone())
+                    {
+                        tombstone_nodes.push((*node_id, node_ref.clone()));
+                        issues.push(IntegrityIssue {
+                            kind: IntegrityKind::TombstonePack,
+                            node: node_ref.clone(),
+                            detail: format!(
+                                "{node_ref} carries a context-pack.md whose content is a relocation tombstone, not a real pack — remove it via `haven artifact rm`"
+                            ),
+                        });
+                    }
+                }
+            }
+
+            // (2) Members whose derived context_pack resolves to a tombstone
+            // container — they follow the HV-75 pointer into a dead redirect.
+            let mut flagged: HashSet<i64> = HashSet::new();
+            for (tomb_id, _) in &tombstone_nodes {
+                let mut mstmt = self.conn.prepare(
+                    "SELECT ge.member_id, m.ref
+                       FROM grouping_edges ge
+                       JOIN nodes m ON m.id = ge.member_id
+                      WHERE ge.group_id = ?1
+                        AND m.status NOT IN ('archived', 'superseded')",
+                )?;
+                let members: Vec<(i64, String)> = mstmt
+                    .query_map([tomb_id], |r| Ok((r.get(0)?, r.get(1)?)))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                for (member_id, member_ref) in members {
+                    if !flagged.insert(member_id) {
+                        continue; // already reported (member under >1 tombstone)
+                    }
+                    let (pack, clash) = self.context_pack_for_node(member_id)?;
+                    let hits = match (&pack, &clash) {
+                        (Some(p), _) => tombstone_refs.contains(&p.container),
+                        (_, Some(list)) => list.iter().any(|c| tombstone_refs.contains(c)),
+                        _ => false,
+                    };
+                    if hits {
+                        issues.push(IntegrityIssue {
+                            kind: IntegrityKind::PointerToTombstone,
+                            node: member_ref.clone(),
+                            detail: format!(
+                                "{member_ref} advertises a context_pack that resolves to a relocation tombstone"
+                            ),
+                        });
+                    }
+                }
+            }
+
+            // (3) Duplicate (node, path) artifact rows.
+            let mut dstmt = self.conn.prepare(
+                "SELECT n.ref, a.path, COUNT(*) AS c
+                   FROM artifacts a
+                   JOIN nodes n ON n.id = a.node_id
+                  WHERE n.project_id = ?1 AND a.path IS NOT NULL AND a.path <> ''
+                  GROUP BY a.node_id, a.path
+                 HAVING c > 1
+                  ORDER BY n.ref",
+            )?;
+            let dups: Vec<(String, String, i64)> = dstmt
+                .query_map([proj.id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            for (node_ref, path, count) in dups {
+                issues.push(IntegrityIssue {
+                    kind: IntegrityKind::DuplicateArtifactRow,
+                    node: node_ref.clone(),
+                    detail: format!(
+                        "{node_ref} has {count} artifact rows for the same path {path}"
+                    ),
+                });
+            }
+        }
+        Ok(issues)
     }
 
     /// Register an artifact on a node. For `kind = file`, the content is written
@@ -1445,5 +1567,132 @@ mod tests {
         // The collision left both files intact.
         assert!(moved.exists());
         assert!(tmp.path().join("haven/items/HV-1/notes.md").exists());
+    }
+
+    #[test]
+    fn context_pack_integrity_flags_tombstones_pointers_and_dupes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let s = store_with_root(tmp.path());
+
+        // Healthy baseline: a build-batch container with a REAL pack + a grouped
+        // member. context_pack_integrity must NOT flag a healthy pack.
+        let batch = s
+            .add_item(
+                None,
+                NewItem {
+                    title: "batch".into(),
+                    node_type: Some(NodeType::Phase),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let healthy_member = s
+            .add_item(
+                None,
+                NewItem {
+                    title: "leaf".into(),
+                    group: Some(batch.reference.clone()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        s.add_artifact(
+            None,
+            &batch.reference,
+            NewArtifact {
+                role: ArtifactRole::Spec,
+                kind: ArtifactKind::File,
+                content: Some("# Real pack\nFoundation, contracts, acceptance.\n".into()),
+                name: Some(CONTEXT_PACK_ARTIFACT.into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(
+            s.context_pack_integrity().unwrap().is_empty(),
+            "a healthy pack must not be flagged"
+        );
+
+        // The HV-59 shape: a broad phase whose context-pack.md is a MOVED tombstone,
+        // a still-grouped member, plus a legacy duplicate (node,path) row.
+        let broad = s
+            .add_item(
+                None,
+                NewItem {
+                    title: "broad phase".into(),
+                    node_type: Some(NodeType::Phase),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let orphan = s
+            .add_item(
+                None,
+                NewItem {
+                    title: "still-grouped member".into(),
+                    group: Some(broad.reference.clone()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        s.add_artifact(
+            None,
+            &broad.reference,
+            NewArtifact {
+                role: ArtifactRole::Spec,
+                kind: ArtifactKind::File,
+                content: Some("MOVED: the pack now lives on the build batch. See HV-73.".into()),
+                name: Some(CONTEXT_PACK_ARTIFACT.into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        // Collision-safe add_artifact can't create a duplicate (node,path) row, so
+        // insert one directly to simulate pre-HV-95/97 legacy data.
+        s.conn
+            .execute(
+                "INSERT INTO artifacts (public_id, node_id, role, kind, path, client_id)
+                 VALUES ('dup-legacy-row', ?1, 'spec', 'file', ?2, 'test')",
+                params![
+                    broad.id,
+                    format!("items/{}/context-pack.md", broad.reference)
+                ],
+            )
+            .unwrap();
+
+        let issues = s.context_pack_integrity().unwrap();
+        let kinds: Vec<(IntegrityKind, &str)> =
+            issues.iter().map(|i| (i.kind, i.node.as_str())).collect();
+        assert!(
+            kinds.contains(&(IntegrityKind::TombstonePack, broad.reference.as_str())),
+            "expected tombstone pack on broad phase: {issues:?}"
+        );
+        assert!(
+            kinds.contains(&(IntegrityKind::PointerToTombstone, orphan.reference.as_str())),
+            "expected member pointing at tombstone: {issues:?}"
+        );
+        assert!(
+            kinds.contains(&(
+                IntegrityKind::DuplicateArtifactRow,
+                broad.reference.as_str()
+            )),
+            "expected duplicate-row flag: {issues:?}"
+        );
+        // Exactly one tombstone-pack issue despite two context-pack.md rows (deduped).
+        assert_eq!(
+            issues
+                .iter()
+                .filter(|i| i.kind == IntegrityKind::TombstonePack)
+                .count(),
+            1,
+            "tombstone pack must be reported once per container: {issues:?}"
+        );
+        // The healthy batch + its member are never flagged.
+        assert!(
+            !issues
+                .iter()
+                .any(|i| i.node == batch.reference || i.node == healthy_member.reference),
+            "healthy pack/member must stay clean: {issues:?}"
+        );
     }
 }

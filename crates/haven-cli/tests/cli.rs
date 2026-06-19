@@ -349,6 +349,56 @@ fn doctor_reports_install_health() {
 }
 
 #[test]
+fn doctor_flags_context_pack_tombstone() {
+    let h = Haven::new();
+    let status_of = |report: &Value, name: &str| -> String {
+        report["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["name"] == name)
+            .unwrap_or_else(|| panic!("no `{name}` check in {report}"))["status"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+
+    // Bootstrap + select a project, then build the HV-59 shape: a broad phase whose
+    // context-pack.md is a MOVED tombstone, with a still-grouped member.
+    h.ok(&["setup", "--project-key", "demo", "--prefix", "DM"]);
+    h.json(&["item", "add", "broad phase", "--type", "phase"]); // DM-1
+    h.json(&["item", "add", "member", "--group", "DM-1"]); // DM-2
+    h.ok(&[
+        "artifact",
+        "add",
+        "DM-1",
+        "--role",
+        "spec",
+        "--content",
+        "MOVED: pack now lives on the build batch. See HV-73.",
+        "--name",
+        "context-pack.md",
+    ]);
+
+    // doctor flags the tombstone (warn flips the global report not-ok too).
+    let dirty = h.json(&["doctor"]);
+    assert_eq!(
+        status_of(&dirty, "context_pack_integrity"),
+        "warn",
+        "tombstone should be flagged: {dirty}"
+    );
+
+    // Removing the tombstone clears the check (one row → --name is unambiguous).
+    h.ok(&["artifact", "rm", "DM-1", "--name", "context-pack.md"]);
+    let clean = h.json(&["doctor"]);
+    assert_eq!(
+        status_of(&clean, "context_pack_integrity"),
+        "ok",
+        "clean store should pass: {clean}"
+    );
+}
+
+#[test]
 fn setup_can_bootstrap_first_project() {
     let h = Haven::new();
     let out = h.json(&[

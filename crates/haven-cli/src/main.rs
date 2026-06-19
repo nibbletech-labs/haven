@@ -10,8 +10,8 @@ use std::path::PathBuf;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use haven_core::{
     ArtifactKind, ArtifactRole, ArtifactSelector, CompleteInput, HandoffInput, HavenError, Include,
-    ItemFilter, ItemUpdate, LineageDirection, NewArtifact, NewItem, NodeType, OwnerKind, Result,
-    Status, Store, WaitState, WaitUpdate,
+    IntegrityKind, ItemFilter, ItemUpdate, LineageDirection, NewArtifact, NewItem, NodeType,
+    OwnerKind, Result, Status, Store, WaitState, WaitUpdate,
 };
 
 use output::Output;
@@ -1823,6 +1823,56 @@ fn cmd_doctor() -> Result<Output> {
 
     checks.push(check("auth", "skip", "not configured (cloud half)".into()));
     checks.push(check("sync", "skip", "not configured (cloud half)".into()));
+
+    // Graph integrity (HV-105): context-pack tombstones, pointers into them, and
+    // duplicate (node, path) artifact rows. A data-integrity warn, not store-fatal.
+    match s.context_pack_integrity() {
+        Ok(issues) if issues.is_empty() => checks.push(check(
+            "context_pack_integrity",
+            "ok",
+            "no context-pack tombstones, dangling pointers, or duplicate artifact rows".into(),
+        )),
+        Ok(issues) => {
+            let mut tombstones = Vec::new();
+            let mut pointers = Vec::new();
+            let mut dupes = Vec::new();
+            for i in &issues {
+                match i.kind {
+                    IntegrityKind::TombstonePack => tombstones.push(i.node.as_str()),
+                    IntegrityKind::PointerToTombstone => pointers.push(i.node.as_str()),
+                    IntegrityKind::DuplicateArtifactRow => dupes.push(i.node.as_str()),
+                }
+            }
+            let mut parts = Vec::new();
+            if !tombstones.is_empty() {
+                parts.push(format!(
+                    "{} tombstone pack(s) [{}]",
+                    tombstones.len(),
+                    tombstones.join(", ")
+                ));
+            }
+            if !pointers.is_empty() {
+                parts.push(format!(
+                    "{} pointer(s) to tombstone [{}]",
+                    pointers.len(),
+                    pointers.join(", ")
+                ));
+            }
+            if !dupes.is_empty() {
+                parts.push(format!(
+                    "{} duplicate-row node(s) [{}]",
+                    dupes.len(),
+                    dupes.join(", ")
+                ));
+            }
+            checks.push(check("context_pack_integrity", "warn", parts.join("; ")));
+        }
+        Err(e) => checks.push(check(
+            "context_pack_integrity",
+            "warn",
+            format!("integrity scan failed: {e}"),
+        )),
+    }
 
     let ok = !checks
         .iter()

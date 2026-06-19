@@ -33,6 +33,12 @@ pick the pack's home by comparing your target set to that container's **full** m
   later batch clobbers it. Members keep any existing phase membership — grouping is
   **additive / many-to-many**, so you *add* the batch edge and **never remove** the
   member's original group (a leaf can sit in its theme phase *and* a build batch at once).
+  - **Strip any live pack off the broad phase.** If the broad phase already carries a
+    `spec` `context-pack.md`, remove it — `haven artifact rm <BROAD> --role spec --name
+    context-pack.md` (or `--id <pid>` if duplicated) — else its still-grouped members
+    keep resolving `context_pack` to a now-mis-scoped pack (HV-75). Any "moved to
+    `<BATCH>`" breadcrumb goes in a **non-`spec`** artifact or the container body, never a
+    `spec` `context-pack.md` (`haven doctor` flags such a tombstone via `context_pack_integrity`).
   - CLI: `haven item add "<batch title> — dev batch" --type phase -p <P>` → returns
     `<CONTAINER>`; then `haven group <CONTAINER> --add <ref> --add <ref> … -p <P>`.
   - MCP: `haven_add_item {"project":"<P>","title":"…","type":"phase"}` → `<CONTAINER>`;

@@ -87,6 +87,15 @@ pack's section layout + the verbatim preamble are in `references/pack-template.m
      must land on this batch container: a phase holds **one** `context-pack.md`, so writing
      a subset's pack onto the broad phase mis-scopes it (a pack covering 2 of 7 members)
      **and** a later batch from the same phase would **clobber** it.
+     - **The broad phase must NOT keep a live `spec` `context-pack.md`.** If it already
+       holds one (e.g. from an earlier whole-phase prep), **remove it** —
+       `haven artifact rm <broad-phase> --role spec --name context-pack.md` (or `--id`
+       if duplicated). A stale pack left on the broad phase misroutes the pointer
+       (HV-75): every still-grouped member resolves its `context_pack` to that pack
+       (now a dead redirect). If you want a "moved to `<BATCH>`" breadcrumb, record it
+       as a **non-`spec`** artifact (a `scratch` note) or in the container body — **never**
+       as a `spec` `context-pack.md` (a prose "MOVED" note left as the pack is exactly the
+       tombstone `haven doctor`'s `context_pack_integrity` check flags).
    A single item is a **degenerate group**: there is nothing cross-cutting to
    synthesise, so just **groom that one leaf** (wf 3 — firm acceptance + write/firm
    the leaf's **own** `spec` artifact `spec.md` via wf 10 where warranted) and stop.

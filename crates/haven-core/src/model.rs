@@ -166,6 +166,30 @@ impl RollupState {
     }
 }
 
+/// A graph-integrity problem found by [`crate::Store::context_pack_integrity`]
+/// (HV-105) — a read-only diagnostic surfaced by `haven doctor`, never stored.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct IntegrityIssue {
+    pub kind: IntegrityKind,
+    /// The offending node's `ref` (the tombstone container, the member pointing
+    /// at it, or the node carrying duplicate artifact rows).
+    pub node: String,
+    pub detail: String,
+}
+
+/// The kind of [`IntegrityIssue`].
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum IntegrityKind {
+    /// A `spec` `context-pack.md` whose content is a relocation tombstone, not a
+    /// real pack — so the pack-pointer derivation (HV-75) resolves it as live.
+    TombstonePack,
+    /// A node whose derived `context_pack` resolves to a tombstone container.
+    PointerToTombstone,
+    /// More than one artifact row for the same `(node, path)`.
+    DuplicateArtifactRow,
+}
+
 /// A project — namespace for a backlog, one per product/repo.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Project {
