@@ -336,9 +336,48 @@ fn str_array(v: &Value, k: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// Tools that mutate the work-graph — the choke point for the opportunistic
+/// daily backup. The MCP server opens one `Store` for the whole session, so the
+/// trigger must live per tools/call here (not in `serve`, which fires once).
+fn is_mutating_tool(name: &str) -> bool {
+    matches!(
+        name,
+        "haven_add_item"
+            | "haven_update_item"
+            | "haven_add_edge"
+            | "haven_evolve"
+            | "haven_rank"
+            | "haven_add_artifact"
+            | "haven_add_project"
+            | "haven_archive"
+            | "haven_reopen"
+            | "haven_handoff"
+            | "haven_complete_item"
+    )
+}
+
 /// Dispatch a `haven_*` tool to the matching `Store` method. Returns the raw
 /// JSON payload (wrapped into MCP content by the caller).
 fn call_tool(store: &Store, name: &str, a: &Value) -> Result<Value> {
+    // Best-effort backup hooks; stderr only (stdout is the JSON-RPC channel).
+    let backups = store.content_root().join("backups");
+    // Quarantine warning on EVERY tools/call (incl. read-only), so a long
+    // read-only agent session still sees the freeze alarm — "warns on every command".
+    if let Ok(frozen) = Store::backups_frozen(&backups) {
+        if !frozen.is_empty() {
+            eprintln!(
+                "haven: WARNING — {} quarantined backup(s) ({}); rotation frozen, \
+                 remove the *-SUSPECT dir(s) under {} to clear.",
+                frozen.len(),
+                frozen.join(", "),
+                backups.display(),
+            );
+        }
+    }
+    // Opportunistic ≤1/day snapshot only on mutating tools (the choke point).
+    if is_mutating_tool(name) {
+        let _ = store.maybe_daily_backup(&backups);
+    }
     let project = opt_str(a, "project");
     match name {
         "haven_list_items" => {

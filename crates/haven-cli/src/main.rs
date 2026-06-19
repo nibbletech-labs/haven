@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use haven_core::{
     ArtifactKind, ArtifactRole, CompleteInput, HandoffInput, HavenError, Include, ItemFilter,
-    ItemUpdate, LineageDirection, NewArtifact, NewItem, NodeType, OwnerKind, Result, Status,
+    ItemUpdate, LineageDirection, NewArtifact, NewItem, NodeType, OwnerKind, Result, Status, Store,
     WaitState, WaitUpdate,
 };
 
@@ -144,6 +144,38 @@ enum Command {
         #[arg(long)]
         watch: bool,
     },
+    /// Local self-backups: snapshot, list, verify integrity, restore.
+    Backup {
+        #[command(subcommand)]
+        cmd: BackupCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum BackupCmd {
+    /// List snapshots (id, size, integrity), newest first.
+    List,
+    /// Take a snapshot now: online-backup of the DB + tar.gz of each items/ tree.
+    Now,
+    /// Verify a snapshot's integrity (PRAGMA integrity_check). Latest if no id.
+    Verify(BackupVerifyArgs),
+    /// Restore a snapshot. Safety-snapshots current state first, then swaps it in.
+    Restore(BackupRestoreArgs),
+}
+
+#[derive(Args)]
+struct BackupVerifyArgs {
+    /// Snapshot id (the `<UTC-ts>` dir name). Defaults to the latest.
+    id: Option<String>,
+}
+
+#[derive(Args)]
+struct BackupRestoreArgs {
+    /// Snapshot id (the `<UTC-ts>` dir name) to restore.
+    id: String,
+    /// Confirm the destructive DB + content-file swap (required).
+    #[arg(long)]
+    yes: bool,
 }
 
 #[derive(Subcommand)]
@@ -681,10 +713,14 @@ struct GraphArgs {
 
 fn main() {
     let cli = Cli::parse();
+    // Loud, on every command: a quarantined snapshot freezes rotation until the
+    // operator clears it. stderr only (stdout is structured Output / the MCP channel).
+    warn_if_quarantined();
     match run(&cli) {
         Ok(out) => {
             out.render(cli.pretty);
             maybe_render(&cli);
+            maybe_daily_backup(&cli);
         }
         Err(err) => std::process::exit(output::render_error(&err)),
     }
@@ -794,6 +830,7 @@ fn run(cli: &Cli) -> Result<Output> {
         }
         Command::Auth { cmd } => cmd_auth(cmd),
         Command::Sync { cmd, watch } => cmd_sync(project, cmd, *watch),
+        Command::Backup { cmd } => cmd_backup(cmd),
     }
 }
 
@@ -1041,9 +1078,11 @@ fn hydrate_content(
 /// After a command that changes the work-graph, regenerate `backlog.md` so the
 /// projection never drifts from the DB (SPEC §4). Best-effort: a render failure
 /// (e.g. no project selected) must not fail the underlying command.
-fn maybe_render(cli: &Cli) {
-    let mutates = matches!(
-        cli.command,
+/// Commands that mutate the work-graph (drive both the backlog re-render and the
+/// opportunistic daily backup). Read-only commands and the backup verbs are excluded.
+fn mutates(command: &Command) -> bool {
+    matches!(
+        command,
         Command::Item { .. }
             | Command::Import { .. }
             | Command::Decompose(_)
@@ -1052,12 +1091,52 @@ fn maybe_render(cli: &Cli) {
             | Command::Evolve { .. }
             | Command::Artifact { .. }
             | Command::Note { .. }
-    );
-    if !mutates {
+    )
+}
+
+fn maybe_render(cli: &Cli) {
+    if !mutates(&cli.command) {
         return;
     }
     if let Ok(s) = config::open_store() {
         let _ = s.render(cli.project.as_deref());
+    }
+}
+
+/// Opportunistic ≤1/day snapshot, fired after a mutating command. Best-effort:
+/// a backup failure must never fail the user's actual command. The cheap
+/// `last_backup` marker check inside makes this a no-op on all but the first
+/// mutating command of the day (no cron/launchd).
+fn maybe_daily_backup(cli: &Cli) {
+    if !mutates(&cli.command) {
+        return;
+    }
+    let Ok(paths) = config::resolve() else {
+        return;
+    };
+    if let Ok(s) = config::open_store() {
+        let _ = s.maybe_daily_backup(&paths.root.join("backups"));
+    }
+}
+
+/// Print a loud warning to stderr while any snapshot is quarantined — rotation
+/// is frozen until the operator removes the `*-SUSPECT` dir(s).
+fn warn_if_quarantined() {
+    let Ok(paths) = config::resolve() else {
+        return;
+    };
+    let backups = paths.root.join("backups");
+    if let Ok(frozen) = Store::backups_frozen(&backups) {
+        if !frozen.is_empty() {
+            eprintln!(
+                "haven: WARNING — {} quarantined backup(s) ({}). Integrity check failed; \
+                 backup rotation is FROZEN to protect good snapshots. Review and remove the \
+                 *-SUSPECT dir(s) under {} to clear.",
+                frozen.len(),
+                frozen.join(", "),
+                backups.display(),
+            );
+        }
     }
 }
 
@@ -1457,6 +1536,17 @@ fn cmd_status(project: Option<&str>) -> Result<Output> {
             serde_json::json!(s.list_projects()?.len()),
         );
         obj.insert("auth".into(), serde_json::json!("not configured (Layer 6)"));
+        let backups = paths.root.join("backups");
+        let entries = Store::list_backups(&backups).unwrap_or_default();
+        let frozen = Store::backups_frozen(&backups).unwrap_or_default();
+        obj.insert(
+            "backups".into(),
+            serde_json::json!({
+                "count": entries.len(),
+                "latest": entries.first().map(|e| e.id.clone()),
+                "frozen": !frozen.is_empty(),
+            }),
+        );
     }
     Ok(Output::Json(status))
 }
@@ -1617,6 +1707,36 @@ fn cmd_doctor() -> Result<Output> {
     }
 
     // 5. Auth/sync — not part of the local (no-accounts) install.
+    // 7. Backups: report count + freeze state. A quarantined snapshot is a warn.
+    let backups = paths.root.join("backups");
+    let entries = Store::list_backups(&backups).unwrap_or_default();
+    let frozen = Store::backups_frozen(&backups).unwrap_or_default();
+    if !frozen.is_empty() {
+        checks.push(check(
+            "backups",
+            "warn",
+            format!(
+                "{} quarantined snapshot(s) ({}); rotation frozen — remove the *-SUSPECT dir(s) under {}",
+                frozen.len(),
+                frozen.join(", "),
+                backups.display(),
+            ),
+        ));
+    } else {
+        checks.push(check(
+            "backups",
+            "ok",
+            format!(
+                "{} snapshot(s){}",
+                entries.len(),
+                entries
+                    .first()
+                    .map(|e| format!(", latest {}", e.id))
+                    .unwrap_or_default(),
+            ),
+        ));
+    }
+
     checks.push(check("auth", "skip", "not configured (cloud half)".into()));
     checks.push(check("sync", "skip", "not configured (cloud half)".into()));
 
@@ -1686,6 +1806,60 @@ fn cmd_project(cmd: &ProjectCmd) -> Result<Output> {
             Ok(Output::Message(format!("current project: {key}")))
         }
     }
+}
+
+/// `<HAVEN_HOME>/backups` — backups are store-wide, not per-project.
+fn backups_dir() -> Result<PathBuf> {
+    Ok(config::resolve()?.root.join("backups"))
+}
+
+fn cmd_backup(cmd: &BackupCmd) -> Result<Output> {
+    let backups = backups_dir()?;
+    match cmd {
+        BackupCmd::List => {
+            let frozen = Store::backups_frozen(&backups)?;
+            Ok(Output::Json(serde_json::json!({
+                "backups": Store::list_backups(&backups)?,
+                "frozen": !frozen.is_empty(),
+                "quarantined": frozen,
+            })))
+        }
+        BackupCmd::Now => {
+            let s = config::open_store()?;
+            Ok(Output::Json(serde_json::to_value(s.backup_now(&backups)?)?))
+        }
+        BackupCmd::Verify(a) => {
+            let id = match &a.id {
+                Some(id) => id.clone(),
+                None => latest_backup_id(&backups)?,
+            };
+            let integrity = Store::verify_backup(&backups, &id)?;
+            Ok(Output::Json(serde_json::json!({
+                "id": id,
+                "integrity": integrity,
+                "checked": "integrity_check",
+            })))
+        }
+        BackupCmd::Restore(a) => {
+            if !a.yes {
+                return Err(HavenError::Invalid(
+                    "restore overwrites the live database and content files; pass --yes to confirm"
+                        .into(),
+                ));
+            }
+            let paths = config::resolve()?;
+            let report = Store::restore_backup(&paths.db, &paths.root, &backups, &a.id)?;
+            Ok(Output::Json(serde_json::to_value(report)?))
+        }
+    }
+}
+
+fn latest_backup_id(backups: &std::path::Path) -> Result<String> {
+    Store::list_backups(backups)?
+        .into_iter()
+        .next()
+        .map(|e| e.id)
+        .ok_or_else(|| HavenError::NotFound("no backups exist yet; run `haven backup now`".into()))
 }
 
 fn cmd_import(project: Option<&str>, file: &std::path::Path, if_absent: bool) -> Result<Output> {

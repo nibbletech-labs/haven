@@ -13,12 +13,14 @@ pub mod error;
 pub mod model;
 pub mod sortkey;
 pub mod store;
+mod time;
 
 pub use error::{HavenError, Result};
 pub use model::*;
 pub use store::{
-    AddOutcome, ArtifactContent, CompleteInput, CompleteResult, EdgeKind, EvolveResult, GraphEdge,
-    HandoffInput, HandoffResult, ImportItem, ImportOutcome, Include, ItemFilter, ItemUpdate,
-    LineageDirection, LineageGraph, LineageLink, NewArtifact, NewItem, ProjectGraph, SimilarItem,
-    Store, WaitUpdate,
+    AddOutcome, ArtifactContent, BackupEntry, BackupReport, CompleteInput, CompleteResult,
+    EdgeKind, EvolveResult, GraphEdge, HandoffInput, HandoffResult, ImportItem, ImportOutcome,
+    Include, Integrity, ItemFilter, ItemUpdate, LineageDirection, LineageGraph, LineageLink,
+    NewArtifact, NewItem, ProjectArchive, ProjectGraph, RestoreReport, SimilarItem, Store,
+    WaitUpdate,
 };

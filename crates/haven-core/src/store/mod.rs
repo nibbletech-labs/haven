@@ -3,6 +3,7 @@
 //! `~/.haven` content root. Domain operations are split across submodules by
 //! area but are all methods on `Store`, so the two clients cannot drift.
 
+mod backup;
 mod content;
 mod edge;
 mod evolve;
@@ -21,6 +22,7 @@ use crate::db;
 use crate::error::{HavenError, Result};
 use crate::model::*;
 
+pub use backup::{BackupEntry, BackupReport, Integrity, ProjectArchive, RestoreReport};
 pub use content::{ArtifactContent, NewArtifact};
 pub use edge::EdgeKind;
 pub use evolve::EvolveResult;

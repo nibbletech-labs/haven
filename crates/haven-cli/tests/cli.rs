@@ -844,3 +844,58 @@ fn self_update_check_is_offline_safe() {
     assert_eq!(out["current"], env!("CARGO_PKG_VERSION"));
     assert!(out["method"].is_string());
 }
+
+#[test]
+fn backup_now_list_verify_and_restore_round_trip() {
+    let h = Haven::new();
+    h.ok(&["setup", "--no-skill"]);
+    h.ok(&[
+        "project", "add", "--key", "haven", "--title", "Haven", "--prefix", "HV",
+    ]);
+    h.ok(&["project", "use", "haven"]);
+    h.json(&["item", "add", "First item"]);
+
+    // Take a snapshot now.
+    let now = h.json(&["backup", "now"]);
+    assert_eq!(now["integrity"], "ok");
+    let id = now["id"].as_str().unwrap().to_string();
+    assert!(now["projects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|p| p["key"] == "haven"));
+
+    // List shows it, newest first, not frozen.
+    let list = h.json(&["backup", "list"]);
+    assert_eq!(list["frozen"], false);
+    let backups = list["backups"].as_array().unwrap();
+    assert_eq!(backups[0]["id"], id.as_str());
+    assert_eq!(backups[0]["integrity"], "ok");
+
+    // Verify the latest, and by id.
+    assert_eq!(h.json(&["backup", "verify"])["integrity"], "ok");
+    assert_eq!(h.json(&["backup", "verify", &id])["integrity"], "ok");
+
+    // Restore is gated behind --yes.
+    assert_eq!(
+        h.fail(&["backup", "restore", &id])["error"]["code"],
+        "invalid"
+    );
+
+    // Restore round-trips; the graph still has the item afterwards.
+    let restore = h.json(&["backup", "restore", &id, "--yes"]);
+    assert_eq!(restore["restored"], id.as_str());
+    assert!(!restore["safety_snapshot"].as_str().unwrap().is_empty());
+
+    let graph = h.json(&["graph"]);
+    assert!(graph["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|n| n["title"] == "First item"));
+
+    // status surfaces backup state.
+    let status = h.json(&["status"]);
+    assert!(status["backups"]["count"].as_u64().unwrap() >= 1);
+    assert_eq!(status["backups"]["frozen"], false);
+}
