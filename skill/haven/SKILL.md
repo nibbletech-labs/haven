@@ -177,6 +177,12 @@ memory. Each has a trigger, steps, judgment heuristics, and real commands:
 Precise arguments and the **CLI-vs-MCP differences** (they are *not* 1:1) are in
 **`references/surface-map.md`**.
 
+When you're about to **hand-build, diff-review, or merge a batch in a git worktree** — the
+manual counterpart to the `orchestrate-run` executor — read **`references/parallel-dev.md`**:
+one dedicated worktree per feature (never branch in-place in a shared checkout), diffs reviewed
+against the *merge-base* not live `main`, and the verify-gated merge (AI-verify-then-merge; pause
+for a human when a load-bearing check needs one).
+
 ## MCP quick reference (concrete payloads)
 
 Over MCP, pass `project` on every call. The common ops:

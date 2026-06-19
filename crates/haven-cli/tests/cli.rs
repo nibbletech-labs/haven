@@ -87,6 +87,7 @@ fn skill_install_and_setup_write_the_snapshot() {
     assert!(skill_dir.join("references/workflows.md").exists());
     assert!(skill_dir.join("references/surface-map.md").exists());
     assert!(skill_dir.join("references/spec-quality.md").exists());
+    assert!(skill_dir.join("references/parallel-dev.md").exists());
     assert!(skill_dir.join("agents/openai.yaml").exists());
     // It's the real skill (frontmatter name), not an empty file.
     let body = std::fs::read_to_string(skill_dir.join("SKILL.md")).unwrap();
