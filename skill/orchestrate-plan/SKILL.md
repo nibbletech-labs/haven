@@ -2,18 +2,19 @@
 name: orchestrate-plan
 description: >-
   The starting point for any large, multi-part effort that has no plan yet —
-  building or launching a product, app, site, platform, brand, newsletter, or
-  business end-to-end, especially greenfield ("from scratch", "nothing exists
-  yet", "the lot", "everything I'd need"). Take that goal and break it into a
-  structured Haven work-graph: a multi-level tree of ownable tasks with
-  dependencies (one piece's output feeds another) and acceptance criteria. This
-  is planning, not doing — fire it even when the user says "build it", "create
-  the site", "get the whole thing moving", or "have a go at X"; you map the whole
-  effort before any of it is built. Also fires on explicit "decompose this into a
-  dependency graph / work graph / backlog". If a plan already exists and they
-  just want it built, that's `orchestrate-run`. For one task, a status check,
-  "what's next", or grooming a single item, use `haven`. Not for a one-off or
-  single-component task you can just do, or already-decomposed work.
+  building or launching a product, app, site, platform, brand, or business
+  end-to-end, especially greenfield ("from scratch", "nothing exists yet", "the
+  lot"). Break it into a structured Haven work-graph: a multi-level tree of
+  ownable tasks with dependencies (one output feeds another) and acceptance
+  criteria. Planning, not doing — fire it even when phrased as doing the work
+  ("build it", "create the site", "get the whole thing moving", "have a go at
+  X"); you map the whole effort before any is built. Also fires on explicit
+  "decompose this into a dependency / work graph / backlog". But a bare "make a
+  plan" / "plan this" / "plan mode" for one feature or change is native plan
+  mode, not this — every leaf here is plan-mode-grain. If a plan already exists
+  and they just want it built, that's `orchestrate-run`; for one task, status, or
+  grooming one item, use `haven`. Not for a one-off or single-component task, or
+  already-decomposed work.
 ---
 
 # orchestrate-plan — the planner half of orchestrate

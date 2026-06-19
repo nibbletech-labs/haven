@@ -19,5 +19,7 @@
   {"query": "what's actually left before I can launch the store? give me the outstanding items", "should_trigger": false},
   {"query": "park this for later — an idea for a subscription refill model for the scent system. don't action it, just capture it", "should_trigger": false},
   {"query": "build a reusable date-range picker component and add it to the web design system — should match the existing tokens", "should_trigger": false},
-  {"query": "write me the launch-day tweet thread and a short press release for the scent brand launch", "should_trigger": false}
+  {"query": "write me the launch-day tweet thread and a short press release for the scent brand launch", "should_trigger": false},
+  {"query": "make a plan for adding a dark-mode toggle to the settings screen — show me the approach before you build it", "should_trigger": false},
+  {"query": "enter planning mode and work out how to refactor the auth module before I touch any code", "should_trigger": false}
 ]
