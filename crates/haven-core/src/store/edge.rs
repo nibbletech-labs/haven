@@ -148,7 +148,9 @@ impl Store {
             NodeType::Release | NodeType::Phase | NodeType::Gate
         ) {
             return Err(HavenError::GraphRule(format!(
-                "group target must be a release/phase/gate node, not {group_type}"
+                "group target must be a release/phase/gate node, not {group_type} \
+                 — the container is the group side (the `from` of a grouping edge), \
+                 the member the other"
             )));
         }
         if self.edge_exists(

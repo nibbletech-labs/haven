@@ -579,6 +579,11 @@ fn call_tool(store: &Store, name: &str, a: &Value) -> Result<Value> {
                     opt_str(a, "actor"),
                 )?;
             }
+            // Grouping: add the item to a release/phase/gate container (mirrors
+            // haven_add_item's `group`; the container is the group/`from` side).
+            if let Some(group) = opt_str(a, "group") {
+                store.group(project, group, reference, false)?;
+            }
             let item = store.get_item(project, reference, &[])?;
             to_value(McpItem::full(&item))
         }
@@ -907,11 +912,11 @@ fn tools_list() -> Value {
         { "name": "haven_rank", "description": "Reorder an item within its priority band: place it immediately before or after another item (exactly one of `before`/`after`). Fine ordering for 'do X before Y' — use `haven_update_item {priority}` for coarse band moves.",
           "inputSchema": obj(json!({"ref":{"type":"string"},"project":{"type":"string"},"before":{"type":"string"},"after":{"type":"string"}}), json!(["ref"])) },
         { "name": "haven_add_item", "description": "Create a work-graph item (node). `done_looks_like` is the acceptance statement output is verified against; `why` is a one-line provenance trace. `due_at` is an optional deadline as a calendar date YYYY-MM-DD (no time/timezone), validated on write. Pass `if_absent: true` to return an existing live item with the same normalized title (marked `existing: true`) instead of creating a duplicate; responses may carry `similar` — up to 3 live items with overlapping titles (advisory).",
-          "inputSchema": obj(json!({"title":{"type":"string"},"project":{"type":"string"},"type":{"type":"string"},"body":{"type":"string"},"done_looks_like":{"type":"string"},"why":{"type":"string"},"due_at":{"type":"string"},"status":{"type":"string"},"priority":{"type":"integer"},"commit":{"type":"boolean"},"assign":{"type":"string"},"parent":{"type":"string"},"depends_on":{"type":"string"},"group":{"type":"string"},"if_absent":{"type":"boolean"}}), json!(["title"])) },
-        { "name": "haven_update_item", "description": "Update maturity/commitment/ownership of an item. Set `done_looks_like` (acceptance) when it becomes ready so dispatch can verify against it. `due_at` sets the YYYY-MM-DD deadline (validated on write); pass `\"none\"` to clear it. Returns the updated item in full (same shape as haven_get_item).",
-          "inputSchema": obj(json!({"ref":{"type":"string"},"title":{"type":"string"},"body":{"type":"string"},"done_looks_like":{"type":"string"},"why":{"type":"string"},"due_at":{"type":"string"},"status":{"type":"string"},"priority":{"type":"integer"},"type":{"type":"string"},"wait":{"type":"string"},"commit":{"type":"boolean"},"assign":{"type":"string"},"actor":{"type":"string"},"project":{"type":"string"}}), json!(["ref"])) },
-        { "name": "haven_add_edge", "description": "Add/remove a decomposition|dependency|grouping edge.",
-          "inputSchema": obj(json!({"kind":{"type":"string"},"from":{"type":"string"},"to":{"type":"string"},"remove":{"type":"boolean"},"project":{"type":"string"}}), json!(["kind","from","to"])) },
+          "inputSchema": obj(json!({"title":{"type":"string"},"project":{"type":"string"},"type":{"type":"string","description":"Node type. Leaves: task (default), code, research, data, design, admin. Containers (the only valid group targets): release, phase, gate. anchor = a long-lived project-docs / overview node."},"body":{"type":"string"},"done_looks_like":{"type":"string"},"why":{"type":"string"},"due_at":{"type":"string"},"status":{"type":"string"},"priority":{"type":"integer"},"commit":{"type":"boolean"},"assign":{"type":"string"},"parent":{"type":"string"},"depends_on":{"type":"string"},"group":{"type":"string","description":"Add this new item to a release/phase/gate container (creates a grouping edge from that container to this item)."},"if_absent":{"type":"boolean"}}), json!(["title"])) },
+        { "name": "haven_update_item", "description": "Update maturity/commitment/ownership/grouping of an item. Set `done_looks_like` (acceptance) when it becomes ready so dispatch can verify against it. `due_at` sets the YYYY-MM-DD deadline (validated on write); pass `\"none\"` to clear it. Pass `group` to add the item to a release/phase/gate container (mirrors haven_add_item). Returns the updated item in full (same shape as haven_get_item).",
+          "inputSchema": obj(json!({"ref":{"type":"string"},"title":{"type":"string"},"body":{"type":"string"},"done_looks_like":{"type":"string"},"why":{"type":"string"},"due_at":{"type":"string"},"status":{"type":"string"},"priority":{"type":"integer"},"type":{"type":"string","description":"Node type. Leaves: task (default), code, research, data, design, admin. Containers (the only valid group targets): release, phase, gate. anchor = a long-lived project-docs / overview node."},"wait":{"type":"string"},"commit":{"type":"boolean"},"assign":{"type":"string"},"group":{"type":"string","description":"Add this item to a release/phase/gate container (creates a grouping edge from that container to this item). To remove, use haven_add_edge {kind:\"grouping\", remove:true}."},"actor":{"type":"string"},"project":{"type":"string"}}), json!(["ref"])) },
+        { "name": "haven_add_edge", "description": "Add (or `remove:true`) a structural edge; direction matters. decomposition: from=parent → to=child. dependency: from=the blocked item → to=its blocker (the prerequisite). grouping: from=container → to=member, and the container (`from`) MUST be a release/phase/gate node.",
+          "inputSchema": obj(json!({"kind":{"type":"string","enum":["decomposition","dependency","grouping"]},"from":{"type":"string"},"to":{"type":"string"},"remove":{"type":"boolean"},"project":{"type":"string"}}), json!(["kind","from","to"])) },
         { "name": "haven_evolve", "description": "Split/merge/supersede items (lineage).",
           "inputSchema": obj(json!({"op":{"type":"string"},"refs":{"type":"array","items":{"type":"string"}},"into":{"type":"array","items":{"type":"string"}},"with":{"type":"string"},"title":{"type":"string"},"rationale":{"type":"string"},"project":{"type":"string"}}), json!(["op","refs"])) },
         { "name": "haven_lineage", "description": "Lineage graph around an item.",
@@ -1710,6 +1715,65 @@ mod tests {
         assert!(
             nitem.get("context_pack").is_none(),
             "compact dispatch view (next) must stay lean"
+        );
+    }
+
+    #[test]
+    fn update_item_group_attaches_to_container_via_grouping_edge() {
+        let s = store();
+        let out = session(
+            &s,
+            &[
+                // A phase container and a leaf, initially ungrouped.
+                json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"haven_add_item","arguments":{"title":"Phase 1","type":"phase"}}}),
+                json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"haven_add_item","arguments":{"title":"a leaf"}}}),
+                // Post-hoc grouping via update_item {group} — symmetric with add_item.
+                json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"haven_update_item","arguments":{"ref":"HV-2","group":"HV-1"}}}),
+                json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"haven_graph","arguments":{}}}),
+            ],
+        );
+        let g = tool_payload(&out[3]);
+        let grouping: Vec<_> = g["edges"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|e| e["kind"] == "grouping")
+            .collect();
+        assert_eq!(
+            grouping.len(),
+            1,
+            "update_item {{group}} must create exactly one grouping edge"
+        );
+        // The container is the `from`, the member the `to` — the rule the schema now documents.
+        assert_eq!(grouping[0]["from"], "HV-1");
+        assert_eq!(grouping[0]["to"], "HV-2");
+    }
+
+    #[test]
+    fn grouping_onto_non_container_errors_with_type_and_direction() {
+        let s = store();
+        let out = session(
+            &s,
+            &[
+                json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"haven_add_item","arguments":{"title":"a task"}}}),
+                json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"haven_add_item","arguments":{"title":"another"}}}),
+                // Grouping with a non-container (task) as `from` is refused.
+                json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"haven_add_edge","arguments":{"kind":"grouping","from":"HV-1","to":"HV-2"}}}),
+            ],
+        );
+        assert_eq!(out[2]["result"]["isError"], true);
+        let msg = tool_payload(&out[2])["error"]["message"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        // The error names both the container types and the direction (recovery aid).
+        assert!(
+            msg.contains("release/phase/gate"),
+            "must name the container types: {msg}"
+        );
+        assert!(
+            msg.contains("from"),
+            "must name the direction (container is the `from`): {msg}"
         );
     }
 

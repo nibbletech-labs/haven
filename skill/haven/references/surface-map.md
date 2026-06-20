@@ -127,8 +127,8 @@ haven sync [status] [--watch]
 | `haven_next_explain` | `owner?` — diagnose an empty queue (counts by reason + hint) |
 | `haven_rank` | **`ref`**, `before?` \| `after?` (exactly one) — reorder within a priority band (fine ordering) |
 | `haven_add_item` | **`title`**, `type?, body?, done_looks_like?, why?, status?, priority?, commit?, assign?, due_at?, parent?, depends_on?, group?, if_absent?` — with `if_absent` a normalized-title match returns the existing item (`existing: true`); responses may carry advisory `similar` |
-| `haven_update_item` | **`ref`**, `title?, body?, done_looks_like?, why?, status?, priority?, type?, wait?, due_at?, commit?, assign?, actor?` (`due_at` accepts `"none"` to clear) |
-| `haven_add_edge` | **`kind`** (`decomposition`\|`dependency`\|`grouping`), **`from`**, **`to`**, `remove?` |
+| `haven_update_item` | **`ref`**, `title?, body?, done_looks_like?, why?, status?, priority?, type?, wait?, due_at?, commit?, assign?, group?, actor?` (`due_at` accepts `"none"` to clear; `group` adds the item to a release/phase/gate container, mirroring `haven_add_item`) |
+| `haven_add_edge` | **`kind`** (`decomposition`\|`dependency`\|`grouping`), **`from`**, **`to`**, `remove?` — direction: `from→to` is parent→child / blocked→blocker / container→member (the container `from` must be release/phase/gate) |
 | `haven_evolve` | **`op`** (`split`\|`merge`\|`supersede`), **`refs`**, `into?, with?, title?, rationale?, by?` |
 | `haven_lineage` | **`ref`**, `direction?, depth?` |
 | `haven_resolve_live` | **`ref`** — follow a stale (superseded/archived) ref to its live descendant(s); compact items |
