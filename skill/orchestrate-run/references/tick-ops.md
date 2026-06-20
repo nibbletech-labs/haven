@@ -66,6 +66,20 @@ self-check derived from `done_looks_like`. Read member detail if the compact nod
 - CLI: `haven item get <ref> --include edges,artifacts -p <P>`
 - MCP: `haven_get_item {"project":"<P>","ref":"<ref>","include":["edges","artifacts"]}`
 
+**Verification recipe — derive it BEFORE dispatch, type it by the leaf's activity.** The per-leaf
+self-check is **2–5 executable steps** derived from the leaf's `done_looks_like` + the codebase
+context (test commands, dev server, linting, CI scripts) — concrete steps the agent runs to
+confirm its output works *before* signalling done. Type them by what the leaf actually does:
+
+- **Code:** run the tests, typecheck, start the dev server + curl the new path.
+- **Research:** check the source count, contradiction coverage.
+- **Writing:** review the structure against the format spec.
+- **Visual:** screenshot, check dimensions/format.
+
+If no concrete verification is possible, specify *what to review against the quality bar*. The same
+recipe is what the step-7 verifier re-runs independently (`references/dispatch-policy.md` § GATE /
+§ self-check); a green global build is not proof a specific leaf's acceptance is met.
+
 ## 7. Gate — compose the `verify` skill (unattended) or plan-mode approval (attended)
 
 No Haven op — the unattended gate **is** the standalone `verify` skill (Mode 1): a fresh verifier
@@ -94,6 +108,23 @@ after the work is on `main`.
 rationale via lineage (never delete):
 - CLI: `haven item archive <ref> --rationale "<superseded by <producer>'s outcome>" -p <P>`
 - MCP: `haven_archive {"project":"<P>","ref":"<ref>","rationale":"<…>"}`
+
+**d. Replan damping — WHEN NOT to replan.** Not every completion is a replan event; a naive loop
+re-plans constantly and never converges. Calibrate the response to the *size* of what the
+completion changed:
+
+- A **minor subtask** completing as expected → **record the evidence and continue.** No
+  reassessment. The completion's `unblocked[]` is the only thing you act on.
+- A completion whose evidence **contradicts** a downstream leaf's `done_looks_like` or makes it
+  moot → reassess **only that branch** (§ 9c above) — bounce the contradicted leaf to
+  `orchestrate-plan` or archive it; leave the rest of the graph alone.
+- A **whole-track-completing** event (a foundation merged, an architecture decided, a research
+  leaf that changed the landscape) → **full reassessment** of what remains against the goal: are
+  planned leaves now unnecessary, are there gaps, did the approach shift?
+
+The default is the cheap path (record + continue); escalate to reassessment only on the contradict
+/ whole-track triggers. The frontier predicate already steps around blocked work, so most ticks
+need no replanning at all.
 
 ## Failure path
 

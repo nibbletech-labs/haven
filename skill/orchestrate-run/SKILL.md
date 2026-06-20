@@ -66,7 +66,9 @@ leaves under a container + a verify-first `spec` pack) → native **plan mode / 
 Read the `haven` skill's `references/surface-map.md` (CLI⇄MCP) for op detail — don't
 restate arguments from memory. The exact op per tick step is in `references/tick-ops.md`;
 the git runbook is in `references/worktree-merge.md`; the effort/gate/strike knobs are in
-`references/dispatch-policy.md`.
+`references/dispatch-policy.md`; the build-agent discipline the gate enforces — fix-log +
+3-strike circuit breaker, TDD-as-a-gate, the change-request envelope, batching heuristics, and
+human-gated knowledge promotion — is in `references/executor-discipline.md`.
 
 - **Structure only through ops.** Mutate nodes/edges only via `haven …` / `haven_*`.
   The fix-log and any run notes are artifact **content**, never `body`.

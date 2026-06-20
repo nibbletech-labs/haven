@@ -223,6 +223,10 @@ const ORCHESTRATE_RUN_SKILL_FILES: &[(&str, &str)] = &[
         include_str!("../../../skill/orchestrate-run/references/dispatch-policy.md"),
     ),
     (
+        "references/executor-discipline.md",
+        include_str!("../../../skill/orchestrate-run/references/executor-discipline.md"),
+    ),
+    (
         "agents/openai.yaml",
         include_str!("../../../skill/orchestrate-run/agents/openai.yaml"),
     ),

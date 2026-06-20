@@ -57,7 +57,9 @@ pass *before* signalling done. A repo-wide green build does not prove a specific
 acceptance — many leaves have acceptance no global test covers. The verifier then re-runs the
 deterministic subset independently. For a **behavioral** code leaf, default to **TDD** (write
 the failing test from the acceptance first; include the red→green transition in the evidence) —
-on for ultracode/complex, optional for mechanical.
+on for ultracode/complex, optional for mechanical. **TDD here is a gate, not a style** — the
+RED-before-GREEN sequence and the binary sign-off item *"a failing test was written before the
+implementation"* are spelled out in `references/executor-discipline.md` § TDD as a gate.
 
 ## The build agent's envelope (Change-Request rule)
 
@@ -66,7 +68,9 @@ graph and may **not** expand scope. If it discovers in-worktree that its member 
 dependency is missing, or scope must grow, it **surfaces the finding** (in its result / a scratch
 note) and **returns** — it must never silently overreach (poisoning the merge) or silently stall.
 You, the single orchestrator, decide on the next tick whether to re-pack, re-plan, or adjust the
-member list.
+member list. The full **Change-Request envelope** — the trigger conditions and the
+Reason/Requested/Impact form the agent surfaces, then *waits, no assumed approval* — is in
+`references/executor-discipline.md` § The change-request envelope.
 
 ## STRIKES — the fix-log circuit breaker
 
@@ -74,7 +78,11 @@ On a gate-fail, append a fix-log entry to the **batch container** (`role:scratch
 `fix-log.md`); the strike count is **derived by counting entries** (no schema field). At **N
 strikes (default 2–3)**, stop retrying and `handoff` the batch to a human (`wait:on_human`),
 which self-evicts it from `next --owner ai`. The N-strike ceiling is the **liveness guarantee**:
-the AI frontier strictly shrinks, so the loop provably converges — no batch retries forever.
+the AI frontier strictly shrinks, so the loop provably converges — no batch retries forever. The
+fix-log discipline this counts (append-only on the container, fresh fixer reads-prior-attempts +
+tries-something-different, log BEFORE and AFTER, the entry format, and the 3-strike-**per-
+acceptance-id** breaker that escalates *with the fix-log path*) is in
+`references/executor-discipline.md` § The fix-log / § The 3-strike circuit breaker.
 
 ## Unattended ⇒ deterministic gate only
 
@@ -82,3 +90,35 @@ When there is no human to approve and no human to escalate to in real time, the 
 the deterministic verifier (never plan-mode approval); escalation still parks the batch on
 `wait_state on_human` and the loop reports it and continues. Convergence is always reachable:
 every batch terminates as merged-and-done **or** parked-on-human-after-N-strikes.
+
+## Dispatch-prompt quality — the synthesis test (the most load-bearing dial)
+
+The build agent you spawn **does not inherit any skill** and does not share your context — it
+sees only the prompt you hand it. So the *quality of that forwarded prompt IS the product*; a
+thin prompt is a thin build, and no gate downstream can recover understanding you failed to
+synthesise upstream. Every dispatch prompt must **prove you understood the work before handing it
+off**. Never delegate understanding.
+
+- **Bad:** "Based on the research, implement the auth feature."
+- **Bad:** "Look at the codebase and figure out how to add caching."
+- **Good:** "Implement JWT auth middleware. The Express app at `src/app.ts` uses
+  `express.Router()` (line 34). Auth routes stubbed at `src/routes/auth.ts`. User model at
+  `src/models/user.ts` has `passwordHash` and `email`. Use `jsonwebtoken` (in package.json).
+  Write middleware to `src/middleware/auth.ts`, integrate at `src/routes/index.ts:15`."
+
+> **The test:** if you removed the agent's ability to explore the codebase, could it still make
+> meaningful progress from your prompt alone? If not, you haven't done enough synthesis.
+
+Apply it to *every* spawn — the build agent, the verifier, the fixer. The pack's `context-pack.md`
+is most of this synthesis pre-done; your job is to forward it whole plus the leaf-specific edges,
+not to gesture at it.
+
+## Don't peek, don't race
+
+Once a batch is dispatched, **do not read the agent's working files mid-flight**, and **do not
+predict or fabricate its results**. Wait for the completion notification, then process the output.
+Peeking tempts you to act on a half-written state (which the stateless reorient does not model)
+and racing tempts you to invent a verdict the verifier hasn't returned — both poison the one
+truth the loop trusts. The graph's `in_progress` status, the worktree, and the done-marker are
+the only mid-flight signals you read (`references/worktree-merge.md` § RECOVER); the agent's
+scratch is *its* working memory, not yours.
