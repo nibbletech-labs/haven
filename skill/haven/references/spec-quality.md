@@ -146,3 +146,72 @@ groomed in place — only a *mis-scoped* one bounces.
   reason.
 - **Vague acceptance.** "Works well" / "is fast" is not testable and won't survive the
   `complete` verify step. Make it concrete.
+
+## The spec-shippability linter — a HARD gate, not advice
+
+The good/bad/check bar above is the *aim*; this is the **mechanical pass** that catches the spec
+when the aim slips. Run it over a `spec` (or a `done_looks_like`) **before** you call the item
+ready — every rule is a **yes/no check, not a judgment call**, so it either passes or it doesn't.
+Treat a failing rule as blocking: fix it or the item is not shippable. Each rule is the
+distillation of a class of bug that reaches the build agent and wrecks it (the build/verify
+subagents don't inherit this skill — what isn't in the spec is gone).
+
+1. **Weasel-word scan — quantify or remove.** Scan the spec for these words and kill each one:
+   **fast, slow, quick, easy, seamless, intuitive, simple, obvious, efficient.** Each is a hole
+   where a number, a threshold, or a concrete behaviour should be. "Fast" → "p95 < 200 ms";
+   "intuitive" → the actual interaction; "simple" → cut it or say what's excluded. A weasel word
+   is unverifiable by construction, so it cannot anchor acceptance.
+2. **Schema AND example — both, for every contract.** Every API shape / payload / event you
+   specify (an `API-[ID]` / `EVENT-[ID]`-class contract) carries **both a schema and a concrete
+   example payload**. A schema *without* an example is **rejected** — the schema says what's
+   legal, the example says what's *intended*, and the gap between them is where builders guess
+   wrong. One filled-in example is worth more than a paragraph of prose about the field.
+3. **Architecture notes cite real files.** Any technical grounding must name the **actual file
+   with its path** — `lib/auth/session.ts`, not "we have auth"; "we use caching" must name the
+   cache implementation, not wave at it. An unsourced claim ("the API supports filtering") is an
+   assumption masquerading as a fact; force it to a path or drop it. In Haven terms: cite the real
+   repo file, not a vibe.
+4. **Quality gates are yes/no, not judgment calls.** Every gate / acceptance line must be
+   **executable as a binary check** — "the export round-trips losslessly", not "code quality is
+   acceptable"; "returns a 422 with `{error, field}`", not "returns an appropriate error". Sign-off
+   is a **checklist, not a judgment**: if reading a gate makes you *decide* rather than *observe*,
+   it isn't a gate yet.
+
+Red flags this linter is built to catch (each is a real failure mode, not a style nit):
+"returns appropriate error" with no error format; a contract with a schema but no example; an
+architecture note that says "we use caching" without naming the implementation; a gate like
+"code quality is acceptable" that no one can run; acceptance phrased as a milestone ("endpoint
+deployed") rather than an observable outcome.
+
+## Missing upstream input — surface the gap, never fabricate
+
+A groom/spec step often expects an **upstream input** — a parent's `spec`, an anchor's `design`,
+a research artifact, a prior decision. When that required input is **absent**, do **not** quietly
+invent it. The discipline (lifted from the cross-skill handoff protocol) is:
+
+1. **Surface the gap** with the **exact path/ref** you were looking for **and the producer you
+   expected** — name the artifact role and the skill/step that produces it (e.g. "no `spec`
+   artifact on HV-42's parent — `create-context-pack` is what writes that").
+2. **Offer three explicit choices**, don't pick silently:
+   (a) **invoke the producer** to generate it properly;
+   (b) **accept a hand-rolled substitute** the human provides; or
+   (c) **proceed with documented degraded input** — note in the spec that the upstream was
+   missing and what you assumed in its place.
+3. **Never silently fabricate** the missing input's content. A fabricated upstream is worse than a
+   flagged gap: it looks authoritative and propagates downstream unchecked. This is the same rule
+   as the autonomous `[VERIFY]` tagging above — nothing critical is assumed *invisibly*.
+
+> **Candidate Haven primitive — the gate "Refines" enrichment loop.** Builder's backlog gates
+> carried an optional **`Refines:`** edge: a review checkpoint, on firing, **lists the items to
+> enrich based on the gate's findings** — the gate's outcome feeds *back* into sharpening the
+> downstream items it gates, not just a pass/fail. Haven has no first-class equivalent yet (a
+> completed gate-style item that re-grooms its dependents). Worth capturing as a floating item if
+> the pattern recurs — findings-enrich-downstream is the durable idea, the `Refines:` syntax is
+> just one encoding of it.
+
+> **Type is descriptive, not a dispatch instruction.** An item's **type** (code / research /
+> data / design / admin) is **descriptive metadata for filtering and reporting — not a dispatch
+> instruction.** Don't branch behaviour on it ("type=research, so skip the spec"); groom every
+> item to the same bar and let ownership/acceptance drive what happens next. Haven already encodes
+> this — `kind`/type is a label on the node, never a router — so this is a confirmation, not a new
+> rule: resist the temptation to make type do dispatch work it isn't for.
