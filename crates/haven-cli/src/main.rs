@@ -789,8 +789,135 @@ fn main() {
     }
 }
 
+/// How the repo-binding guard treats a command: a project-scoped write that
+/// could mis-file, a project-scoped read, or something the binding doesn't touch.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum GuardKind {
+    Mutation,
+    Read,
+    Exempt,
+}
+
+/// Classify every command (exhaustive — no wildcard, so a new command/subcommand
+/// fails to compile until it's deliberately classified).
+fn guard_kind(cmd: &Command) -> GuardKind {
+    match cmd {
+        Command::Setup { .. }
+        | Command::Init
+        | Command::Doctor
+        | Command::Config { .. }
+        | Command::Project { .. }
+        | Command::Link { .. }
+        | Command::Skill { .. }
+        | Command::Slf { .. }
+        | Command::Mcp
+        | Command::Auth { .. }
+        | Command::Sync { .. }
+        | Command::Backup { .. } => GuardKind::Exempt,
+        Command::Status
+        | Command::Next(_)
+        | Command::Inbox(_)
+        | Command::Xref(_)
+        | Command::Search(_)
+        | Command::Graph(_)
+        | Command::Docs
+        | Command::Render => GuardKind::Read,
+        Command::Import { .. }
+        | Command::Decompose(_)
+        | Command::Depend(_)
+        | Command::Group(_)
+        | Command::Evolve { .. }
+        | Command::Note { .. } => GuardKind::Mutation,
+        Command::Item { cmd } => match cmd {
+            ItemCmd::List(_) | ItemCmd::Get(_) => GuardKind::Read,
+            ItemCmd::Add(_)
+            | ItemCmd::Update(_)
+            | ItemCmd::Commit { .. }
+            | ItemCmd::Uncommit { .. }
+            | ItemCmd::Assign(_)
+            | ItemCmd::Handoff(_)
+            | ItemCmd::Complete(_)
+            | ItemCmd::Rank(_)
+            | ItemCmd::Archive { .. }
+            | ItemCmd::Reopen { .. } => GuardKind::Mutation,
+        },
+        Command::Artifact { cmd } => match cmd {
+            ArtifactCmd::List(_) | ArtifactCmd::Get(_) => GuardKind::Read,
+            ArtifactCmd::Add(_) | ArtifactCmd::Rm(_) | ArtifactCmd::Mv(_) => GuardKind::Mutation,
+        },
+    }
+}
+
+/// The guard's decision for a bound repo, given the op's resolved target project.
+#[derive(Debug, PartialEq, Eq)]
+enum GuardOutcome {
+    Allow,
+    Warn(String),
+    Block(String),
+}
+
+/// Pure decision: `explicit` = an explicit `-p` was passed (the deliberate
+/// cross-project override). A matching target — or an exempt op — is always fine.
+fn guard_outcome(
+    kind: GuardKind,
+    bound: &str,
+    target: Option<&str>,
+    explicit: bool,
+) -> GuardOutcome {
+    if target == Some(bound) {
+        return GuardOutcome::Allow;
+    }
+    let target_desc = target.unwrap_or("<none selected>");
+    match kind {
+        // Exempt is short-circuited before guard_outcome in practice; handled here
+        // too so the match stays exhaustive without a wildcard (and unit-testable).
+        GuardKind::Exempt => GuardOutcome::Allow,
+        GuardKind::Read => GuardOutcome::Warn(format!(
+            "reading project '{target_desc}', not this repo's linked project '{bound}'"
+        )),
+        // An explicit -p is the deliberate override → warn, don't block.
+        GuardKind::Mutation if explicit => GuardOutcome::Warn(format!(
+            "writing to project '{target_desc}', not this repo's linked project '{bound}' (-p override)"
+        )),
+        // The mis-file case: a write with no -p whose target differs from the binding.
+        GuardKind::Mutation => GuardOutcome::Block(format!(
+            "this repo is linked to project '{bound}', but the active project is '{target_desc}'. \
+             Re-run with -p {bound} (or -p <other> for a deliberate cross-project write)."
+        )),
+    }
+}
+
+/// Gate a mis-filing write / warn a cross-project read when this repo carries a
+/// Haven binding and the op's target project differs (HV-147). No binding → no-op
+/// (project resolution is unchanged), so this is purely additive.
+fn guard_repo_binding(cli: &Cli) -> Result<()> {
+    let kind = guard_kind(&cli.command);
+    if kind == GuardKind::Exempt {
+        return Ok(());
+    }
+    let Some(bound) = config::repo_binding()? else {
+        return Ok(());
+    };
+    // Resolved target = explicit -p, else the global current project (best-effort).
+    let target = match cli.project.as_deref() {
+        Some(p) => Some(p.to_string()),
+        None => config::open_store()
+            .ok()
+            .and_then(|s| s.current_project().ok().flatten()),
+    };
+    match guard_outcome(kind, &bound, target.as_deref(), cli.project.is_some()) {
+        GuardOutcome::Allow => Ok(()),
+        GuardOutcome::Warn(msg) => {
+            eprintln!("warn: {msg}");
+            Ok(())
+        }
+        GuardOutcome::Block(msg) => Err(HavenError::Invalid(msg)),
+    }
+}
+
 fn run(cli: &Cli) -> Result<Output> {
     let project = cli.project.as_deref();
+    guard_repo_binding(cli)?;
     match &cli.command {
         Command::Setup {
             agent,
@@ -1621,6 +1748,7 @@ fn cmd_link(project: Option<&str>, name: &std::path::Path) -> Result<Output> {
         "backlog": linked.backlog.display().to_string(),
         "canonical_backlog": linked.canonical_backlog.display().to_string(),
         "git_exclude": linked.git_exclude.map(|p| p.display().to_string()),
+        "binding": linked.binding.display().to_string(),
         "note": "canonical graph/content remains under ~/.haven; this workspace is disposable",
     })))
 }
@@ -2362,4 +2490,58 @@ fn uuid_like() -> String {
         .map(|d| d.as_nanos())
         .unwrap_or(0);
     format!("dev-{nanos:x}")
+}
+
+#[cfg(test)]
+mod guard_tests {
+    use super::{guard_outcome, GuardKind, GuardOutcome};
+
+    #[test]
+    fn matching_target_or_exempt_always_allows() {
+        // Target == binding → nothing to guard, for reads or writes.
+        assert_eq!(
+            guard_outcome(GuardKind::Mutation, "haven", Some("haven"), false),
+            GuardOutcome::Allow
+        );
+        assert_eq!(
+            guard_outcome(GuardKind::Read, "haven", Some("haven"), false),
+            GuardOutcome::Allow
+        );
+        // Exempt ops never trip the guard even on a mismatch.
+        assert_eq!(
+            guard_outcome(GuardKind::Exempt, "haven", Some("other"), false),
+            GuardOutcome::Allow
+        );
+    }
+
+    #[test]
+    fn mutation_mismatch_blocks_without_p_warns_with_it() {
+        // The mis-file case: a write, no -p, current project differs from binding.
+        assert!(matches!(
+            guard_outcome(GuardKind::Mutation, "haven", Some("other"), false),
+            GuardOutcome::Block(_)
+        ));
+        // A binding exists but nothing resolves → still blocked, with guidance.
+        assert!(matches!(
+            guard_outcome(GuardKind::Mutation, "haven", None, false),
+            GuardOutcome::Block(_)
+        ));
+        // An explicit -p is the deliberate override → warn, not block.
+        assert!(matches!(
+            guard_outcome(GuardKind::Mutation, "haven", Some("other"), true),
+            GuardOutcome::Warn(_)
+        ));
+    }
+
+    #[test]
+    fn read_mismatch_only_warns_never_blocks() {
+        assert!(matches!(
+            guard_outcome(GuardKind::Read, "haven", Some("other"), false),
+            GuardOutcome::Warn(_)
+        ));
+        assert!(matches!(
+            guard_outcome(GuardKind::Read, "haven", None, true),
+            GuardOutcome::Warn(_)
+        ));
+    }
 }

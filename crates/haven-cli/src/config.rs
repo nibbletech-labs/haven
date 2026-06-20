@@ -687,11 +687,26 @@ pub struct LinkResult {
     pub backlog: PathBuf,
     pub canonical_backlog: PathBuf,
     pub git_exclude: Option<PathBuf>,
+    pub binding: PathBuf,
 }
+
+/// The repo-local binding marker `haven link` writes (and [`repo_binding`] reads):
+/// a one-line file naming the project this repo is bound to.
+pub const BINDING_FILE: &str = ".haven-project";
 
 pub fn link_workspace(store: &Store, project: Option<&str>, name: &Path) -> Result<LinkResult> {
     let canonical_backlog = store.render(project)?;
-    let workspace = std::env::current_dir()?.join(name);
+    // The project this repo binds to — `render` above already validated it exists.
+    let key = match project {
+        Some(p) => p.to_string(),
+        None => store.current_project()?.ok_or_else(|| {
+            HavenError::Invalid(
+                "no project selected to link — pass -p <key> or run `haven project use`".into(),
+            )
+        })?,
+    };
+    let root = std::env::current_dir()?;
+    let workspace = root.join(name);
     std::fs::create_dir_all(workspace.join("docs"))?;
     std::fs::write(
         workspace.join("README.md"),
@@ -699,13 +714,39 @@ pub fn link_workspace(store: &Store, project: Option<&str>, name: &Path) -> Resu
     )?;
     let backlog = workspace.join("backlog.md");
     replace_backlog_alias(&canonical_backlog, &backlog)?;
+    // Bind this repo to the project so CLI writes run here can't silently mis-file
+    // into a different (e.g. concurrently-flipped) current project — HV-147.
+    let binding = root.join(BINDING_FILE);
+    std::fs::write(&binding, format!("{key}\n"))?;
     let git_exclude = exclude_workspace_from_git(&workspace)?;
+    append_git_exclude(&format!("/{BINDING_FILE}"))?;
     Ok(LinkResult {
         workspace,
         backlog,
         canonical_backlog,
         git_exclude,
+        binding,
     })
+}
+
+/// The project this repo is bound to, if any: the first [`BINDING_FILE`] found
+/// walking up from the current directory. None when unset — callers then fall
+/// back to the usual project resolution, so this is purely additive.
+pub fn repo_binding() -> Result<Option<String>> {
+    let mut dir = match std::env::current_dir() {
+        Ok(d) => d,
+        Err(_) => return Ok(None),
+    };
+    loop {
+        let marker = dir.join(BINDING_FILE);
+        if marker.is_file() {
+            let key = std::fs::read_to_string(&marker)?.trim().to_string();
+            return Ok((!key.is_empty()).then_some(key));
+        }
+        if !dir.pop() {
+            return Ok(None);
+        }
+    }
 }
 
 fn replace_backlog_alias(canonical: &Path, link: &Path) -> Result<()> {
@@ -731,6 +772,16 @@ fn replace_backlog_alias(canonical: &Path, link: &Path) -> Result<()> {
 }
 
 fn exclude_workspace_from_git(workspace: &Path) -> Result<Option<PathBuf>> {
+    let name = workspace
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("Haven");
+    append_git_exclude(&format!("/{name}/"))
+}
+
+/// Append a single line to the repo's `.git/info/exclude` (idempotent). Returns
+/// the exclude file path, or None when not inside a git repo.
+fn append_git_exclude(entry: &str) -> Result<Option<PathBuf>> {
     let Some(git_dir) = find_git_dir(std::env::current_dir()?) else {
         return Ok(None);
     };
@@ -739,16 +790,11 @@ fn exclude_workspace_from_git(workspace: &Path) -> Result<Option<PathBuf>> {
         std::fs::create_dir_all(parent)?;
     }
     let mut raw = std::fs::read_to_string(&exclude).unwrap_or_default();
-    let name = workspace
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or("Haven");
-    let entry = format!("/{name}/");
     if !raw.lines().any(|line| line.trim() == entry) {
         if !raw.ends_with('\n') && !raw.is_empty() {
             raw.push('\n');
         }
-        raw.push_str(&entry);
+        raw.push_str(entry);
         raw.push('\n');
         std::fs::write(&exclude, raw)?;
     }

@@ -973,3 +973,74 @@ fn backup_now_list_verify_and_restore_round_trip() {
     assert!(status["backups"]["count"].as_u64().unwrap() >= 1);
     assert_eq!(status["backups"]["frozen"], false);
 }
+
+#[test]
+fn repo_binding_gates_writes_and_warns_reads_on_project_mismatch() {
+    let h = Haven::new();
+    // Two projects; bind this repo (cwd = HAVEN_HOME) to `haven`.
+    h.json(&[
+        "project", "add", "--key", "haven", "--title", "Haven", "--prefix", "HV",
+    ]);
+    h.ok(&["project", "use", "haven"]);
+    h.json(&[
+        "project", "add", "--key", "other", "--title", "Other", "--prefix", "OT",
+    ]);
+    let linked = h.json(&["link", "-p", "haven"]);
+    assert!(linked["binding"]
+        .as_str()
+        .unwrap()
+        .ends_with(".haven-project"));
+
+    // Flip the global current project away from the binding.
+    h.ok(&["project", "use", "other"]);
+
+    // A write with no -p resolves to `other` != bound `haven` → BLOCKED (mis-file guard).
+    let err = h.fail(&["item", "add", "Mistake", "--type", "task"]);
+    assert_eq!(err["error"]["code"], "invalid");
+    let msg = err["error"]["message"].as_str().unwrap();
+    assert!(
+        msg.contains("linked to project 'haven'"),
+        "blocked msg: {msg}"
+    );
+    assert!(msg.contains("-p haven"), "should guide to -p: {msg}");
+
+    // Explicit -p matching the binding proceeds (no mismatch).
+    h.ok(&["item", "add", "Right", "--type", "task", "-p", "haven"]);
+    // Explicit -p to another project is the deliberate override → proceeds (with a warn).
+    let cross = h
+        .cmd(&["item", "add", "Cross", "--type", "task", "-p", "other"])
+        .output()
+        .unwrap();
+    assert!(
+        cross.status.success(),
+        "explicit -p override should proceed"
+    );
+    assert!(String::from_utf8_lossy(&cross.stderr).contains("-p override"));
+
+    // A read with the mismatched current project warns but still succeeds.
+    let read = h.cmd(&["next"]).output().unwrap();
+    assert!(read.status.success(), "read must not be blocked");
+    assert!(
+        String::from_utf8_lossy(&read.stderr).contains("linked project 'haven'"),
+        "read should warn on mismatch"
+    );
+
+    // Sanity: the deliberate -p writes actually landed in their target projects.
+    let haven_items = h.json(&["item", "list", "-p", "haven"]);
+    assert!(haven_items
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|n| n["title"] == "Right"));
+    let other_items = h.json(&["item", "list", "-p", "other"]);
+    assert!(other_items
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|n| n["title"] == "Cross"));
+    assert!(!other_items
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|n| n["title"] == "Mistake"));
+}
