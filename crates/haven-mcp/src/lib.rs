@@ -898,29 +898,29 @@ fn tools_list() -> Value {
     let obj = |props: Value, required: Value| json!({"type": "object", "properties": props, "required": required});
     json!([
         { "name": "haven_list_items", "description": "List items in a project under filters. Returns a compact, paginated view {total, count, offset, items[]} — each item carries identity + axes only (ref, title, type, status, committed, owner, priority, wait); fetch prose/detail for one item with haven_get_item. Truncated to `limit` (default 100) from `offset`, in (priority, sort_key, created_at) order; `total` is the full match count. `wait` (on_human|on_dependency|on_external) answers 'what's waiting on me / stuck on X'; `stale` (days) surfaces items untouched for N+ days.",
-          "inputSchema": obj(json!({"project":{"type":"string"},"status":{"type":"string"},"type":{"type":"string"},"owner":{"type":"string"},"committed":{"type":"boolean"},"icebox":{"type":"boolean"},"group":{"type":"string"},"wait":{"type":"string"},"stale":{"type":"integer"},"limit":{"type":"integer"},"offset":{"type":"integer"}}), json!([])) },
+          "inputSchema": obj(json!({"project":{"type":"string"},"status":{"type":"string"},"type":{"type":"string"},"owner":{"type":"string","enum":["human","ai"]},"committed":{"type":"boolean"},"icebox":{"type":"boolean"},"group":{"type":"string"},"wait":{"type":"string","enum":["on_human","on_dependency","on_external"]},"stale":{"type":"integer"},"limit":{"type":"integer"},"offset":{"type":"integer"}}), json!([])) },
         { "name": "haven_inbox", "description": "Untriaged floaters: uncommitted, live (not archived/superseded), with no acceptance (done_looks_like) set yet — the triage queue behind capture→triage→next. Same compact, paginated {total, count, offset, items[]} envelope as haven_list_items.",
-          "inputSchema": obj(json!({"project":{"type":"string"},"owner":{"type":"string"},"limit":{"type":"integer"},"offset":{"type":"integer"}}), json!([])) },
+          "inputSchema": obj(json!({"project":{"type":"string"},"owner":{"type":"string","enum":["human","ai"]},"limit":{"type":"integer"},"offset":{"type":"integer"}}), json!([])) },
         { "name": "haven_xref", "description": "Cross-store links (HV-69) on a node's artifacts: a deterministic, sorted {node, outbound[], inbound[]} report. `outbound` is every typed xref {relation, store, target, canonical?} on this node's own artifacts; `inbound` is every other Haven artifact whose xref `target` resolves to this node (backlinks). Read-only. Cross-store targets are reported as-is; only Haven-ref targets resolve to nodes.",
           "inputSchema": obj(json!({"ref":{"type":"string"},"project":{"type":"string"}}), json!(["ref"])) },
         { "name": "haven_get_item", "description": "Fetch one item in full (prose + requested edges/artifacts/lineage); internal sync fields (public_id/sync_state/revision) are omitted. The detail door for an item shown compactly by haven_list_items/haven_next.",
           "inputSchema": obj(json!({"ref":{"type":"string"},"project":{"type":"string"},"include":{"type":"array","items":{"type":"string"}}}), json!(["ref"])) },
         { "name": "haven_next", "description": "Items ready to dispatch (committed, ready, unblocked). Returns a compact view per item (identity + axes, no prose — fetch full via haven_get_item).",
-          "inputSchema": obj(json!({"project":{"type":"string"},"owner":{"type":"string"},"limit":{"type":"integer"}}), json!([])) },
+          "inputSchema": obj(json!({"project":{"type":"string"},"owner":{"type":"string","enum":["human","ai"]},"limit":{"type":"integer"}}), json!([])) },
         { "name": "haven_next_explain", "description": "Diagnose why the dispatch queue is empty: the dispatchable count plus a per-reason breakdown (owner-mismatch, blocked-by-dependency, waiting, committed-not-ready, ready-but-uncommitted) and a hint. Call when haven_next returns nothing — diagnose, don't invent work.",
-          "inputSchema": obj(json!({"project":{"type":"string"},"owner":{"type":"string"}}), json!([])) },
+          "inputSchema": obj(json!({"project":{"type":"string"},"owner":{"type":"string","enum":["human","ai"]}}), json!([])) },
         { "name": "haven_rank", "description": "Reorder an item within its priority band: place it immediately before or after another item (exactly one of `before`/`after`). Fine ordering for 'do X before Y' — use `haven_update_item {priority}` for coarse band moves.",
           "inputSchema": obj(json!({"ref":{"type":"string"},"project":{"type":"string"},"before":{"type":"string"},"after":{"type":"string"}}), json!(["ref"])) },
         { "name": "haven_add_item", "description": "Create a work-graph item (node). `done_looks_like` is the acceptance statement output is verified against; `why` is a one-line provenance trace. `due_at` is an optional deadline as a calendar date YYYY-MM-DD (no time/timezone), validated on write. Pass `if_absent: true` to return an existing live item with the same normalized title (marked `existing: true`) instead of creating a duplicate; responses may carry `similar` — up to 3 live items with overlapping titles (advisory).",
-          "inputSchema": obj(json!({"title":{"type":"string"},"project":{"type":"string"},"type":{"type":"string","description":"Node type. Leaves: task (default), code, research, data, design, admin. Containers (the only valid group targets): release, phase, gate. anchor = a long-lived project-docs / overview node."},"body":{"type":"string"},"done_looks_like":{"type":"string"},"why":{"type":"string"},"due_at":{"type":"string"},"status":{"type":"string"},"priority":{"type":"integer"},"commit":{"type":"boolean"},"assign":{"type":"string"},"parent":{"type":"string"},"depends_on":{"type":"string"},"group":{"type":"string","description":"Add this new item to a release/phase/gate container (creates a grouping edge from that container to this item)."},"if_absent":{"type":"boolean"}}), json!(["title"])) },
+          "inputSchema": obj(json!({"title":{"type":"string"},"project":{"type":"string"},"type":{"type":"string","description":"Node type. Leaves: task (default), code, research, data, design, admin. Containers (the only valid group targets): release, phase, gate. anchor = a long-lived project-docs / overview node."},"body":{"type":"string"},"done_looks_like":{"type":"string"},"why":{"type":"string"},"due_at":{"type":"string"},"status":{"type":"string"},"priority":{"type":"integer","minimum":0,"maximum":4},"commit":{"type":"boolean"},"assign":{"type":"string","enum":["human","ai"]},"parent":{"type":"string"},"depends_on":{"type":"string"},"group":{"type":"string","description":"Add this new item to a release/phase/gate container (creates a grouping edge from that container to this item)."},"if_absent":{"type":"boolean"}}), json!(["title"])) },
         { "name": "haven_update_item", "description": "Update maturity/commitment/ownership/grouping of an item. Set `done_looks_like` (acceptance) when it becomes ready so dispatch can verify against it. `due_at` sets the YYYY-MM-DD deadline (validated on write); pass `\"none\"` to clear it. Pass `group` to add the item to a release/phase/gate container (mirrors haven_add_item). Returns the updated item in full (same shape as haven_get_item).",
-          "inputSchema": obj(json!({"ref":{"type":"string"},"title":{"type":"string"},"body":{"type":"string"},"done_looks_like":{"type":"string"},"why":{"type":"string"},"due_at":{"type":"string"},"status":{"type":"string"},"priority":{"type":"integer"},"type":{"type":"string","description":"Node type. Leaves: task (default), code, research, data, design, admin. Containers (the only valid group targets): release, phase, gate. anchor = a long-lived project-docs / overview node."},"wait":{"type":"string"},"commit":{"type":"boolean"},"assign":{"type":"string"},"group":{"type":"string","description":"Add this item to a release/phase/gate container (creates a grouping edge from that container to this item). To remove, use haven_add_edge {kind:\"grouping\", remove:true}."},"actor":{"type":"string"},"project":{"type":"string"}}), json!(["ref"])) },
+          "inputSchema": obj(json!({"ref":{"type":"string"},"title":{"type":"string"},"body":{"type":"string"},"done_looks_like":{"type":"string"},"why":{"type":"string"},"due_at":{"type":"string"},"status":{"type":"string"},"priority":{"type":"integer","minimum":0,"maximum":4},"type":{"type":"string","description":"Node type. Leaves: task (default), code, research, data, design, admin. Containers (the only valid group targets): release, phase, gate. anchor = a long-lived project-docs / overview node."},"wait":{"type":"string","enum":["on_human","on_dependency","on_external","none"],"description":"none clears the wait"},"commit":{"type":"boolean"},"assign":{"type":"string","enum":["human","ai"]},"group":{"type":"string","description":"Add this item to a release/phase/gate container (creates a grouping edge from that container to this item). To remove, use haven_add_edge {kind:\"grouping\", remove:true}."},"actor":{"type":"string"},"project":{"type":"string"}}), json!(["ref"])) },
         { "name": "haven_add_edge", "description": "Add (or `remove:true`) a structural edge; direction matters. decomposition: from=parent → to=child. dependency: from=the blocked item → to=its blocker (the prerequisite). grouping: from=container → to=member, and the container (`from`) MUST be a release/phase/gate node.",
           "inputSchema": obj(json!({"kind":{"type":"string","enum":["decomposition","dependency","grouping"]},"from":{"type":"string"},"to":{"type":"string"},"remove":{"type":"boolean"},"project":{"type":"string"}}), json!(["kind","from","to"])) },
         { "name": "haven_evolve", "description": "Split/merge/supersede items (lineage).",
           "inputSchema": obj(json!({"op":{"type":"string"},"refs":{"type":"array","items":{"type":"string"}},"into":{"type":"array","items":{"type":"string"}},"with":{"type":"string"},"title":{"type":"string"},"rationale":{"type":"string"},"project":{"type":"string"}}), json!(["op","refs"])) },
         { "name": "haven_lineage", "description": "Lineage graph around an item.",
-          "inputSchema": obj(json!({"ref":{"type":"string"},"direction":{"type":"string"},"depth":{"type":"integer"},"project":{"type":"string"}}), json!(["ref"])) },
+          "inputSchema": obj(json!({"ref":{"type":"string"},"direction":{"type":"string","enum":["ancestors","descendants","both"]},"depth":{"type":"integer"},"project":{"type":"string"}}), json!(["ref"])) },
         { "name": "haven_resolve_live", "description": "Resolve a possibly superseded/archived item ref forward through lineage to its live descendant(s); a live item resolves to itself. Use to follow stale refs found in handoffs or docs. Returns compact items.",
           "inputSchema": obj(json!({"ref":{"type":"string"},"project":{"type":"string"}}), json!(["ref"])) },
         { "name": "haven_search", "description": "Full-text search over item title/body.",
@@ -932,7 +932,7 @@ fn tools_list() -> Value {
         { "name": "haven_get_artifact", "description": "Read an artifact's content (local or lazy-pulled).",
           "inputSchema": obj(json!({"ref":{"type":"string"},"role":{"type":"string"},"path":{"type":"string"},"project":{"type":"string"}}), json!(["ref"])) },
         { "name": "haven_add_artifact", "description": "Register an artifact on an item. Pass `content` to have the server write the file (the content channel for filesystem-less clients), or `path`/`uri` for a local file / external link. `name` sets the destination filename (also for `path`). Re-adding the same filename errors unless `replace:true`, which overwrites in place.",
-          "inputSchema": obj(json!({"ref":{"type":"string"},"role":{"type":"string"},"kind":{"type":"string"},"content":{"type":"string"},"name":{"type":"string"},"replace":{"type":"boolean"},"path":{"type":"string"},"uri":{"type":"string"},"title":{"type":"string"},"from":{"type":"string"},"to":{"type":"string"},"project":{"type":"string"}}), json!(["ref","role"])) },
+          "inputSchema": obj(json!({"ref":{"type":"string"},"role":{"type":"string"},"kind":{"type":"string","enum":["file","external","delivery"]},"content":{"type":"string"},"name":{"type":"string"},"replace":{"type":"boolean"},"path":{"type":"string"},"uri":{"type":"string"},"title":{"type":"string"},"from":{"type":"string","enum":["human","ai"]},"to":{"type":"string","enum":["human","ai"]},"project":{"type":"string"}}), json!(["ref","role"])) },
         { "name": "haven_rm_artifact", "description": "Remove an artifact (DB row + backing file) from an item. Select by exactly one of `role`/`name`/`id`; a `role` matching more than one artifact is refused — disambiguate by `name` (the file's basename) or `id` (public_id).",
           "inputSchema": obj(json!({"ref":{"type":"string"},"role":{"type":"string"},"name":{"type":"string"},"id":{"type":"string"},"project":{"type":"string"}}), json!(["ref"])) },
         { "name": "haven_mv_artifact", "description": "Rename an artifact's backing file (role / history / created_at preserved). Select by exactly one of `role`/`name`/`id` (same ambiguity rule as haven_rm_artifact); `new_name` is a plain filename, rejected if it collides with another artifact's path on the item.",
@@ -948,7 +948,7 @@ fn tools_list() -> Value {
         { "name": "haven_reopen", "description": "Revive an archived/superseded item back into the maturity flow (status→discovery), emitting a lineage event.",
           "inputSchema": obj(json!({"ref":{"type":"string"},"rationale":{"type":"string"},"by":{"type":"string"},"project":{"type":"string"}}), json!(["ref"])) },
         { "name": "haven_handoff", "description": "Atomic baton-pass (ai↔human): records a handoff note (stamped from/to), flips the owner, and sets wait/status in one call. To a human defaults to blocked + on_human; to ai clears the wait and unblocks. Prefer this over doing assign + update + add_artifact separately.",
-          "inputSchema": obj(json!({"ref":{"type":"string"},"to":{"type":"string"},"from":{"type":"string"},"note":{"type":"string"},"status":{"type":"string"},"wait":{"type":"string"},"actor":{"type":"string"},"project":{"type":"string"}}), json!(["ref","to"])) },
+          "inputSchema": obj(json!({"ref":{"type":"string"},"to":{"type":"string","enum":["human","ai"]},"from":{"type":"string","enum":["human","ai"]},"note":{"type":"string"},"status":{"type":"string"},"wait":{"type":"string","enum":["on_human","on_dependency","on_external"]},"actor":{"type":"string"},"project":{"type":"string"}}), json!(["ref","to"])) },
         { "name": "haven_complete_item", "description": "Mark an item done: record `evidence` as an artifact (default role delivery), set status=done, and return the items/gates this unblocked (newly dispatchable, as compact items). Warns if no acceptance (done_looks_like) was set. The reliable 'I finished this' path — prefer over a bare status update.",
           "inputSchema": obj(json!({"ref":{"type":"string"},"evidence":{"type":"string"},"artifact_role":{"type":"string"},"by":{"type":"string"},"project":{"type":"string"}}), json!(["ref"])) },
     ])
@@ -1020,6 +1020,75 @@ mod tests {
         assert!(tools.iter().any(|t| t["name"] == "haven_docs"));
         assert!(tools.iter().any(|t| t["name"] == "haven_archive"));
         assert!(tools.iter().any(|t| t["name"] == "haven_list_projects"));
+    }
+
+    #[test]
+    fn schema_enums_match_accepted_enum_values() {
+        // Every closed-set value enum advertised in a tool schema must be a value
+        // the handler's Enum::parse actually accepts — so the schema can't drift
+        // from the model (a typo'd enum value would make a valid call look invalid).
+        let tools = tools_list();
+        let tools = tools.as_array().unwrap();
+        let props = |name: &str| -> Value {
+            tools.iter().find(|t| t["name"] == name).unwrap()["inputSchema"]["properties"].clone()
+        };
+        let enum_of = |props: &Value, key: &str| -> Vec<String> {
+            props[key]["enum"]
+                .as_array()
+                .unwrap_or_else(|| panic!("{key} should carry an enum"))
+                .iter()
+                .map(|v| v.as_str().unwrap().to_string())
+                .collect()
+        };
+        // owner/assign enums are real OwnerKind values.
+        for (tool, key) in [
+            ("haven_add_item", "assign"),
+            ("haven_update_item", "assign"),
+            ("haven_next", "owner"),
+            ("haven_list_items", "owner"),
+            ("haven_add_artifact", "from"),
+            ("haven_handoff", "to"),
+        ] {
+            for v in enum_of(&props(tool), key) {
+                assert!(
+                    OwnerKind::parse(&v).is_ok(),
+                    "{tool}.{key} enum {v:?} not a real OwnerKind"
+                );
+            }
+        }
+        // wait enums are real WaitState values; the update_item SETTER also offers
+        // the `none` clear-sentinel (the list/handoff filters do not).
+        for v in enum_of(&props("haven_update_item"), "wait") {
+            assert!(
+                v == "none" || WaitState::parse(&v).is_ok(),
+                "wait enum {v:?} not WaitState|none"
+            );
+        }
+        for (tool, key) in [("haven_list_items", "wait"), ("haven_handoff", "wait")] {
+            for v in enum_of(&props(tool), key) {
+                assert!(
+                    WaitState::parse(&v).is_ok(),
+                    "{tool}.{key} filter enum {v:?} not a real WaitState"
+                );
+            }
+        }
+        // lineage direction + artifact kind enums are real.
+        for v in enum_of(&props("haven_lineage"), "direction") {
+            assert!(
+                LineageDirection::parse(&v).is_ok(),
+                "direction enum {v:?} not a real LineageDirection"
+            );
+        }
+        for v in enum_of(&props("haven_add_artifact"), "kind") {
+            assert!(
+                ArtifactKind::parse(&v).is_ok(),
+                "kind enum {v:?} not a real ArtifactKind"
+            );
+        }
+        // priority bounds mirror the DB CHECK (priority BETWEEN 0 AND 4).
+        let p = props("haven_add_item");
+        assert_eq!(p["priority"]["minimum"], 0);
+        assert_eq!(p["priority"]["maximum"], 4);
     }
 
     /// Guard against doc drift: the documented MCP catalogue in the skill's
