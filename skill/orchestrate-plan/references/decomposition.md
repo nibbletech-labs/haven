@@ -39,6 +39,38 @@ it, emit the **coupling** (the shared node + a dependency edge per dependent) �
 the dependents or write them a shared brief; that grouping is `create-context-pack`'s axis,
 not the planner's. This is what turns a flat list into a *stacked* graph.
 
+## Stop at the consuming tool's grain (the sharper read of factor 2)
+
+Factor 2's floor — "one coherent unit of work" — is a heuristic for one reason: **the
+true leaf is the consuming tool's own unit of work, and that unit is discovered, not
+fixed.** Decomposition stops where the skill (or agent) that will execute the leaf
+*starts*. That skill handles everything below its grain as its own internal concern; the
+planner splitting deeper just adds coordination overhead with no quality gain. This is
+more general than assuming a single fixed plan-mode grain — the right floor is whatever
+unit the downstream tool consumes, which you read off the skill manifest at runtime when
+one is available, and approximate with the floor heuristic when it isn't.
+
+> **Worked example — "plan a 3-day Japan trip".** Suppose a `trip-planner` skill is
+> available. Decomposition **stops at "build day-by-day itinerary"** (which dispatches
+> `trip-planner`) — do **NOT** sub-decompose into "research Tokyo / research Kyoto / pick
+> restaurants" inside the planner. Those are the skill's internal concerns. If **no**
+> matching skill exists, decompose further — down to nodes that map to a skill or to a
+> plain agent dispatch — but never *below* the grain of the tool that will consume them.
+
+This refines the **bidirectional** decompose/don't test of the three factors:
+
+- **1. Mixed activity types** — does the node mix fundamentally different *kinds* of work
+  that want different tools and different acceptance? Split.
+- **2. Tool-unit boundaries** — does one tool (skill/agent) handle this whole node as a
+  single unit? Then don't split below it; that boundary is the leaf.
+- **3. Hidden cross-branch dependencies** — is there a sub-part several branches need
+  (shared deliverable or assumed contract)? Promote it to its own node and depend the
+  branches on it.
+
+Decompose when any of the three says so (plus: too large for one agent, or real
+parallelism to unlock); don't decompose when a tool handles it as a unit, it's a single
+coherent activity, or splitting would only yield trivial fragments.
+
 ## Split when
 
 - Mixed activity types (needs different tools / acceptance per part).

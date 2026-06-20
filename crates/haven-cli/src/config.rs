@@ -177,6 +177,10 @@ const ORCHESTRATE_PLAN_SKILL_FILES: &[(&str, &str)] = &[
         include_str!("../../../skill/orchestrate-plan/references/tick-ops.md"),
     ),
     (
+        "references/value-density.md",
+        include_str!("../../../skill/orchestrate-plan/references/value-density.md"),
+    ),
+    (
         "agents/openai.yaml",
         include_str!("../../../skill/orchestrate-plan/agents/openai.yaml"),
     ),

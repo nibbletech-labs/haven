@@ -128,7 +128,16 @@ loop:
    `ai` for work the executor can do, `human` for real-world tasks (formulation,
    payments, legal sign-off) only a person can. A node can be sealed even while a
    dependency blocks its *execution* — that just orders the queue; sealing needs only
-   that the work itself is a knowable unit. **End the tick.**
+   that the work itself is a knowable unit. **Before you seal, run the seal gate
+   (`references/value-density.md`):** the **first-cut tests** (value-density / effort /
+   dependency) + the **Grounding Rule** decide whether this work even belongs in the
+   first pass or is **Future** ("Why deferred" + "Why it matters later"); the
+   **decomposition-quality battery** (single-buildable-unit, complexity realism,
+   dependency + external-dependency honesty, oversized-item detection, the
+   bidirectional false-ready/false-discovery check) decides whether it's sound enough to
+   seal or must go back to split/defer; and the **Gherkin-readiness bar** decides whether
+   `done_looks_like` is specific enough to verify ("works correctly" fails; "user can
+   create an account, log in, see their dashboard" passes). **End the tick.**
 9. **(Deferred unless the user asks) GATE.** A reviewable batch of leaves → a `gate`
    node depended on each reviewed leaf, with pass-criteria in its `done_looks_like`.
    Gates are not required for convergence.
