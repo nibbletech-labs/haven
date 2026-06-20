@@ -151,3 +151,26 @@ pointer instead of walking `edges.groups` and guessing which container holds the
 > (`haven_get_artifact {ref: container, role:"context-pack"}`) **before building** — never build a
 > member naked. If the leaf carries `context_pack_clash` instead of `context_pack`, do
 > **not** build: route back to create-context-pack to resolve the clash first.
+
+## 9. Verification-approach → how the verify step checks it
+
+When grooming each member (steps 3 and 7a) tag it with **one** verification approach from
+the fixed taxonomy — `unit | integration | e2e | visual | manual` (the taxonomy and its
+full rationale live in `references/pack-template.md` under *Per-item verification
+approach*). The tag is **operational**: it tells the downstream verify step which path the
+member falls into, so write it into the member's section-4 reference, not just in passing.
+
+| Tag | How the verify step (the `verify` skill / `orchestrate-run`'s gate) checks it |
+|-----|------------------------------------------------------------------------------|
+| **unit** | Deterministic — **run directly** as part of the build+lint+test suite. |
+| **integration** | Deterministic — **run directly** (suite / harness). |
+| **e2e** | **Run directly** where automated; otherwise **spawn a tester** to drive the flow. |
+| **visual** | **Spawn a tester** (browser / visual check) — not a plain assertion. |
+| **manual** | **Human** — surface as NEEDS-HUMAN; the deterministic gate cannot self-clear it. |
+
+The three execution paths are **direct-run** (unit / integration / automated e2e — the
+`verify` skill's deterministic suite), **spawn-tester** (visual / non-automatable e2e),
+and **human** (manual → NEEDS-HUMAN). Tagging at spec time is what lets the verifier route
+each member without re-deriving how to check it. The canonical acceptance the verify step
+judges against is still the member's live `done_looks_like` — the tag governs the *method*,
+not the *bar*.

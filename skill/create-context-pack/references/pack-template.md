@@ -53,9 +53,36 @@ This pack describes work that does **not exist yet**. Treat every statement belo
 
 ## 2. Cross-cutting requirements & shared behaviour  (write once; every member inherits)
 <the material true for the WHOLE group, not one leaf: shared interface/API contracts,
-data model, naming/error conventions, security/permission rules, behavioural scenarios
-several members must satisfy. This is the write-once content that justifies a pack.
-Tag code-level claims [VERIFY].>
+data model, naming/error conventions, security/permission rules. This is the write-once
+content that justifies a pack. Tag code-level claims [VERIFY].>
+
+### 2a. Behaviour contract — canonical Gherkin (write the scenario ONCE)
+<the group's behavioural truth, as a single shared set of Given/When/Then scenarios.
+Write each scenario ONCE here at pack level — never duplicate a scenario body into a
+member. A member that exercises a behaviour REFERENCES its scenario ID; it does not
+redefine it. Each scenario maps to a named test file. See "The canonical-Gherkin
+behaviour contract" below for the full rule, and run it through the adversarial coverage
+battery so the happy path isn't the only path specced.>
+
+Feature: <feature name>
+
+  Scenario: SC-001 <happy-path name>
+    Given <context>
+    When <action>
+    Then <expected outcome>
+    Test: <test/file/path_spec.ts>
+
+  Scenario: SC-002 <edge-case name>
+    Given <context>
+    When <action>
+    Then <expected outcome>
+    Test: <test/file/path_spec.ts>
+
+  Scenario: SC-003 <error-path name>
+    Given <context>
+    When <action>
+    Then <expected outcome — specific error format>
+    Test: <test/file/path_spec.ts>
 
 ## 3. External dependencies — the group's boundary
 <for each dependency that lands OUTSIDE this group:
@@ -66,8 +93,10 @@ Tag code-level claims [VERIFY].>
 ## 4. Per-leaf acceptance — reference (LIVE; not frozen)
 Canonical acceptance is each member's live `done_looks_like` + its own `spec` — read them
 now (`haven graph` / `haven_get_item`), don't trust a copy. This is just the index of
-members and where to look:
-- **<REF>** — <title>. Acceptance: node `done_looks_like` (live). Spec: `<REF>`'s `spec` artifact, if any. Depends on: <refs or none>. [VERIFY: <assumption>]
+members and where to look. Each member REFERENCES the section-2a scenario IDs it must
+satisfy (it never re-states the Gherkin), and carries a verification approach
+(unit | integration | e2e | visual | manual — see "Per-item verification approach" below):
+- **<REF>** — <title>. Acceptance: node `done_looks_like` (live). Scenarios: SC-00x, SC-00y. Verification: <unit|integration|e2e|visual|manual>. Spec: `<REF>`'s `spec` artifact, if any. Depends on: <refs or none>. [VERIFY: <assumption>]
 - **<REF>** — …
 ```
 
@@ -81,3 +110,166 @@ the call instead, so a later session doesn't re-litigate it:
 
 `haven artifact add <CONTAINER-REF> --role decision --name batch-decision.md --content
 "Simple batch — no shared architecture found; dispatch members individually."`
+
+---
+
+## The canonical-Gherkin behaviour contract  (section 2a, in depth)
+
+The pack's shared behaviour (section 2a) is not free prose — it is **one canonical set
+of Given/When/Then scenarios, written once at pack level as the group's behavioural
+truth**, with each scenario carrying an ID and a named test file, and each member
+**referencing** scenario IDs instead of duplicating scenario bodies. This is the upgrade
+that lets several leaves share behaviour without drift.
+
+**The four rules:**
+
+1. **SC-[ID], written once.** Every scenario gets a stable ID (`SC-001`, `SC-002`, …)
+   and is written **once** in section 2a as the shared behavioural contract for the whole
+   release slice. The scenarios run directly as acceptance tests; members reference these
+   SC-IDs, they do not redefine them.
+2. **Scenario → test file mapping.** Every `SC-[ID]` has a named test file it maps to
+   (the `Test:` line). A scenario with no test mapping is incomplete. A red flag to catch:
+   *Gherkin scenarios without SC-IDs*, and *a scenario with no `Then` clause an automated
+   test could check*.
+3. **Members reference, never duplicate.** A bounded item that exercises a behaviour
+   cites the relevant `SC-[ID]`s (e.g. "Scenarios: SC-001, SC-002") rather than embedding
+   a copy of the scenario body. A red flag: *items that duplicate Gherkin scenario bodies
+   instead of referencing SC-IDs from the shared Behaviour Spec*. Duplication is how a
+   pack drifts — the same behaviour stated twice eventually disagrees with itself.
+4. **A happy/edge/error triplet per journey.** Each user journey should produce, at a
+   minimum, a happy-path scenario, an edge-case scenario, and an error-path scenario.
+   "SC-001 covers the happy path. Where's the empty state? The error state?" Every user
+   journey must have at least one Gherkin scenario.
+
+### The adversarial QA coverage battery
+
+When writing section 2a, run the behaviour through this adversarial battery — these are
+the questions a hostile QA reviewer asks to define the **full surface area** of "done",
+not just the happy path:
+
+- **First-time-user error** — "What does a first-time user do wrong here?"
+- **Mid-transaction / network drop** — "What happens mid-transaction? What if the network drops?"
+- **Empty input / empty state** — "Where's the empty state?"
+- **Unauthenticated path** — what happens when the actor isn't signed in.
+- **Malformed data** — what happens on bad / unexpected input.
+- **Concurrent users** — "What happens when two users do this simultaneously?"
+- **Admin vs regular user** — "What does an admin see vs a regular user?"
+
+**Domain-language-only rule (non-negotiable for scenario text).** Scenario Given/When/Then
+text uses **domain language only — no class, table, or endpoint names**. A scenario
+describes what the *user* experiences, never the implementation. If a scenario reads "the
+UserService creates a record", rewrite it in domain terms: "What does the *user*
+experience? Rewrite in domain terms." Implementation language belongs in the
+architecture/interface-contract material (section 2), never in the behaviour contract.
+
+---
+
+## Per-item verification approach  (tag at spec time)
+
+Every bounded item / member is tagged at spec time with **one verification approach**,
+drawn from a fixed taxonomy. The tag is not decoration — each value has a direct
+**operational consequence** at execution time (how the work is checked, and by whom):
+
+| Approach | What it verifies | Operational consequence at verify time |
+|----------|------------------|----------------------------------------|
+| **unit** | A function/module in isolation | Deterministic — the verifier **runs it directly** (part of the test suite). |
+| **integration** | Components working together | Deterministic — **run directly** (test suite / harness). |
+| **e2e** | A full user flow end to end | Deterministic where automated — **run directly**; otherwise **spawn a tester** to drive the flow. |
+| **visual** | Rendered UI / layout / design | **Spawn a tester** (browser/visual check) — not a plain assertion. |
+| **manual** | Anything that needs judgment | **Human** — surface for human sign-off; the loop cannot self-clear it. |
+
+The split is **direct-run vs spawn-tester vs human**: unit/integration (and automated
+e2e) are direct deterministic runs; visual (and non-automatable e2e) need a spawned
+tester; manual is the human gate. Tag every member so the verify step knows which path
+it falls into. See `references/verify-ops.md` for how the tag maps onto the verify call.
+
+---
+
+## Requirements Index + Execution Graph  (derive from the bounded items)
+
+Once the canonical scenarios and the per-member acceptance are authored, **derive** the
+execution overlays from them (the index and graph are derived views, not authored
+separately):
+
+1. **Requirements Index.** One row per member summarising: its description, the
+   `SC-[ID]`s it references, its verification approach, its dependencies, its primary
+   key files, its **Type**, external deps, and status. This is the cross-referenced index
+   the dispatcher reads.
+2. **Conservative dependency heuristic.** When deriving dependencies between members,
+   be **conservative: if any file overlap, add a dependency.** Two members that touch the
+   same key file get a dependency edge even if no logical ordering is obvious — a spurious
+   edge is cheaper than a silent write-write race between parallel streams.
+3. **Execution Graph — parallel streams.** Group members into parallelizable **streams**
+   by their **dependencies + shared key files + Type**. Independent streams run in
+   parallel; a dependency chain runs in sequence within a stream. Example:
+
+   ```
+   Stream A: <REF-1> (backend) → <REF-2> (frontend)
+   Stream B: <REF-3> (full-stack)
+   ```
+
+4. **Type drives downstream skill loading.** Each member's **Type** — `backend` /
+   `frontend` / `full-stack` — drives what the downstream build agent loads:
+   - **frontend**: pages, screens, components, visual UI, user-facing interactions →
+     build agent loads the frontend reference material.
+   - **backend**: APIs, data models, server logic, CLI, infrastructure → no frontend material.
+   - **full-stack**: spans both (e.g. form + API endpoint + DB) → loads the frontend material too.
+
+---
+
+## The `design-spec.json` machine-contract  (UI members only)
+
+For a group with UI components, the pack carries a **machine-readable design contract**
+alongside the prose. The split is load-bearing:
+
+> The markdown design spec is the **source of truth for *intent***; the JSON is the
+> **source of truth for *contract***. They must agree.
+
+The JSON is the **dev-consumable subset** — only the fields the build agent needs to
+implement, not the whole design document. Per component it carries:
+
+- `name`
+- `states` (e.g. `["default", "hover", "focus", "loading", "empty", "error"]`)
+- `interactions` — each `{trigger, result}` (e.g. `{"trigger": "keyboard:Enter", "result": "navigate to detail view"}`)
+- `accessibility_contract`:
+  - `role` — ARIA role (or null for native semantic)
+  - `keyboard_pattern` — APG pattern reference, e.g. `"APG-listbox"`
+  - `aria` — array of ARIA attributes, e.g. `["aria-selected", "aria-current"]`
+  - `wcag_level` — one of `"A"`, `"AA"`, `"AAA"`
+
+**Required fields per component:** `name`, `states`, `interactions`,
+`accessibility_contract`. The build agent **halts with `ERROR: design-spec.json missing
+required field <path>` if any are missing.** Halt-on-missing-required-field is what makes
+the JSON a contract rather than a suggestion: an incomplete component contract stops the
+build instead of being silently filled in.
+
+Shape (the dev-consumable subset):
+
+```json
+{
+  "feature": "search-results",
+  "version": "1.0",
+  "platform": "web-saas",
+  "components": [
+    {
+      "name": "ResultRow",
+      "states": ["default", "hover", "focus", "loading", "empty", "error"],
+      "interactions": [
+        {"trigger": "click", "result": "navigate to detail view"},
+        {"trigger": "keyboard:Enter", "result": "navigate to detail view"}
+      ],
+      "accessibility_contract": {
+        "role": "listitem",
+        "keyboard_pattern": "APG-listbox",
+        "aria": ["aria-selected", "aria-current"],
+        "wcag_level": "AA"
+      }
+    }
+  ]
+}
+```
+
+For a greenfield UI build the JSON contract is **authored** as a design decision (a
+`[VERIFY]` item to lock with the human); for brownfield it is reconciled against the
+existing design system. Either way the markdown-intent / JSON-contract pair travels with
+the pack so the build agent reads one machine-checkable contract, not a 600-line prose doc.
