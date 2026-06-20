@@ -180,6 +180,29 @@ The sync path is partly built. The Supabase schema, RLS, and push flow are
 validated against a local Supabase stack. Two-way pull and live Auth0 wiring are
 still in progress.
 
+## Running the Work — and How to Ask for It
+
+Haven work runs one of two ways: you **build it directly**, or you hand a planned graph to the
+**autonomous executor** (`orchestrate-run`). The planning / spec / verify skills compose into
+either. The full picture — when to pick which, and the code-vs-functionality verification split —
+is the bundled skill's `references/running-work.md`.
+
+- **Direct** — the agent builds it in one thread (optionally decomposing and speccing first).
+  Highest quality and your direct oversight; best for a task or a handful.
+
+  > "just fix X" · "add Y" · "plan this change, then build it"
+  > "break the whole `<product>` into a Haven work-graph" — decompose first (`orchestrate-plan`)
+  > "create a context pack for HV-3 and HV-4" — spec a batch (`create-context-pack`)
+
+- **Executor** — `orchestrate-run`: the session becomes a conductor that, per leaf, builds in a
+  git worktree, gates it with a separate fresh verifier, merges to `main`, and loops the ready
+  frontier. Best for many leaves where an inline build would blow the context.
+
+  > "run the build" · "execute the plan" · "work the ready frontier autonomously"
+
+  **Serial today** — it builds **one leaf at a time**; parallel fan-out is built but gated off
+  (HV-85). For a small job, direct is usually the better-quality choice.
+
 ## License
 
 MIT - see [`LICENSE`](LICENSE).

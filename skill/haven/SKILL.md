@@ -183,6 +183,11 @@ one dedicated worktree per feature (never branch in-place in a shared checkout),
 against the *merge-base* not live `main`, and the verify-gated merge (AI-verify-then-merge; pause
 for a human when a load-bearing check needs one).
 
+Before you dispatch a build, decide **how** it should run — inline vs solo plan mode vs the
+`orchestrate-run` executor (serial today). The four execution modes, their trade-offs, and a
+flow-gate for picking one (recommend or ask, don't default silently) are in
+**`references/running-work.md`**.
+
 ## MCP quick reference (concrete payloads)
 
 Over MCP, pass `project` on every call. The common ops:

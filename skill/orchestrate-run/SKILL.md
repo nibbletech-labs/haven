@@ -34,6 +34,12 @@ and every tick reorients from it.
 leaves under a container + a verify-first `spec` pack) → native **plan mode / ultracode**
 (the code) → **`orchestrate-run`** (this: loop, gate, worktree, merge, complete, converge).
 
+This executor is **one of four ways** Haven work gets driven — the most orchestrated end of the
+spectrum, and **serial today** (`MAX_PARALLEL=1`, HV-85 for parallel). For when to reach for it
+vs the inline / solo-plan-mode paths — and the build-subagent parity caveat (HV-167) that makes
+inline often the better choice for *small* runs — see the `haven` skill's
+`references/running-work.md`.
+
 ## Three load-bearing invariants (do not weaken these)
 
 1. **SINGLE ORCHESTRATOR PER PROJECT.** You are the *sole* reader of `haven next
