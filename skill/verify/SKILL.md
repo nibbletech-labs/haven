@@ -54,7 +54,10 @@ callable against any item, any time, by anyone.
 
 Read the `haven` skill's `references/surface-map.md` (CLI⇄MCP) for op detail — don't
 restate arguments from memory. The exact call per step is in `references/verify-ops.md`;
-the verdict definitions are in `references/verdict-contract.md`. The rules that bite here:
+the verdict definitions are in `references/verdict-contract.md`; **how the acceptance
+judgment is actually made** — the 5-category review checklist, the confidence filter, the
+a11y + design-eval lenses, and the `frequency × impact × persistence` severity model — is
+in `references/evaluation-lens.md`. The rules that bite here:
 
 - **Structure only through ops; content as files.** A verdict is artifact **content**
   (a `delivery`-role `verdict.md`); status changes go only through `haven …` / `haven_*`.
@@ -70,11 +73,17 @@ the verdict definitions are in `references/verdict-contract.md`. The rules that 
 Judge acceptance seeing **only**: the target's live `done_looks_like`, the container
 context-pack's **shared-requirements** section *when present* (an input, **not** a
 precondition), and **the diff**. **Never** the build agent's reasoning, narrative, or
-self-check. A same-context reviewer is structurally blind to its own blind spots; the
-verifier's **independence by construction** is the whole point, and deterministic exit-0
-alone is only partial cover (test adequacy and "does this actually meet `done_looks_like`"
-are judgment calls). When invoked ad hoc, take **target + diff only** — if a caller pastes
-the builder's narrative, ignore it.
+self-check. A same-context reviewer is structurally blind to its own blind spots — **a
+verifier carrying the build agent's priors misses exactly what the build agent missed.**
+So independence is **by construction**, not by good intentions: it's the whole point, and
+deterministic exit-0 alone is only partial cover (test adequacy and "does this actually
+meet `done_looks_like`" are judgment calls). When invoked ad hoc, take **target + diff
+only** — if a caller pastes the builder's narrative, ignore it.
+
+The independent judgment is **exhaustive, not "probably fine"**: walk **every** acceptance
+clause as a yes/no item — no unchecked items, no partial coverage, no failure you noticed
+but didn't surface. That exhaustive walk over the live `done_looks_like`, and the lens for
+making each call well, are in `references/evaluation-lens.md`.
 
 ## The flow
 
@@ -92,8 +101,11 @@ the builder's narrative, ignore it.
    Deterministic-only counting: transient noise is **logged, never counted** toward the
    verdict (`references/verdict-contract.md`).
 4. **JUDGE ACCEPTANCE.** Independently decide whether the diff actually satisfies the live
-   `done_looks_like` (+ any shared requirements). Brownfield: reality-check each `[VERIFY]`
-   claim against the live code. Greenfield: treat `[VERIFY]` items as human-locked design.
+   `done_looks_like` (+ any shared requirements), walking **every** clause exhaustively
+   through `references/evaluation-lens.md` (5-category code review + confidence filter;
+   the a11y lens for UI leaves; the design-eval checklists + severity model where UX is
+   the acceptance). Brownfield: reality-check each `[VERIFY]` claim against the live code.
+   Greenfield: treat `[VERIFY]` items as human-locked design.
 5. **VERDICT.** **PASS / NEEDS-HUMAN / FAIL + evidence** (`references/verdict-contract.md`).
 6. **WRITE — per the dial** (`references/verify-ops.md`):
    - **Verdict-only (Posture A, default):** write a `delivery`-role `verdict.md` on the
@@ -131,10 +143,15 @@ the verdict). But it trades the human gate, so it is **earned, not assumed**:
 - **Mode 1 — code-level (v1, this skill):** `build + lint + test` (exit-0) + an independent
   acceptance judgment. This is exactly `orchestrate-run`'s current gate — extraction, not
   new capability.
-- **Mode 2 — runtime/browser QA (later, NOT in v1):** drive the running app and judge
-  acceptance *behaviorally* (feasible natively via Claude-in-Chrome). A leaf whose
-  `done_looks_like` is a user-facing browser behavior routes here; a code/contract leaf
-  stays in Mode 1. Out of v1 scope.
+- **Mode 2 — runtime/browser QA (later, NOT in v1):** for a UI leaf, **verify is expected
+  to drive the running app** — open it in a real browser (natively, via Claude-in-Chrome),
+  exercise the behaviour, and judge acceptance *behaviourally* against the live
+  `done_looks_like`, not from the diff alone. This is an **expectation**, not a separate
+  tool: a leaf whose `done_looks_like` is a user-facing browser behaviour routes here; a
+  code/contract leaf stays in Mode 1. Browser checks use the flake discipline and the
+  **PASS-WITH-ISSUES** middle tier in `references/verdict-contract.md`, judged with the
+  a11y + design-eval lenses and the severity model in `references/evaluation-lens.md`. The
+  retry *engine* is out of v1 scope; the expectation and its contract are stated now.
 
 ## Convergence / fresh-session handoff
 

@@ -235,6 +235,10 @@ const VERIFY_SKILL_FILES: &[(&str, &str)] = &[
         include_str!("../../../skill/verify/references/verify-ops.md"),
     ),
     (
+        "references/evaluation-lens.md",
+        include_str!("../../../skill/verify/references/evaluation-lens.md"),
+    ),
+    (
         "agents/openai.yaml",
         include_str!("../../../skill/verify/agents/openai.yaml"),
     ),
