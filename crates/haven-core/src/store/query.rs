@@ -8,7 +8,7 @@ use serde::Serialize;
 use crate::error::Result;
 use crate::model::*;
 
-use super::{item_from_row, EdgeKind, ItemFilter, Store, ITEM_FROM, ITEM_SELECT};
+use super::{fts_user_query, item_from_row, EdgeKind, ItemFilter, Store, ITEM_FROM, ITEM_SELECT};
 
 /// One structural edge in a [`ProjectGraph`], as a `{kind, from, to}` ref triple
 /// — the same shape `add_edge` accepts, so a graph export round-trips.
@@ -290,6 +290,15 @@ impl Store {
     ) -> Result<Vec<Item>> {
         let (project_id, _) = self.require_project(project)?;
         let limit = limit.unwrap_or(20);
+        // HV-30: sanitize the raw user query before it reaches FTS5's MATCH —
+        // otherwise `-`, `:`, `"`, parens, and bareword AND/OR/NOT/NEAR are read
+        // as FTS5 syntax (e.g. `HV-22` hits column-filter syntax → `no such
+        // column: 22`). `fts_user_query` quotes each alphanumeric token; `None`
+        // means an all-punctuation query with nothing to match, so return empty
+        // rather than running MATCH on it.
+        let Some(match_query) = fts_user_query(query) else {
+            return Ok(vec![]);
+        };
         // FTS5's MATCH operator must reference the virtual table by its real
         // name, not an alias — so `node_fts` is left unaliased here.
         let mut stmt = self.conn.prepare(&format!(
@@ -299,7 +308,7 @@ impl Store {
              WHERE node_fts MATCH ?1 AND n.project_id = ?2
              ORDER BY rank LIMIT ?3"
         ))?;
-        let rows = stmt.query_map(params![query, project_id, limit], item_from_row)?;
+        let rows = stmt.query_map(params![match_query, project_id, limit], item_from_row)?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 

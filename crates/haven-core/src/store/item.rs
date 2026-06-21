@@ -90,6 +90,23 @@ pub(crate) fn fts_title_query(title: &str) -> Option<String> {
     (!tokens.is_empty()).then(|| format!("title : ({})", tokens.join(" OR ")))
 }
 
+/// Build an FTS5 MATCH query from a raw user search string (HV-30). Like
+/// [`fts_title_query`] it splits on non-alphanumerics and double-quotes each
+/// token, which neutralizes FTS5 syntax (`-`, `:`, `"`, parens) and bareword
+/// operators (AND/OR/NOT/NEAR) so a bare ref like `HV-22` can't be read as
+/// column-filter syntax. Unlike that helper it is *not* column-scoped (searches
+/// title+body) and AND-joins the tokens (implicit-AND: every token must appear)
+/// for precise general search. `None` when there are no alphanumeric tokens —
+/// the caller should skip the MATCH and return no results.
+pub(crate) fn fts_user_query(query: &str) -> Option<String> {
+    let tokens: Vec<String> = query
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|t| !t.is_empty())
+        .map(|t| format!("\"{t}\""))
+        .collect();
+    (!tokens.is_empty()).then(|| tokens.join(" "))
+}
+
 /// How to change a node's `wait_state`: set it, or clear it (`--wait none`).
 #[derive(Debug, Clone, Copy)]
 pub enum WaitUpdate {

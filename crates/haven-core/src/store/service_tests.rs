@@ -1467,6 +1467,47 @@ fn search_matches_title_and_body() {
     assert_eq!(s.search(None, "refresh", None).unwrap().len(), 0);
 }
 
+// HV-30: a bare-ref or punctuation/operator query must never reach FTS5 as raw
+// syntax — sanitize before MATCH so these return Ok (matches or empty), not an
+// FTS5 syntax error like `no such column: 22`.
+#[test]
+fn search_sanitizes_ref_and_operator_queries() {
+    let s = store();
+    s.add_item(
+        None,
+        NewItem {
+            title: "Fix HV-22 crash".into(),
+            body: Some("relates to HV-22 and the retry path".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    // Bare ref: `-` made FTS5 read `22` as a column filter → pre-fix this Err'd.
+    let by_ref = s.search(None, "HV-22", None);
+    assert!(by_ref.is_ok(), "bare-ref query must not error: {by_ref:?}");
+    assert_eq!(by_ref.unwrap().len(), 1, "ref-bearing item should match");
+
+    // Bareword operator must be treated as a literal token, not FTS5 syntax.
+    let operator = s.search(None, "foo AND", None);
+    assert!(
+        operator.is_ok(),
+        "operator query must not error: {operator:?}"
+    );
+
+    // Column-filter punctuation and an unterminated quote must not error.
+    assert!(s.search(None, "a:b", None).is_ok());
+    assert!(s.search(None, "unterminated\"", None).is_ok());
+
+    // An all-punctuation query yields no tokens → empty, never a MATCH error.
+    let empty = s.search(None, "--", None);
+    assert!(
+        empty.is_ok(),
+        "all-punctuation query must not error: {empty:?}"
+    );
+    assert_eq!(empty.unwrap().len(), 0);
+}
+
 #[test]
 fn rank_orders_relative_to_siblings() {
     let s = store();

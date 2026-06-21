@@ -31,6 +31,8 @@ pub use item::{
     AddOutcome, CompleteInput, CompleteResult, DueUpdate, HandoffInput, HandoffResult, Include,
     ItemFilter, ItemUpdate, NewItem, SimilarItem, WaitUpdate,
 };
+// HV-30: the search path sanitizes raw user input through this helper before MATCH.
+pub(crate) use item::fts_user_query;
 pub use query::{
     DocAnchor, GraphEdge, GroomingPressure, LineageDirection, LineageGraph, LineageLink,
     ProjectGraph, GROOMING_NUDGE_THRESHOLD,
