@@ -43,6 +43,29 @@ pub struct ProjectGraph {
     pub grooming_nudge: Option<String>,
 }
 
+impl ProjectGraph {
+    /// Drop archived/superseded (dead) nodes and any structural edge or lineage
+    /// link that would then dangle onto a removed node — the live-only view used
+    /// by `haven graph` (default) to mirror `haven_graph`'s `all:false` (HV-53).
+    /// Idempotent; cheap (one pass to build the live-ref set, one to filter).
+    pub fn live_only(mut self) -> Self {
+        use std::collections::HashSet;
+        let keep: HashSet<String> = self
+            .nodes
+            .iter()
+            .filter(|n| !matches!(n.status, Status::Superseded | Status::Archived))
+            .map(|n| n.reference.clone())
+            .collect();
+        self.nodes
+            .retain(|n| !matches!(n.status, Status::Superseded | Status::Archived));
+        self.edges
+            .retain(|e| keep.contains(&e.from) && keep.contains(&e.to));
+        self.lineage
+            .retain(|l| keep.contains(&l.from) && keep.contains(&l.to));
+        self
+    }
+}
+
 /// Grooming pressure for a project (HV-82): counts of untriaged + stale work and
 /// a ready-made `nudge` emitted once either crosses [`GROOMING_NUDGE_THRESHOLD`].
 #[derive(Debug, Clone, Serialize)]
@@ -349,6 +372,10 @@ impl Store {
                 project,
                 &ItemFilter {
                     stale_days: Some(GROOMING_STALE_DAYS),
+                    // Preserve the pre-HV-53 grooming count (dead items included);
+                    // the live-only default is a list/graph view concern, not this
+                    // internal pressure signal.
+                    include_dead: true,
                     ..Default::default()
                 },
             )?
@@ -368,7 +395,17 @@ impl Store {
 
     pub fn project_graph(&self, project: Option<&str>, lineage: bool) -> Result<ProjectGraph> {
         let (project_id, key) = self.require_project(project)?;
-        let mut nodes = self.list_items(project, &ItemFilter::default())?;
+        // The whole-graph read always returns *all* nodes; the live-only view is a
+        // surface concern (CLI `graph` / MCP `haven_graph` both filter to live and
+        // drop dangling edges via `all`), so `project_graph` must not pre-filter
+        // dead nodes here (HV-53).
+        let mut nodes = self.list_items(
+            project,
+            &ItemFilter {
+                include_dead: true,
+                ..Default::default()
+            },
+        )?;
         let mut edges = Vec::new();
         edges.extend(self.edges_of_kind(
             project_id,

@@ -54,7 +54,11 @@ enum Command {
     /// Initialise/migrate the database only.
     Init,
     /// DB location, per-project counts, sync queue depth.
-    Status,
+    Status {
+        /// Optional project key — a bare positional that resolves exactly like
+        /// `-p <key>` (so `haven status demo` == `haven status -p demo`).
+        project_key: Option<String>,
+    },
     /// Diagnose db integrity, migration version, auth, connectivity.
     Doctor,
     /// Get/set local config values.
@@ -151,6 +155,14 @@ enum Command {
         #[command(subcommand)]
         cmd: BackupCmd,
     },
+    /// Catch-all for an unrecognized verb (hidden). Lets us intercept the common
+    /// verb-divergence guesses — `list-items`, the MCP-flat `get`/`add`/`archive`/
+    /// `handoff` that collide with item-nesting — and answer with an error naming
+    /// the exact corrective `haven …` command instead of clap's bare
+    /// "unrecognized subcommand" (HV-158). The first word is the typed verb; any
+    /// remainder is the rest of the line (used to echo args into the tip).
+    #[command(external_subcommand)]
+    Unknown(Vec<String>),
 }
 
 #[derive(Subcommand)]
@@ -431,6 +443,10 @@ enum ItemCmd {
     #[command(alias = "show")]
     Get(ItemGetArgs),
     /// Update item fields such as status, type, acceptance, wait-state, and priority.
+    ///
+    /// Commitment is its own verb (`item commit`/`uncommit`), not a flag here.
+    /// To pass the work baton between ai and human (flip owner + record a note in
+    /// one atomic step), use `haven item handoff <ref> --to human|ai`.
     Update(ItemUpdateArgs),
     /// Commit one or more items so ready/unblocked work can appear in `haven next`.
     Commit {
@@ -545,6 +561,10 @@ struct ItemListArgs {
     /// Skip the first N items (paginate with --limit).
     #[arg(long)]
     offset: Option<usize>,
+    /// Include archived/superseded (dead) items. Default hides them; an explicit
+    /// `--status archived|superseded` still reaches them regardless (HV-53).
+    #[arg(long)]
+    all: bool,
 }
 
 #[derive(Args)]
@@ -585,6 +605,32 @@ struct ItemUpdateArgs {
     /// Deadline as a calendar date YYYY-MM-DD; `none` clears it.
     #[arg(long = "due-at")]
     due_at: Option<String>,
+    /// Hidden capture of the common `item update --commit` mistake: commitment is
+    /// its own verb. Set → we error naming `haven item commit <ref…>` (HV-158).
+    #[arg(long, hide = true)]
+    commit: bool,
+    /// Hidden capture of `item update --uncommit` → error naming
+    /// `haven item uncommit <ref…>`.
+    #[arg(long, hide = true)]
+    uncommit: bool,
+}
+
+impl ItemUpdateArgs {
+    /// If `--commit`/`--uncommit` were (mis)used on `item update`, return the
+    /// exact corrective command — the dedicated verb, with these refs echoed —
+    /// so the error can name it. `None` when neither flag is set.
+    fn misused_commit_tip(&self) -> Option<String> {
+        let refs = self.references.join(" ");
+        match (self.commit, self.uncommit) {
+            (true, _) => Some(format!(
+                "commitment is its own verb, not an `item update` flag — use `haven item commit {refs}`"
+            )),
+            (_, true) => Some(format!(
+                "use `haven item uncommit {refs}` (commitment is its own verb, not an `item update` flag)"
+            )),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Args)]
@@ -765,6 +811,10 @@ struct GraphArgs {
     /// Also include lineage links (split/merge/supersede/archive history).
     #[arg(long)]
     lineage: bool,
+    /// Include archived/superseded (dead) nodes. Default is live-only, matching
+    /// the `haven_graph` MCP tool (HV-53).
+    #[arg(long)]
+    all: bool,
 }
 
 #[derive(Args)]
@@ -787,6 +837,42 @@ fn main() {
         }
         Err(err) => std::process::exit(output::render_error(&err)),
     }
+}
+
+/// Map a typed-but-unrecognized top-level verb to the exact corrective `haven …`
+/// command, when it's a known divergence guess. `words[0]` is the verb; the rest
+/// is echoed into the tip so the user can copy-paste it. Returns `None` for a
+/// genuinely unknown verb (the caller falls back to generic help). Covers the
+/// MCP-flat names that collide with item-nesting (`get`/`add`/`archive`/
+/// `handoff`) and the `list-items` contraction (HV-158).
+fn corrective_for_unknown(words: &[String]) -> Option<String> {
+    let (verb, rest) = words.split_first()?;
+    let tail = rest.join(" ");
+    let with_tail = |cmd: &str| {
+        if tail.is_empty() {
+            format!("did you mean `{cmd}`?")
+        } else {
+            format!("did you mean `{cmd} {tail}`?")
+        }
+    };
+    let tip = match verb.as_str() {
+        "list-items" | "items" => with_tail("haven item list"),
+        // MCP tools are flat (`haven_get_item`, `haven_archive`, …); the CLI nests
+        // these under `item`. A user reaching for the flat name lands here.
+        "get" | "show" => with_tail("haven item get"),
+        "add" | "new" => with_tail("haven item add"),
+        "update" => with_tail("haven item update"),
+        "archive" => with_tail("haven item archive"),
+        "reopen" => with_tail("haven item reopen"),
+        "complete" | "done" => with_tail("haven item complete"),
+        "handoff" => with_tail("haven item handoff"),
+        "assign" => with_tail("haven item assign"),
+        "commit" => with_tail("haven item commit"),
+        "uncommit" => with_tail("haven item uncommit"),
+        "rank" => with_tail("haven item rank"),
+        _ => return None,
+    };
+    Some(tip)
 }
 
 /// How the repo-binding guard treats a command: a project-scoped write that
@@ -813,8 +899,11 @@ fn guard_kind(cmd: &Command) -> GuardKind {
         | Command::Mcp
         | Command::Auth { .. }
         | Command::Sync { .. }
-        | Command::Backup { .. } => GuardKind::Exempt,
-        Command::Status
+        | Command::Backup { .. }
+        // An unrecognized verb never touches the store — it short-circuits to a
+        // corrective error before any project resolution (HV-158).
+        | Command::Unknown(_) => GuardKind::Exempt,
+        Command::Status { .. }
         | Command::Next(_)
         | Command::Inbox(_)
         | Command::Xref(_)
@@ -936,7 +1025,11 @@ fn run(cli: &Cli) -> Result<Output> {
             config::open_store()?;
             Ok(Output::Message("database initialised".into()))
         }
-        Command::Status => cmd_status(project),
+        Command::Status { project_key } => {
+            // The bare positional resolves exactly like `-p`: explicit `-p` still
+            // wins, else the positional, else the current project (HV-158).
+            cmd_status(project.or(project_key.as_deref()))
+        }
         Command::Doctor => cmd_doctor(),
         Command::Config { cmd } => cmd_config(cmd),
         Command::Project { cmd } => cmd_project(cmd),
@@ -979,9 +1072,11 @@ fn run(cli: &Cli) -> Result<Output> {
         }
         Command::Graph(a) => {
             let s = config::open_store()?;
-            Ok(Output::Json(serde_json::to_value(
-                s.project_graph(project, a.lineage)?,
-            )?))
+            let graph = s.project_graph(project, a.lineage)?;
+            // Live-only by default (drop dead nodes + dangling edges), matching the
+            // `haven_graph` MCP tool; `--all` includes archived/superseded (HV-53).
+            let graph = if a.all { graph } else { graph.live_only() };
+            Ok(Output::Json(serde_json::to_value(graph)?))
         }
         Command::Xref(a) => {
             let s = config::open_store()?;
@@ -1027,6 +1122,19 @@ fn run(cli: &Cli) -> Result<Output> {
         Command::Auth { cmd } => cmd_auth(cmd),
         Command::Sync { cmd, watch } => cmd_sync(project, cmd, *watch),
         Command::Backup { cmd } => cmd_backup(cmd),
+        // An unrecognized verb: if it's a known divergence guess (e.g. the MCP-flat
+        // `archive`/`handoff`/`get`/`add`, or `list-items`), name the exact
+        // corrective command; otherwise point at `haven --help` (HV-158).
+        Command::Unknown(words) => {
+            let verb = words.first().map(String::as_str).unwrap_or("");
+            let msg = match corrective_for_unknown(words) {
+                Some(tip) => format!("unrecognized command `{verb}` — {tip}"),
+                None => {
+                    format!("unrecognized command `{verb}` — run `haven --help` to list commands")
+                }
+            };
+            Err(HavenError::Invalid(msg))
+        }
     }
 }
 
@@ -2266,6 +2374,10 @@ fn cmd_item(project: Option<&str>, cmd: &ItemCmd) -> Result<Output> {
                 group: a.group.clone(),
                 wait: opt_parse(&a.wait, WaitState::parse)?,
                 stale_days: a.stale,
+                // Live-only by default; `--all` surfaces archived/superseded. An
+                // explicit `--status archived|superseded` reaches them regardless
+                // (the core filter honors a named status over this default) (HV-53).
+                include_dead: a.all,
             };
             // `--limit`/`--offset` slice the ordered result (parity with `next`).
             // Default is unbounded so existing CLI/script output is unchanged.
@@ -2290,6 +2402,11 @@ fn cmd_item(project: Option<&str>, cmd: &ItemCmd) -> Result<Output> {
             )?))
         }
         ItemCmd::Update(a) => {
+            // `item update --commit/--uncommit` is a common reflex, but commitment
+            // is its own verb. Intercept and name the corrective command (HV-158).
+            if let Some(tip) = a.misused_commit_tip() {
+                return Err(HavenError::Invalid(tip));
+            }
             let wait = match a.wait.as_deref() {
                 None => None,
                 Some("none") => Some(WaitUpdate::Clear),
@@ -2549,6 +2666,141 @@ mod guard_tests {
         assert!(matches!(
             guard_outcome(GuardKind::Read, "haven", None, true),
             GuardOutcome::Warn(_)
+        ));
+    }
+}
+
+#[cfg(test)]
+mod parse_tests {
+    //! Parse-level coverage for the verb-divergence guesses (HV-158): every
+    //! known wrong verb must either *resolve* to the right command or be
+    //! intercepted with an error naming the exact corrective `haven …` command.
+    //! These assert on parse structure + the pure corrective helpers, so they
+    //! need no store.
+    use super::*;
+    use clap::Parser;
+
+    /// Parse a `haven …` arg vector (clap auto-prepends the bin name).
+    fn parse(args: &[&str]) -> std::result::Result<Cli, clap::Error> {
+        Cli::try_parse_from(std::iter::once("haven").chain(args.iter().copied()))
+    }
+
+    // ---- top-level MCP-flat / divergent verbs route to a corrective error ----
+
+    #[test]
+    fn list_items_routes_to_item_list_corrective() {
+        let cli = parse(&["list-items"]).expect("external verb should parse, not hard-error");
+        let Command::Unknown(words) = &cli.command else {
+            panic!("expected Command::Unknown, got something else");
+        };
+        let tip = corrective_for_unknown(words).expect("list-items must have a corrective");
+        assert!(tip.contains("haven item list"), "tip: {tip}");
+    }
+
+    #[test]
+    fn mcp_flat_names_tip_to_item_verb() {
+        // get / add / archive / handoff collide with item-nesting: each tips to
+        // the `item <verb>` form.
+        for (verb, want) in [
+            ("get", "haven item get"),
+            ("add", "haven item add"),
+            ("archive", "haven item archive"),
+            ("handoff", "haven item handoff"),
+        ] {
+            let cli = parse(&[verb]).unwrap_or_else(|_| panic!("`{verb}` should parse as Unknown"));
+            let Command::Unknown(words) = &cli.command else {
+                panic!("`{verb}` should route to Command::Unknown");
+            };
+            let tip = corrective_for_unknown(words)
+                .unwrap_or_else(|| panic!("`{verb}` must carry a corrective"));
+            assert!(
+                tip.contains(want),
+                "`{verb}` tip should name `{want}`, got: {tip}"
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_verb_with_no_mapping_still_errors_gracefully() {
+        let cli = parse(&["frobnicate"]).expect("any unknown verb parses as Unknown");
+        let Command::Unknown(words) = &cli.command else {
+            panic!("expected Command::Unknown");
+        };
+        // No specific mapping → generic guidance (the error path still names help).
+        assert!(corrective_for_unknown(words).is_none());
+    }
+
+    // ---- item show is already aliased to item get ----
+
+    #[test]
+    fn item_show_resolves_to_item_get() {
+        let cli = parse(&["item", "show", "HV-1"]).expect("`item show` should resolve");
+        assert!(matches!(
+            cli.command,
+            Command::Item {
+                cmd: ItemCmd::Get(_)
+            }
+        ));
+    }
+
+    // ---- item update --commit / --uncommit error with the commit/uncommit verb ----
+
+    #[test]
+    fn item_update_commit_flag_errors_with_commit_verb() {
+        let cli = parse(&["item", "update", "HV-1", "--commit"]).expect("flag should parse");
+        let Command::Item {
+            cmd: ItemCmd::Update(a),
+        } = &cli.command
+        else {
+            panic!("expected item update");
+        };
+        let tip = a
+            .misused_commit_tip()
+            .expect("--commit on update must be intercepted");
+        assert!(tip.contains("haven item commit HV-1"), "tip: {tip}");
+    }
+
+    #[test]
+    fn item_update_uncommit_flag_errors_with_uncommit_verb() {
+        let cli = parse(&["item", "update", "HV-1", "HV-2", "--uncommit"]).expect("parses");
+        let Command::Item {
+            cmd: ItemCmd::Update(a),
+        } = &cli.command
+        else {
+            panic!("expected item update");
+        };
+        let tip = a
+            .misused_commit_tip()
+            .expect("--uncommit on update must be intercepted");
+        assert!(tip.contains("haven item uncommit HV-1 HV-2"), "tip: {tip}");
+    }
+
+    #[test]
+    fn item_update_without_commit_flags_has_no_tip() {
+        let cli = parse(&["item", "update", "HV-1", "--status", "ready"]).unwrap();
+        let Command::Item {
+            cmd: ItemCmd::Update(a),
+        } = &cli.command
+        else {
+            panic!("expected item update");
+        };
+        assert!(a.misused_commit_tip().is_none());
+    }
+
+    // ---- status <key> positional resolves like -p <key> ----
+
+    #[test]
+    fn status_positional_key_resolves_like_p() {
+        let cli = parse(&["status", "demo"]).expect("status takes an optional positional key");
+        let Command::Status { project_key } = &cli.command else {
+            panic!("expected Command::Status");
+        };
+        assert_eq!(project_key.as_deref(), Some("demo"));
+        // No positional → None, identical to the old no-arg form.
+        let bare = parse(&["status"]).unwrap();
+        assert!(matches!(
+            bare.command,
+            Command::Status { project_key: None }
         ));
     }
 }

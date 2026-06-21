@@ -1140,6 +1140,10 @@ impl Store {
             Some(project_key),
             &ItemFilter {
                 committed: Some(true),
+                // Render projection: keep the pre-HV-53 contents (the renderer
+                // groups by status itself); the live-only default is a list/graph
+                // view concern.
+                include_dead: true,
                 ..Default::default()
             },
         )?;

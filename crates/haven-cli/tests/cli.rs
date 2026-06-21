@@ -1046,3 +1046,170 @@ fn repo_binding_gates_writes_and_warns_reads_on_project_mismatch() {
         .iter()
         .any(|n| n["title"] == "Mistake"));
 }
+
+// ───────────────────────── HV-158: verb-divergence ─────────────────────────
+
+/// A scratch project with the binding stubbed out (cwd not bound), so plain
+/// `-p demo` ops run without the repo-binding guard interfering.
+fn demo() -> Haven {
+    let h = Haven::new();
+    h.json(&[
+        "project", "add", "--key", "demo", "--title", "Demo", "--prefix", "DM",
+    ]);
+    h.ok(&["project", "use", "demo"]);
+    h
+}
+
+#[test]
+fn list_items_errors_with_item_list_corrective() {
+    let h = demo();
+    let err = h.fail(&["list-items", "-p", "demo"]);
+    assert_eq!(err["error"]["code"], "invalid");
+    let msg = err["error"]["message"].as_str().unwrap();
+    assert!(msg.contains("haven item list"), "msg: {msg}");
+}
+
+#[test]
+fn top_level_mcp_flat_names_error_with_item_verb() {
+    let h = demo();
+    for (verb, want) in [
+        ("get", "haven item get"),
+        ("add", "haven item add"),
+        ("archive", "haven item archive"),
+        ("handoff", "haven item handoff"),
+    ] {
+        let err = h.fail(&[verb, "-p", "demo"]);
+        let msg = err["error"]["message"].as_str().unwrap();
+        assert!(
+            msg.contains(want),
+            "top-level `{verb}` should tip to `{want}`, got: {msg}"
+        );
+    }
+}
+
+#[test]
+fn item_update_commit_flag_errors_naming_commit_verb() {
+    let h = demo();
+    let item = h.json(&["item", "add", "Thing", "-p", "demo"]);
+    let r = item["ref"].as_str().unwrap();
+    let err = h.fail(&["item", "update", r, "--commit", "-p", "demo"]);
+    let msg = err["error"]["message"].as_str().unwrap();
+    assert!(
+        msg.contains(&format!("haven item commit {r}")),
+        "msg: {msg}"
+    );
+}
+
+#[test]
+fn status_positional_key_acts_like_p() {
+    let h = demo();
+    // `status demo` should report the same project as `status -p demo`.
+    let via_positional = h.json(&["status", "demo"]);
+    let via_flag = h.json(&["status", "-p", "demo"]);
+    assert_eq!(via_positional["project"], via_flag["project"]);
+    assert_eq!(via_positional["project"], "demo");
+}
+
+// ───────────────── HV-53: live-only graph & item list views ─────────────────
+
+/// Build a project with one live item and one archived + one superseded item,
+/// returning the harness and the live item's ref.
+fn store_with_dead_items() -> Haven {
+    let h = demo();
+    h.json(&["item", "add", "Alive", "-p", "demo"]); // DM-1
+    h.json(&["item", "add", "Gone", "-p", "demo"]); // DM-2
+    h.json(&["item", "add", "Old", "-p", "demo"]); // DM-3
+    h.json(&["item", "add", "New", "-p", "demo"]); // DM-4
+    h.ok(&["item", "archive", "DM-2", "-p", "demo"]);
+    // Supersede DM-3 with DM-4 → DM-3 becomes superseded.
+    h.json(&[
+        "evolve",
+        "supersede",
+        "DM-3",
+        "--with",
+        "DM-4",
+        "-p",
+        "demo",
+    ]);
+    h
+}
+
+#[test]
+fn graph_excludes_archived_superseded_by_default_all_includes() {
+    let h = store_with_dead_items();
+    let g = h.json(&["graph", "-p", "demo"]);
+    let refs: Vec<&str> = g["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|n| n["ref"].as_str().unwrap())
+        .collect();
+    assert!(refs.contains(&"DM-1"), "live node present: {refs:?}");
+    assert!(!refs.contains(&"DM-2"), "archived hidden: {refs:?}");
+    assert!(!refs.contains(&"DM-3"), "superseded hidden: {refs:?}");
+
+    let all = h.json(&["graph", "--all", "-p", "demo"]);
+    let all_refs: Vec<&str> = all["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|n| n["ref"].as_str().unwrap())
+        .collect();
+    assert!(
+        all_refs.contains(&"DM-2"),
+        "--all surfaces archived: {all_refs:?}"
+    );
+    assert!(
+        all_refs.contains(&"DM-3"),
+        "--all surfaces superseded: {all_refs:?}"
+    );
+}
+
+#[test]
+fn item_list_hides_archived_superseded_by_default_all_includes() {
+    let h = store_with_dead_items();
+    let live = h.json(&["item", "list", "-p", "demo"]);
+    let titles: Vec<&str> = live
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|n| n["title"].as_str().unwrap())
+        .collect();
+    assert!(titles.contains(&"Alive"), "live present: {titles:?}");
+    assert!(!titles.contains(&"Gone"), "archived hidden: {titles:?}");
+    assert!(!titles.contains(&"Old"), "superseded hidden: {titles:?}");
+
+    let all = h.json(&["item", "list", "--all", "-p", "demo"]);
+    let all_titles: Vec<&str> = all
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|n| n["title"].as_str().unwrap())
+        .collect();
+    assert!(
+        all_titles.contains(&"Gone"),
+        "--all surfaces archived: {all_titles:?}"
+    );
+    assert!(
+        all_titles.contains(&"Old"),
+        "--all surfaces superseded: {all_titles:?}"
+    );
+}
+
+#[test]
+fn item_list_status_filter_still_reaches_dead_items() {
+    // An explicit --status archived must still find archived items even though
+    // the default now hides them (the filter is the deliberate ask).
+    let h = store_with_dead_items();
+    let archived = h.json(&["item", "list", "--status", "archived", "-p", "demo"]);
+    let titles: Vec<&str> = archived
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|n| n["title"].as_str().unwrap())
+        .collect();
+    assert!(
+        titles.contains(&"Gone"),
+        "explicit status reaches archived: {titles:?}"
+    );
+}

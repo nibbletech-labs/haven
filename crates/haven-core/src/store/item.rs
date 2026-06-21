@@ -195,6 +195,12 @@ pub struct ItemFilter {
     /// Items untouched for at least this many days (by `updated_at`) — surfaces
     /// stale/forgotten work.
     pub stale_days: Option<i64>,
+    /// Include archived/superseded (dead) items. Default (`false`) hides them,
+    /// giving a live-only list (HV-53). Ignored when an explicit `status` filter
+    /// is set (asking for `archived`/`superseded` by name is a deliberate ask),
+    /// and when the `icebox`/`inbox` views — which carry their own dead exclusion
+    /// — are active.
+    pub include_dead: bool,
 }
 
 /// True when an acceptance statement is absent or only whitespace. The
@@ -445,6 +451,13 @@ impl Store {
         if let Some(status) = filter.status {
             sql.push_str(&format!(" AND n.status = ?{}", args.len() + 1));
             args.push(Box::new(status.as_str()));
+        }
+        // Live-only by default (HV-53): drop archived/superseded unless `include_dead`
+        // is set. Skipped when an explicit `status` filter is present (asking for a
+        // dead status by name is deliberate) and when `icebox`/`inbox` are active
+        // (they carry their own dead exclusion below).
+        if !filter.include_dead && filter.status.is_none() && !filter.icebox && !filter.inbox {
+            sql.push_str(" AND n.status NOT IN ('archived','superseded')");
         }
         if let Some(t) = filter.node_type {
             sql.push_str(&format!(" AND n.type = ?{}", args.len() + 1));

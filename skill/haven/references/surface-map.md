@@ -2,14 +2,16 @@
 
 The two front-ends drive the **same** store but are **not 1:1**. The CLI has many
 friendly verbs (for a human typing); the MCP is a deliberately smaller, more
-general set of 24 tools (for an agent). When a workflow runs over MCP, translate
-using the mapping below.
+general set of 28 tools (for an agent). When a workflow runs over MCP, translate
+using the mapping below — and see the **[verb-divergence map](#verb-divergence-top-level-vs-item-nested-vs-mcp-only)**
+for the cases where the same verb lives at a different level on each surface.
 
 ## Contents
 - [Enums (valid values)](#enums)
 - [CLI command surface](#cli-command-surface)
 - [MCP tool catalogue (28 tools)](#mcp-tool-catalogue)
 - [CLI → MCP mapping](#cli--mcp-mapping)
+- [Verb-divergence map (top-level vs item-nested vs MCP-only)](#verb-divergence-top-level-vs-item-nested-vs-mcp-only)
 - [CLI-only operations](#cli-only-operations)
 - [The content channel](#the-content-channel)
 
@@ -43,7 +45,8 @@ values error.
 
 ```
 # Setup & introspection
-haven setup [--agent all|claude|codex] [--no-skill] | init | status | doctor
+haven setup [--agent all|claude|codex] [--no-skill] | init | status [<key>] | doctor
+                                                    # `status <key>` resolves like `-p <key>`
 haven config get <key> | set <key> <value>
 haven link [--name Haven]  # visible repo-local workspace/projection; canonical state stays in ~/.haven
 
@@ -60,7 +63,9 @@ haven import <file.json> [--if-absent]  # bulk add: one validated, all-or-nothin
                                         # items take the add fields + temp `id` and ref-or-temp-id
                                         # parent / depends_on (array) / group edge fields
 haven item list [--status] [--type] [--owner] [--committed] [--icebox] [--group <ref>]
-                [--wait on_human|on_dependency|on_external] [--stale <days>]
+                [--wait on_human|on_dependency|on_external] [--stale <days>] [--all]
+                # live-only by default (hides archived/superseded); --all includes them,
+                # and an explicit --status archived|superseded still reaches them
 haven item get <ref> [--include edges,artifacts,lineage]
 haven item update <ref>… [--title] [--body] [--done-looks-like "…"] [--why "…"]
                         [--status] [--priority N] [--type] [--wait]
@@ -76,7 +81,9 @@ haven item reopen  <ref> [--rationale "…"]
 
 # Dispatch
 haven next [--owner human|ai] [--limit N]   # --owner = ASSIGNMENT filter (owner_kind = owner); unassigned (NULL) excluded
-haven graph [--lineage]        # whole project: all nodes + edges in one read
+haven graph [--lineage] [--all]  # whole project: all nodes + edges in one read.
+                                 # live-only by default (drops archived/superseded
+                                 # + dangling edges), matching haven_graph; --all includes them
 haven docs                     # live project-doc anchors + their artifacts
 
 # Edges
@@ -206,6 +213,39 @@ call (loop); there's no batch tool.
 (carry the chosen key through the conversation), not a stored default. There's no
 `haven_use_project` by design (it would clobber other sessions on a shared
 gateway). `haven_add_project` starts a new backlog remotely.
+
+## Verb-divergence (top-level vs item-nested vs MCP-only)
+
+The same *word* can live at a different level on each surface, so a verb guessed
+from one surface fails on the other. The CLI nests item lifecycle under `item …`;
+the MCP keeps every tool **flat** (`haven_get_item`, `haven_archive`, …). The CLI
+intercepts the common wrong guesses and answers with an error naming the exact
+corrective command (HV-158) — you don't have to memorise the table, but here it is.
+
+| You might type | What's correct | Note |
+|---|---|---|
+| `haven get <ref>` | `haven item get <ref>` | flat MCP name (`haven_get_item`) typed at the CLI top level → tip to the nested verb |
+| `haven add "<title>"` | `haven item add "<title>"` | same: `haven_add_item` is flat; the CLI nests it |
+| `haven archive <ref>` | `haven item archive <ref>` | `haven_archive` is flat; CLI nests under `item` |
+| `haven handoff <ref> --to …` | `haven item handoff <ref> --to …` | `haven_handoff` is flat; CLI nests under `item`. Use handoff (not assign+update) for an **ai↔human baton-pass** — it flips owner, records a note, and sets wait/status atomically |
+| `haven list-items` | `haven item list` | the MCP tool is `haven_list_items`; the CLI verb is `item list` |
+| `haven item show <ref>` | `haven item get <ref>` | `show` is a built-in **alias** of `get` — it just works |
+| `haven item update --commit <ref>` | `haven item commit <ref>` | commitment is its **own verb**, not an update flag; `--uncommit` → `haven item uncommit <ref>` |
+| `haven status <key>` | `haven status -p <key>` | a bare positional key on `status` resolves like `-p <key>` — both forms work |
+
+**Three buckets:**
+
+- **Top-level CLI verbs** (no `item` prefix): `next`, `inbox`, `graph`, `docs`,
+  `search`, `xref`, `import`, `decompose`/`depend`/`group`, `evolve`, `note`,
+  `render`, plus lifecycle/admin (`setup`, `status`, …). These are *not* under
+  `item`.
+- **Item-nested CLI verbs** (`item <verb>`): `add`, `list`, `get` (alias `show`),
+  `update`, `commit`/`uncommit`, `assign`, `handoff`, `complete`, `rank`,
+  `archive`, `reopen`. The MCP flattens these (`haven_add_item`,
+  `haven_get_item`, `haven_archive`, `haven_handoff`, …).
+- **MCP-only / CLI-only**: see [CLI → MCP mapping](#cli--mcp-mapping) (collapses
+  like `item update`+`commit`+`assign` → one `haven_update_item`) and
+  [CLI-only operations](#cli-only-operations) below.
 
 ## CLI-only operations
 
