@@ -167,6 +167,17 @@ Loop to step 0. **Converge** when `haven next --owner ai` is empty **and** nothi
 flight → report blocked-on-human items (`next --owner human` / `wait_state on_human`) and
 any strike-escalated items, then stop (inline) or sleep (`/loop`, v4).
 
+## Reporting progress to humans (plain capabilities, not node refs)
+
+When you surface progress to a person — mid-run status, a merge-gate pause, or the
+convergence report — **lead with the capability that changed, in plain English: what a
+user or caller can now do that they couldn't before (before → now).** Group by capability,
+not by item. A bare list of `HV-…` refs or node titles is *not* a progress report — to the
+human it reads as backlog gobbledygook and tells them nothing about the product. Refs may
+appear only parenthetically, for traceability — never as the headline or the whole message.
+Keep it short and undense. (The graph is *your* coordination medium; the human tracks the
+product by what it does.)
+
 ## Failure, retry, escalation
 
 A gate-fail is isolated in the worktree (and again post-rebase in the merge lock). On fail:
