@@ -1904,34 +1904,75 @@ fn check(name: &str, status: &str, detail: String) -> serde_json::Value {
 }
 
 fn cmd_doctor() -> Result<Output> {
-    let s = config::open_store()?;
-    let paths = config::resolve()?;
+    // Pass the store *open result* through, not a `?`-unwrapped store: a failed
+    // open (e.g. StoreTooNew) must still produce a report (HV-39).
+    Ok(Output::Json(doctor_report(
+        config::open_store(),
+        &config::resolve()?,
+    )?))
+}
+
+/// Build the `doctor` diagnostic report from the store *open result*.
+///
+/// When the store opened, every check runs as before. When it failed (the case
+/// you most need doctor in — e.g. a store migrated by a newer binary,
+/// `StoreTooNew`), the open error becomes the `database` check's error detail,
+/// the store-dependent checks (`schema`, `context_pack_integrity`,
+/// `xref_integrity`) are skipped, and the non-store checks (install wiring,
+/// backups, auth/sync skips) still run. `ok` is then false and the
+/// store-derived report fields are null.
+fn doctor_report(store: Result<Store>, paths: &config::Paths) -> Result<serde_json::Value> {
     let mut checks = Vec::new();
 
-    // 1. Database — the store opened (migrations ran); confirm the seed stamp.
-    match s.meta_get("schema_version")? {
-        Some(_) => checks.push(check(
-            "database",
-            "ok",
-            format!("store at {}", paths.db.display()),
-        )),
-        None => checks.push(check(
-            "database",
-            "error",
-            "schema_version missing — run `haven setup`".into(),
-        )),
-    }
+    // The store, if it opened — threaded through so the store-dependent checks
+    // and the final report fields can use it, and skipped otherwise.
+    let store = match store {
+        Ok(s) => {
+            // 1. Database — the store opened (migrations ran); confirm the seed stamp.
+            match s.meta_get("schema_version")? {
+                Some(_) => checks.push(check(
+                    "database",
+                    "ok",
+                    format!("store at {}", paths.db.display()),
+                )),
+                None => checks.push(check(
+                    "database",
+                    "error",
+                    "schema_version missing — run `haven setup`".into(),
+                )),
+            }
 
-    // 1b. Schema version: the store's applied version vs what this binary
-    // supports. A newer store would have failed open_store() with StoreTooNew,
-    // so reaching here means they match.
-    let store_v = s.user_version()?;
-    let binary_v = haven_core::db::latest_schema_migration();
-    checks.push(check(
-        "schema",
-        "ok",
-        format!("store schema v{store_v}, binary supports v{binary_v}"),
-    ));
+            // 1b. Schema version: the store's applied version vs what this binary
+            // supports. (A newer store fails the open below, not here.)
+            let store_v = s.user_version()?;
+            let binary_v = haven_core::db::latest_schema_migration();
+            checks.push(check(
+                "schema",
+                "ok",
+                format!("store schema v{store_v}, binary supports v{binary_v}"),
+            ));
+            Some(s)
+        }
+        Err(e) => {
+            // The store didn't open — report it as the `database` check's error
+            // detail rather than aborting, so the non-store checks below still
+            // run. StoreTooNew names both versions; other errors carry `e`.
+            let detail = match &e {
+                HavenError::StoreTooNew {
+                    db_version,
+                    supported_version,
+                    ..
+                } => format!(
+                    "store schema v{db_version}, binary supports v{supported_version} — store too new; upgrade/reinstall `haven`"
+                ),
+                other => format!("could not open store: {other}"),
+            };
+            checks.push(check("database", "error", detail));
+            // Skip `schema`, `context_pack_integrity`, `xref_integrity` — they
+            // need an open store.
+            None
+        }
+    };
 
     // 2–6. Install wiring: MCP stanzas, skill snapshots, AGENTS.md, binary on PATH.
     match config::install_check() {
@@ -2088,128 +2129,136 @@ fn cmd_doctor() -> Result<Output> {
 
     // Graph integrity (HV-105): context-pack tombstones, pointers into them, and
     // duplicate (node, path) artifact rows. A data-integrity warn, not store-fatal.
-    match s.context_pack_integrity() {
-        Ok(issues) if issues.is_empty() => checks.push(check(
-            "context_pack_integrity",
-            "ok",
-            "no context-pack tombstones, dangling pointers, or duplicate artifact rows".into(),
-        )),
-        Ok(issues) => {
-            let mut tombstones = Vec::new();
-            let mut pointers = Vec::new();
-            let mut dupes = Vec::new();
-            for i in &issues {
-                match i.kind {
-                    IntegrityKind::TombstonePack => tombstones.push(i.node.as_str()),
-                    IntegrityKind::PointerToTombstone => pointers.push(i.node.as_str()),
-                    IntegrityKind::DuplicateArtifactRow => dupes.push(i.node.as_str()),
-                    // xref kinds are produced only by `xref_integrity`, reported in
-                    // its own block below — never by `context_pack_integrity`.
-                    IntegrityKind::CanonicalConflict
-                    | IntegrityKind::DanglingXref
-                    | IntegrityKind::UnknownStore => {}
+    // Both integrity scans need an open store; skipped entirely without one.
+    if let Some(s) = &store {
+        match s.context_pack_integrity() {
+            Ok(issues) if issues.is_empty() => checks.push(check(
+                "context_pack_integrity",
+                "ok",
+                "no context-pack tombstones, dangling pointers, or duplicate artifact rows".into(),
+            )),
+            Ok(issues) => {
+                let mut tombstones = Vec::new();
+                let mut pointers = Vec::new();
+                let mut dupes = Vec::new();
+                for i in &issues {
+                    match i.kind {
+                        IntegrityKind::TombstonePack => tombstones.push(i.node.as_str()),
+                        IntegrityKind::PointerToTombstone => pointers.push(i.node.as_str()),
+                        IntegrityKind::DuplicateArtifactRow => dupes.push(i.node.as_str()),
+                        // xref kinds are produced only by `xref_integrity`, reported in
+                        // its own block below — never by `context_pack_integrity`.
+                        IntegrityKind::CanonicalConflict
+                        | IntegrityKind::DanglingXref
+                        | IntegrityKind::UnknownStore => {}
+                    }
                 }
+                let mut parts = Vec::new();
+                if !tombstones.is_empty() {
+                    parts.push(format!(
+                        "{} tombstone pack(s) [{}]",
+                        tombstones.len(),
+                        tombstones.join(", ")
+                    ));
+                }
+                if !pointers.is_empty() {
+                    parts.push(format!(
+                        "{} pointer(s) to tombstone [{}]",
+                        pointers.len(),
+                        pointers.join(", ")
+                    ));
+                }
+                if !dupes.is_empty() {
+                    parts.push(format!(
+                        "{} duplicate-row node(s) [{}]",
+                        dupes.len(),
+                        dupes.join(", ")
+                    ));
+                }
+                checks.push(check("context_pack_integrity", "warn", parts.join("; ")));
             }
-            let mut parts = Vec::new();
-            if !tombstones.is_empty() {
-                parts.push(format!(
-                    "{} tombstone pack(s) [{}]",
-                    tombstones.len(),
-                    tombstones.join(", ")
-                ));
-            }
-            if !pointers.is_empty() {
-                parts.push(format!(
-                    "{} pointer(s) to tombstone [{}]",
-                    pointers.len(),
-                    pointers.join(", ")
-                ));
-            }
-            if !dupes.is_empty() {
-                parts.push(format!(
-                    "{} duplicate-row node(s) [{}]",
-                    dupes.len(),
-                    dupes.join(", ")
-                ));
-            }
-            checks.push(check("context_pack_integrity", "warn", parts.join("; ")));
+            Err(e) => checks.push(check(
+                "context_pack_integrity",
+                "warn",
+                format!("integrity scan failed: {e}"),
+            )),
         }
-        Err(e) => checks.push(check(
-            "context_pack_integrity",
-            "warn",
-            format!("integrity scan failed: {e}"),
-        )),
-    }
 
-    // Xref integrity (HV-69): canonical conflicts, dangling/structurally-invalid
-    // xrefs, and unrecognized-store lints across every artifact's metadata.xref[].
-    // CLI-only (no haven_doctor), a warn — never store-fatal.
-    match s.xref_integrity() {
-        Ok(issues) if issues.is_empty() => checks.push(check(
-            "xref_integrity",
-            "ok",
-            "no canonical conflicts, dangling xrefs, or unknown-store lints".into(),
-        )),
-        Ok(issues) => {
-            let mut conflicts = Vec::new();
-            let mut dangling = Vec::new();
-            let mut unknown = Vec::new();
-            for i in &issues {
-                match i.kind {
-                    IntegrityKind::CanonicalConflict => conflicts.push(i.node.as_str()),
-                    IntegrityKind::DanglingXref => dangling.push(i.node.as_str()),
-                    IntegrityKind::UnknownStore => unknown.push(i.node.as_str()),
-                    // Context-pack kinds come from a different scan, never here.
-                    IntegrityKind::TombstonePack
-                    | IntegrityKind::PointerToTombstone
-                    | IntegrityKind::DuplicateArtifactRow => {}
+        // Xref integrity (HV-69): canonical conflicts, dangling/structurally-invalid
+        // xrefs, and unrecognized-store lints across every artifact's metadata.xref[].
+        // CLI-only (no haven_doctor), a warn — never store-fatal.
+        match s.xref_integrity() {
+            Ok(issues) if issues.is_empty() => checks.push(check(
+                "xref_integrity",
+                "ok",
+                "no canonical conflicts, dangling xrefs, or unknown-store lints".into(),
+            )),
+            Ok(issues) => {
+                let mut conflicts = Vec::new();
+                let mut dangling = Vec::new();
+                let mut unknown = Vec::new();
+                for i in &issues {
+                    match i.kind {
+                        IntegrityKind::CanonicalConflict => conflicts.push(i.node.as_str()),
+                        IntegrityKind::DanglingXref => dangling.push(i.node.as_str()),
+                        IntegrityKind::UnknownStore => unknown.push(i.node.as_str()),
+                        // Context-pack kinds come from a different scan, never here.
+                        IntegrityKind::TombstonePack
+                        | IntegrityKind::PointerToTombstone
+                        | IntegrityKind::DuplicateArtifactRow => {}
+                    }
                 }
+                let mut parts = Vec::new();
+                if !conflicts.is_empty() {
+                    parts.push(format!(
+                        "{} canonical conflict(s) [{}]",
+                        conflicts.len(),
+                        conflicts.join(", ")
+                    ));
+                }
+                if !dangling.is_empty() {
+                    parts.push(format!(
+                        "{} dangling xref(s) [{}]",
+                        dangling.len(),
+                        dangling.join(", ")
+                    ));
+                }
+                if !unknown.is_empty() {
+                    parts.push(format!(
+                        "{} unknown-store lint(s) [{}]",
+                        unknown.len(),
+                        unknown.join(", ")
+                    ));
+                }
+                checks.push(check("xref_integrity", "warn", parts.join("; ")));
             }
-            let mut parts = Vec::new();
-            if !conflicts.is_empty() {
-                parts.push(format!(
-                    "{} canonical conflict(s) [{}]",
-                    conflicts.len(),
-                    conflicts.join(", ")
-                ));
-            }
-            if !dangling.is_empty() {
-                parts.push(format!(
-                    "{} dangling xref(s) [{}]",
-                    dangling.len(),
-                    dangling.join(", ")
-                ));
-            }
-            if !unknown.is_empty() {
-                parts.push(format!(
-                    "{} unknown-store lint(s) [{}]",
-                    unknown.len(),
-                    unknown.join(", ")
-                ));
-            }
-            checks.push(check("xref_integrity", "warn", parts.join("; ")));
+            Err(e) => checks.push(check(
+                "xref_integrity",
+                "warn",
+                format!("xref scan failed: {e}"),
+            )),
         }
-        Err(e) => checks.push(check(
-            "xref_integrity",
-            "warn",
-            format!("xref scan failed: {e}"),
-        )),
-    }
+    } // end `if let Some(s) = &store` — store-dependent integrity checks
 
     let ok = !checks
         .iter()
         .any(|c| c["status"] == "error" || c["status"] == "warn");
+    // Store-derived report fields are null when the store didn't open.
+    let (schema_version, device_id) = match &store {
+        Some(s) => (s.meta_get("schema_version")?, s.meta_get("device_id")?),
+        None => (None, None),
+    };
     let mut report = serde_json::json!({
         "ok": ok,
-        "schema_version": s.meta_get("schema_version")?,
-        "device_id": s.meta_get("device_id")?,
+        "schema_version": schema_version,
+        "device_id": device_id,
         "checks": checks,
     });
     if !ok {
         report["hint"] =
             serde_json::json!("`haven setup` re-wires MCP + skill; warnings above are non-fatal");
     }
-    Ok(Output::Json(report))
+    Ok(report)
 }
 
 fn cmd_config(cmd: &ConfigCmd) -> Result<Output> {
@@ -2849,5 +2898,131 @@ mod parse_tests {
             bare.command,
             Command::Status { project_key: None }
         ));
+    }
+}
+
+#[cfg(test)]
+mod doctor_tests {
+    //! `haven doctor` must degrade rather than die when the store can't open —
+    //! exactly the situation (e.g. a store migrated by a newer binary,
+    //! `StoreTooNew`) where you most need the diagnostic (HV-39). The report is
+    //! built by `doctor_report`, which takes the store *open result* so a failed
+    //! open becomes one error check and the non-store checks still run.
+    use super::*;
+    use haven_core::Store;
+
+    /// Build a real on-disk store, then bump its `user_version` past what this
+    /// binary supports so a re-open yields `HavenError::StoreTooNew`. Mirrors the
+    /// scenario in `haven_core::db`'s `newer_database_gets_actionable_error`.
+    fn too_new_store(root: &std::path::Path) -> (config::Paths, HavenError) {
+        let db = root.join("haven.db");
+        // First open creates + migrates the store to the current schema.
+        Store::open(&db, root).expect("initial open should succeed");
+        // Stamp a future schema version directly via SQLite, then re-open.
+        let conn = rusqlite::Connection::open(&db).unwrap();
+        conn.pragma_update(
+            None,
+            "user_version",
+            haven_core::db::latest_schema_migration() + 1,
+        )
+        .unwrap();
+        drop(conn);
+        // `Store` is not `Debug`, so destructure rather than `expect_err`.
+        let err = match Store::open(&db, root) {
+            Ok(_) => panic!("re-open should fail as StoreTooNew"),
+            Err(e) => e,
+        };
+        (
+            config::Paths {
+                db,
+                root: root.to_path_buf(),
+            },
+            err,
+        )
+    }
+
+    #[test]
+    fn doctor_degrades_when_store_too_new() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (paths, err) = too_new_store(tmp.path());
+        // Sanity: this is the variant we expect to degrade gracefully.
+        let supported = haven_core::db::latest_schema_migration();
+        assert!(matches!(err, HavenError::StoreTooNew { .. }));
+
+        let report = doctor_report(Err(err), &paths).expect("report builds despite failed open");
+
+        // The report is produced (not an error) and flags overall failure.
+        assert_eq!(report["ok"], serde_json::Value::Bool(false));
+        // Store-derived fields are null with no open store.
+        assert_eq!(report["schema_version"], serde_json::Value::Null);
+        assert_eq!(report["device_id"], serde_json::Value::Null);
+
+        let checks = report["checks"].as_array().expect("checks is an array");
+
+        // The database check carries the failure as its error detail, naming
+        // BOTH the store's version and the version this binary supports.
+        let db_check = checks
+            .iter()
+            .find(|c| c["name"] == "database")
+            .expect("a database check is present");
+        assert_eq!(db_check["status"], "error");
+        let detail = db_check["detail"].as_str().unwrap();
+        assert!(
+            detail.contains(&(supported + 1).to_string())
+                && detail.contains(&supported.to_string()),
+            "database detail should name both store v{} and binary v{}, got: {detail}",
+            supported + 1,
+            supported,
+        );
+
+        // The store-dependent checks must be SKIPPED (no open store to run them).
+        for skipped in ["schema", "context_pack_integrity", "xref_integrity"] {
+            assert!(
+                !checks.iter().any(|c| c["name"] == skipped),
+                "store-dependent check `{skipped}` should be skipped on failed open"
+            );
+        }
+
+        // ...but the non-store checks STILL run. `backups` reads the filesystem,
+        // not the open store, so it must be present; `path` comes from the
+        // install check and is likewise store-independent.
+        assert!(
+            checks.iter().any(|c| c["name"] == "backups"),
+            "non-store `backups` check should still run after a failed open"
+        );
+        assert!(
+            checks.iter().any(|c| c["name"] == "path"),
+            "non-store `path` check should still run after a failed open"
+        );
+    }
+
+    #[test]
+    fn doctor_full_report_when_store_opens() {
+        // The healthy path: a freshly-opened store runs every check, including
+        // the store-dependent ones, and reports ok.
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("haven.db");
+        let store = Store::open(&db, tmp.path()).unwrap();
+        let paths = config::Paths {
+            db,
+            root: tmp.path().to_path_buf(),
+        };
+
+        let report = doctor_report(Ok(store), &paths).expect("report builds for an open store");
+
+        let checks = report["checks"].as_array().unwrap();
+        for present in [
+            "database",
+            "schema",
+            "context_pack_integrity",
+            "xref_integrity",
+        ] {
+            assert!(
+                checks.iter().any(|c| c["name"] == present),
+                "open store should run the `{present}` check"
+            );
+        }
+        // schema_version is seeded by the migration, so it is non-null here.
+        assert!(report["schema_version"].is_string());
     }
 }

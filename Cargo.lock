@@ -528,6 +528,7 @@ dependencies = [
  "haven-sync",
  "predicates",
  "reqwest",
+ "rusqlite",
  "semver",
  "serde",
  "serde_json",

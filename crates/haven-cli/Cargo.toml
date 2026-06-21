@@ -32,3 +32,6 @@ tar.workspace = true
 assert_cmd.workspace = true
 predicates.workspace = true
 tempfile.workspace = true
+# Test-only: the doctor degrade test bumps a store's `user_version` past what
+# this binary supports to synthesise a `StoreTooNew` re-open (HV-39).
+rusqlite.workspace = true
