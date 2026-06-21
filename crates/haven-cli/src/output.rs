@@ -101,18 +101,22 @@ fn project_table(projects: &[Project]) -> String {
     if projects.is_empty() {
         return "(no projects)\n".into();
     }
-    let mut rows: Vec<[String; 4]> = vec![[
+    let mut rows: Vec<[String; 5]> = vec![[
         "KEY".into(),
         "PREFIX".into(),
         "TITLE".into(),
         "ITEMS#".into(),
+        "STATUS".into(),
     ]];
     for p in projects {
         rows.push([
             p.key.clone(),
             p.ref_prefix.clone(),
             truncate(&p.title, 40),
+            // `ITEMS#` is `ref_counter`, the preserved namespace counter — under
+            // archive this is exactly what stays reserved (HV-123).
             p.ref_counter.to_string(),
+            p.status.as_str().to_string(),
         ]);
     }
     table(&rows)

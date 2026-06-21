@@ -1310,3 +1310,108 @@ fn cli_telemetry_error_class_buckets_a_not_found() {
     assert_eq!(v["error_class"], "not_found");
     assert_eq!(v["project_resolved"], "demo");
 }
+
+// ---- HV-123: project archive / reopen / list -----------------------------
+
+#[test]
+fn cli_project_archive_reopen_roundtrip() {
+    let h = Haven::new();
+    h.ok(&["setup", "--project-key", "demo", "--prefix", "DM"]);
+    // Mint a ref so ref_counter is non-zero (proves reservation).
+    h.ok(&["item", "add", "First", "-p", "demo"]);
+
+    // Archive: status flips, reason recorded, namespace preserved.
+    let arch = h.json(&[
+        "project",
+        "archive",
+        "demo",
+        "--rationale",
+        "winding down",
+        "--by",
+        "alice",
+    ]);
+    assert_eq!(arch["status"], "archived");
+    assert_eq!(arch["archived_reason"], "winding down");
+    assert_eq!(arch["ref_prefix"], "DM");
+    assert_eq!(arch["ref_counter"], 1);
+
+    // Default listing hides it; --include-archived shows it.
+    let listed = h.json(&["project", "list"]);
+    let keys: Vec<&str> = listed
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["key"].as_str().unwrap())
+        .collect();
+    assert!(
+        !keys.contains(&"demo"),
+        "archived project hidden by default"
+    );
+
+    let all = h.json(&["project", "list", "--include-archived"]);
+    let all_keys: Vec<&str> = all
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["key"].as_str().unwrap())
+        .collect();
+    assert!(all_keys.contains(&"demo"), "--include-archived shows it");
+
+    // get still resolves an archived project.
+    let got = h.json(&["project", "get", "demo"]);
+    assert_eq!(got["status"], "archived");
+
+    // A mutating op into the archived project is refused.
+    let err = h.fail(&["item", "add", "Blocked", "-p", "demo"]);
+    assert_eq!(err["error"]["code"], "invalid");
+    assert!(err["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("archived"));
+
+    // `project use` of an archived project is refused.
+    let use_err = h.fail(&["project", "use", "demo"]);
+    assert_eq!(use_err["error"]["code"], "invalid");
+
+    // Reopen restores it; the next ref continues from the preserved counter.
+    let reopened = h.json(&["project", "reopen", "demo"]);
+    assert_eq!(reopened["status"], "active");
+    assert_eq!(reopened["ref_counter"], 1);
+    let next = h.json(&["item", "add", "Second", "-p", "demo"]);
+    assert_eq!(next["ref"], "DM-2");
+}
+
+#[test]
+fn cli_project_reopen_of_active_errors() {
+    let h = Haven::new();
+    h.ok(&["setup", "--project-key", "demo", "--prefix", "DM"]);
+    let err = h.fail(&["project", "reopen", "demo"]);
+    assert_eq!(err["error"]["code"], "invalid");
+}
+
+#[test]
+fn cli_project_archive_missing_key_is_not_found() {
+    let h = Haven::new();
+    h.ok(&["setup", "--project-key", "demo", "--prefix", "DM"]);
+    let err = h.fail(&["project", "archive", "ghost"]);
+    assert_eq!(err["error"]["code"], "not_found");
+}
+
+#[test]
+fn cli_project_list_pretty_has_status_column() {
+    let h = Haven::new();
+    h.ok(&["setup", "--project-key", "demo", "--prefix", "DM"]);
+    let (stdout, _stderr) = h.run_capturing(&["project", "list", "--pretty"]);
+    assert!(stdout.contains("STATUS"), "STATUS column present: {stdout}");
+    assert!(stdout.contains("active"), "active status shown: {stdout}");
+}
+
+#[test]
+fn cli_project_archive_reason_alias_accepted() {
+    let h = Haven::new();
+    h.ok(&["setup", "--project-key", "demo", "--prefix", "DM"]);
+    // `--reason` is a clap alias of `--rationale`.
+    let arch = h.json(&["project", "archive", "demo", "--reason", "alias works"]);
+    assert_eq!(arch["status"], "archived");
+    assert_eq!(arch["archived_reason"], "alias works");
+}

@@ -15,7 +15,7 @@ mod service_tests;
 
 use std::path::{Path, PathBuf};
 
-use rusqlite::{Connection, OptionalExtension, Row};
+use rusqlite::{params, Connection, OptionalExtension, Row};
 use uuid::Uuid;
 
 use crate::db;
@@ -222,13 +222,17 @@ impl Store {
         self.get_project(key)
     }
 
+    /// Resolve one project by key. Resolves an **archived** project (so reopen and
+    /// historical reads work) but treats a **tombstoned** row (`deleted_at IS NOT
+    /// NULL`, HV-123) as `NotFound` — the namespace stays burned, but the project
+    /// is effectively absent to every read/guard path (SPEC §3.5).
     pub fn get_project(&self, key: &str) -> Result<Project> {
         self.conn
             .query_row(
                 "SELECT id, public_id, key, ref_prefix, ref_counter, title, description,
                         created_at, updated_at, revision, sync_state,
                         status, archived_at, archived_reason, deleted_at
-                 FROM projects WHERE key = ?1",
+                 FROM projects WHERE key = ?1 AND deleted_at IS NULL",
                 [key],
                 project_from_row,
             )
@@ -236,21 +240,125 @@ impl Store {
             .ok_or_else(|| HavenError::NotFound(format!("project {key:?}")))
     }
 
-    pub fn list_projects(&self) -> Result<Vec<Project>> {
-        let mut stmt = self.conn.prepare(
+    /// List projects. `include_archived=false` (the default-listing semantics)
+    /// returns only `active` projects; `true` returns active **and** archived.
+    /// Both modes always exclude tombstoned rows (`deleted_at IS NOT NULL`) —
+    /// a deleted project is never listed (SPEC §3.5).
+    pub fn list_projects(&self, include_archived: bool) -> Result<Vec<Project>> {
+        // Column order is fixed in lockstep with `project_from_row` (trailing
+        // lifecycle indices 11..14). Only the status predicate varies by mode.
+        let sql = if include_archived {
             "SELECT id, public_id, key, ref_prefix, ref_counter, title, description,
                     created_at, updated_at, revision, sync_state,
                     status, archived_at, archived_reason, deleted_at
-             FROM projects ORDER BY key",
-        )?;
+             FROM projects WHERE deleted_at IS NULL ORDER BY key"
+        } else {
+            "SELECT id, public_id, key, ref_prefix, ref_counter, title, description,
+                    created_at, updated_at, revision, sync_state,
+                    status, archived_at, archived_reason, deleted_at
+             FROM projects WHERE deleted_at IS NULL AND status = 'active' ORDER BY key"
+        };
+        let mut stmt = self.conn.prepare(sql)?;
         let rows = stmt.query_map([], project_from_row)?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
-    /// Set the current project (stored in `meta`).
+    /// Set the current project (stored in `meta`). Refuses an **archived** project
+    /// (reopen it first); a tombstoned key is `NotFound` (via `get_project`) — HV-123.
     pub fn use_project(&self, key: &str) -> Result<()> {
-        self.get_project(key)?; // validate it exists
+        let proj = self.get_project(key)?; // validates existence + rejects tombstones
+        if proj.status == ProjectStatus::Archived {
+            return Err(HavenError::Invalid(format!(
+                "project {key:?} is archived; reopen it first"
+            )));
+        }
         self.meta_set("current_project", key)
+    }
+
+    /// Soft-archive a project (HV-123). The namespace is **RESERVED**:
+    /// `key`/`ref_prefix`/`ref_counter` are explicitly left untouched, so refs are
+    /// never reused and `reopen_project` restores the project completely. One
+    /// transaction; bumps `revision` and sets `sync_state='local'`. Idempotent:
+    /// archiving an already-archived project is a clean no-op re-read (NOT a second
+    /// bump) — the deliberate divergence from `archive_item`, which re-bumps (SPEC §3.1).
+    ///
+    /// Resolves the project by `key` directly (NOT via `require_project`), so the
+    /// archived-write guard `require_project` carries never blocks the lifecycle op
+    /// itself (SPEC §3 preamble).
+    pub fn archive_project(
+        &self,
+        key: &str,
+        reason: Option<&str>,
+        _by: Option<&str>,
+    ) -> Result<Project> {
+        let tx = self.conn.unchecked_transaction()?;
+        // Resolve by key directly; NotFound if absent or tombstoned.
+        let current = self.project_lifecycle_state(&tx, key)?;
+        if current == ProjectStatus::Archived {
+            // No-op: return the current row without a second revision bump.
+            tx.commit()?;
+            return self.get_project(key);
+        }
+        // `key`, `ref_prefix`, `ref_counter` are explicitly NOT in the SET list —
+        // this is the load-bearing line for namespace reservation.
+        tx.execute(
+            "UPDATE projects
+                SET status='archived', archived_at=datetime('now'), archived_reason=?2,
+                    revision=revision+1, updated_at=datetime('now'), sync_state='local'
+              WHERE key=?1 AND deleted_at IS NULL",
+            params![key, reason],
+        )?;
+        tx.commit()?;
+        // Clear the sticky selection if it named this key (SPEC §3.6).
+        if self.current_project()?.as_deref() == Some(key) {
+            self.conn
+                .execute("DELETE FROM meta WHERE key = 'current_project'", [])?;
+        }
+        self.get_project(key)
+    }
+
+    /// Reopen an archived project (HV-123): the inverse of archive — a total
+    /// restore (nothing was destroyed). Errors `Invalid` if the project is not
+    /// archived; a tombstoned row is treated as absent (`NotFound`), so reopen can
+    /// never resurrect a deleted project's empty shell (SPEC §3.2). Resolves by key
+    /// directly, bypassing the `require_project` archived-write guard.
+    pub fn reopen_project(&self, key: &str, _by: Option<&str>) -> Result<Project> {
+        let tx = self.conn.unchecked_transaction()?;
+        let current = self.project_lifecycle_state(&tx, key)?;
+        if current == ProjectStatus::Active {
+            return Err(HavenError::Invalid(
+                "cannot reopen a project that is not archived".into(),
+            ));
+        }
+        tx.execute(
+            "UPDATE projects
+                SET status='active', archived_at=NULL, archived_reason=NULL,
+                    revision=revision+1, updated_at=datetime('now'), sync_state='local'
+              WHERE key=?1 AND deleted_at IS NULL",
+            params![key],
+        )?;
+        tx.commit()?;
+        self.get_project(key)
+    }
+
+    /// Read a project's lifecycle status by key inside a transaction, for the
+    /// lifecycle ops. `NotFound` if the row is absent **or tombstoned**
+    /// (`deleted_at IS NOT NULL` → treated as absent), enriched with the
+    /// available-projects hint (SPEC §3.1/§3.2).
+    fn project_lifecycle_state(
+        &self,
+        tx: &rusqlite::Transaction<'_>,
+        key: &str,
+    ) -> Result<ProjectStatus> {
+        tx.query_row(
+            "SELECT status FROM projects WHERE key=?1 AND deleted_at IS NULL",
+            [key],
+            |r| r.get::<_, ProjectStatus>(0),
+        )
+        .optional()?
+        .ok_or_else(|| {
+            HavenError::NotFound(format!("project {key:?}{}", self.available_projects_hint()))
+        })
     }
 
     pub fn current_project(&self) -> Result<Option<String>> {
@@ -262,8 +370,14 @@ impl Store {
     /// self-correct in one step. Best-effort: a query error yields an empty list
     /// rather than masking the original error.
     fn project_keys(&self) -> Vec<String> {
+        // Active, non-tombstoned only (HV-123): an archived project stays
+        // resolvable by exact key but is not *suggested* for selection, and a
+        // tombstoned project is gone.
         self.conn
-            .prepare("SELECT key FROM projects ORDER BY key")
+            .prepare(
+                "SELECT key FROM projects
+                  WHERE deleted_at IS NULL AND status = 'active' ORDER BY key",
+            )
             .and_then(|mut stmt| {
                 stmt.query_map([], |r| r.get::<_, String>(0))?
                     .collect::<rusqlite::Result<Vec<_>>>()
@@ -295,7 +409,12 @@ impl Store {
     }
 
     /// Resolve a project selector to `(id, key)`. Falls back to the current
-    /// project when `selector` is `None`.
+    /// project when `selector` is `None`. Reads route through here: an **archived**
+    /// project still resolves (so `get_item`/`list_items`/`lineage`/`xref` work
+    /// under archive), but a **tombstoned** row (`deleted_at IS NOT NULL`) is
+    /// `NotFound` — the deleted project is effectively absent (HV-123, SPEC §3.5).
+    /// The write path uses [`Store::require_project_mut`], which adds the
+    /// archived-write guard.
     pub(crate) fn require_project(&self, selector: Option<&str>) -> Result<(i64, String)> {
         let key = match selector {
             Some(k) => k.to_string(),
@@ -309,13 +428,41 @@ impl Store {
         };
         let id = self
             .conn
-            .query_row("SELECT id FROM projects WHERE key = ?1", [&key], |r| {
-                r.get(0)
-            })
+            .query_row(
+                "SELECT id FROM projects WHERE key = ?1 AND deleted_at IS NULL",
+                [&key],
+                |r| r.get(0),
+            )
             .optional()?
             .ok_or_else(|| {
                 HavenError::NotFound(format!("project {key:?}{}", self.available_projects_hint()))
             })?;
+        Ok((id, key))
+    }
+
+    /// Resolve a project for a **mutating** caller (HV-123). Identical to
+    /// [`Store::require_project`] but additionally refuses an **archived** project
+    /// — writes into an archived project are blocked with an actionable "reopen it
+    /// first" error, while reads (which use the plain resolver) keep working. Every
+    /// item/edge/evolve/import/artifact write routes through here; the project
+    /// lifecycle ops themselves resolve by key directly and deliberately bypass
+    /// this guard (SPEC §3 preamble, §3.5).
+    pub(crate) fn require_project_mut(&self, selector: Option<&str>) -> Result<(i64, String)> {
+        let (id, key) = self.require_project(selector)?;
+        let archived: bool = self
+            .conn
+            .query_row(
+                "SELECT status = 'archived' FROM projects WHERE id = ?1",
+                [id],
+                |r| r.get(0),
+            )
+            .optional()?
+            .unwrap_or(false);
+        if archived {
+            return Err(HavenError::Invalid(format!(
+                "project {key:?} is archived; reopen it to add or change items"
+            )));
+        }
         Ok((id, key))
     }
 
@@ -528,7 +675,7 @@ mod tests {
         let p2 = s.add_project("billing", None, "Billing", None).unwrap();
         assert_eq!(p2.ref_prefix, "BI");
 
-        assert_eq!(s.list_projects().unwrap().len(), 2);
+        assert_eq!(s.list_projects(false).unwrap().len(), 2);
         assert!(s.get_project("nope").is_err());
 
         // duplicate key -> conflict
@@ -551,5 +698,345 @@ mod tests {
         let s = store();
         assert_eq!(s.meta_get("device_id").unwrap(), None);
         assert_eq!(s.meta_get("schema_version").unwrap().as_deref(), Some("1"));
+    }
+
+    // ---- HV-123: project archive / reopen lifecycle ----------------------
+
+    /// GATE: namespace reservation — archive leaves key/ref_prefix/ref_counter
+    /// byte-identical, bumps revision, flips sync_state=local, stamps reason.
+    #[test]
+    fn archive_reserves_namespace_and_bumps_revision() {
+        let s = store();
+        let p0 = s.add_project("haven", Some("HV"), "Haven", None).unwrap();
+        // Mint a ref so ref_counter is non-zero (proves it's preserved).
+        s.use_project("haven").unwrap();
+        s.add_item(
+            None,
+            NewItem {
+                title: "X".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let before = s.get_project("haven").unwrap();
+        assert_eq!(before.ref_counter, 1);
+
+        let arch = s
+            .archive_project("haven", Some("won't pursue"), Some("alice"))
+            .unwrap();
+        assert_eq!(arch.status, ProjectStatus::Archived);
+        assert!(arch.archived_at.is_some());
+        assert_eq!(arch.archived_reason.as_deref(), Some("won't pursue"));
+        // Namespace BYTE-IDENTICAL across archive.
+        assert_eq!(arch.key, before.key);
+        assert_eq!(arch.ref_prefix, before.ref_prefix);
+        assert_eq!(arch.ref_counter, before.ref_counter);
+        assert_eq!(arch.public_id, p0.public_id);
+        // Revision bumped + dirtied for sync.
+        assert_eq!(arch.revision, before.revision + 1);
+        assert_eq!(arch.sync_state, SyncState::Local);
+    }
+
+    /// GATE: idempotent re-archive — no SECOND revision bump / sync churn.
+    #[test]
+    fn re_archive_is_idempotent_noop() {
+        let s = store();
+        s.add_project("haven", Some("HV"), "Haven", None).unwrap();
+        let first = s.archive_project("haven", None, None).unwrap();
+        let second = s.archive_project("haven", Some("ignored"), None).unwrap();
+        assert_eq!(second.revision, first.revision, "no second bump");
+        assert_eq!(second.status, ProjectStatus::Archived);
+        // The re-archive did not overwrite the original reason with the new one.
+        assert_eq!(second.archived_reason, first.archived_reason);
+    }
+
+    /// GATE: reopen restores fully; the next minted ref continues from the
+    /// preserved counter (no reuse, no reset).
+    #[test]
+    fn reopen_restores_and_refs_continue_from_high_water_mark() {
+        let s = store();
+        s.add_project("haven", Some("HV"), "Haven", None).unwrap();
+        s.use_project("haven").unwrap();
+        let i1 = s
+            .add_item(
+                None,
+                NewItem {
+                    title: "one".into(),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(i1.reference, "HV-1");
+
+        let arch = s.archive_project("haven", None, None).unwrap();
+        let reopened = s.reopen_project("haven", None).unwrap();
+        assert_eq!(reopened.status, ProjectStatus::Active);
+        assert!(reopened.archived_at.is_none());
+        assert!(reopened.archived_reason.is_none());
+        assert_eq!(reopened.revision, arch.revision + 1);
+        assert_eq!(reopened.ref_counter, 1, "counter preserved across cycle");
+
+        // After reopen the next ref is HV-2, not a reused HV-1.
+        s.use_project("haven").unwrap();
+        let i2 = s
+            .add_item(
+                None,
+                NewItem {
+                    title: "two".into(),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(i2.reference, "HV-2");
+    }
+
+    /// GATE: reopen of a never-archived project is a clean Invalid.
+    #[test]
+    fn reopen_of_active_project_errors_invalid() {
+        let s = store();
+        s.add_project("haven", Some("HV"), "Haven", None).unwrap();
+        let err = s.reopen_project("haven", None).unwrap_err();
+        assert_eq!(err.code(), "invalid");
+    }
+
+    /// GATE: archive/reopen of a missing key → not_found.
+    #[test]
+    fn lifecycle_of_missing_key_is_not_found() {
+        let s = store();
+        assert_eq!(
+            s.archive_project("nope", None, None).unwrap_err().code(),
+            "not_found"
+        );
+        assert_eq!(
+            s.reopen_project("nope", None).unwrap_err().code(),
+            "not_found"
+        );
+    }
+
+    /// GATE: the archived-write guard refuses MUTATING callers while reads still
+    /// resolve; and lifecycle ops (reopen) BYPASS that guard.
+    #[test]
+    fn archived_write_guard_refuses_writes_but_reads_resolve() {
+        let s = store();
+        s.add_project("haven", Some("HV"), "Haven", None).unwrap();
+        s.use_project("haven").unwrap();
+        let it = s
+            .add_item(
+                None,
+                NewItem {
+                    title: "live".into(),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        s.archive_project("haven", None, None).unwrap();
+
+        // READ still resolves under archive.
+        let got = s.get_item(Some("haven"), &it.reference, &[]).unwrap();
+        assert_eq!(got.reference, it.reference);
+        assert_eq!(
+            s.list_items(Some("haven"), &ItemFilter::default())
+                .unwrap()
+                .len(),
+            1
+        );
+
+        // WRITE is refused with an actionable error.
+        let err = s
+            .add_item(
+                Some("haven"),
+                NewItem {
+                    title: "blocked".into(),
+                    ..Default::default()
+                },
+            )
+            .unwrap_err();
+        assert_eq!(err.code(), "invalid");
+        assert!(err.to_string().contains("archived"));
+        let err2 = s
+            .update_item(
+                Some("haven"),
+                &it.reference,
+                ItemUpdate {
+                    title: Some("nope".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap_err();
+        assert_eq!(err2.code(), "invalid");
+
+        // LIFECYCLE op bypasses the guard: reopen succeeds on the archived project.
+        let reopened = s.reopen_project("haven", None).unwrap();
+        assert_eq!(reopened.status, ProjectStatus::Active);
+        // And writes work again after reopen.
+        s.add_item(
+            Some("haven"),
+            NewItem {
+                title: "ok-now".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    }
+
+    /// GATE: use_project refuses an archived project (reopen first).
+    #[test]
+    fn use_project_refuses_archived() {
+        let s = store();
+        s.add_project("haven", Some("HV"), "Haven", None).unwrap();
+        s.archive_project("haven", None, None).unwrap();
+        let err = s.use_project("haven").unwrap_err();
+        assert_eq!(err.code(), "invalid");
+        assert!(err.to_string().contains("reopen"));
+        // After reopen, selection works.
+        s.reopen_project("haven", None).unwrap();
+        s.use_project("haven").unwrap();
+        assert_eq!(s.current_project().unwrap().as_deref(), Some("haven"));
+    }
+
+    /// archive clears current_project when it names the archived key.
+    #[test]
+    fn archive_clears_current_project_selection() {
+        let s = store();
+        s.add_project("haven", Some("HV"), "Haven", None).unwrap();
+        s.add_project("other", Some("OT"), "Other", None).unwrap();
+        s.use_project("haven").unwrap();
+        s.archive_project("haven", None, None).unwrap();
+        assert_eq!(s.current_project().unwrap(), None, "selection cleared");
+        // Archiving a non-selected project leaves the selection intact.
+        s.use_project("other").unwrap();
+        s.add_project("third", Some("TH"), "Third", None).unwrap();
+        s.archive_project("third", None, None).unwrap();
+        assert_eq!(s.current_project().unwrap().as_deref(), Some("other"));
+    }
+
+    /// list_projects(include_archived) + project_keys honour the filters.
+    #[test]
+    fn listing_filters_archived() {
+        let s = store();
+        s.add_project("haven", Some("HV"), "Haven", None).unwrap();
+        s.add_project("old", Some("OL"), "Old", None).unwrap();
+        s.archive_project("old", None, None).unwrap();
+
+        let default = s.list_projects(false).unwrap();
+        assert_eq!(default.len(), 1);
+        assert_eq!(default[0].key, "haven");
+
+        let all = s.list_projects(true).unwrap();
+        assert_eq!(all.len(), 2);
+
+        // available_projects_hint / project_keys list active only → an archived
+        // key is not suggested.
+        assert_eq!(s.project_keys(), vec!["haven".to_string()]);
+
+        // But the archived project still resolves by EXACT key.
+        assert_eq!(
+            s.get_project("old").unwrap().status,
+            ProjectStatus::Archived
+        );
+    }
+
+    /// READ-PATH GUARD (the only delete-touch in this leaf): a tombstoned row
+    /// (`deleted_at` stamped) resolves NotFound everywhere; the namespace stays
+    /// burned (add_project still Conflicts). No delete command exists yet — we
+    /// stamp the column directly to prove the read path.
+    #[test]
+    fn tombstoned_row_resolves_not_found_but_key_stays_burned() {
+        let s = store();
+        s.add_project("gone", Some("GO"), "Gone", None).unwrap();
+        // Simulate a future delete by stamping the tombstone column directly.
+        s.conn
+            .execute(
+                "UPDATE projects SET deleted_at = datetime('now') WHERE key = 'gone'",
+                [],
+            )
+            .unwrap();
+
+        // get_project / require_project / lifecycle ops all treat it as absent.
+        assert_eq!(s.get_project("gone").unwrap_err().code(), "not_found");
+        assert_eq!(
+            s.require_project(Some("gone")).unwrap_err().code(),
+            "not_found"
+        );
+        assert_eq!(
+            s.archive_project("gone", None, None).unwrap_err().code(),
+            "not_found"
+        );
+        assert_eq!(
+            s.reopen_project("gone", None).unwrap_err().code(),
+            "not_found"
+        );
+        // Neither listing shows a tombstoned project.
+        assert!(s.list_projects(false).unwrap().is_empty());
+        assert!(s.list_projects(true).unwrap().is_empty());
+        assert!(s.project_keys().is_empty());
+
+        // The retained row keeps UNIQUE(key) occupied → re-adding Conflicts.
+        assert_eq!(
+            s.add_project("gone", None, "Revived", None)
+                .unwrap_err()
+                .code(),
+            "conflict"
+        );
+    }
+
+    /// xref works inside an ARCHIVED project (Store::xref passes
+    /// include_archived=true). Needs a real content root for the artifact file.
+    #[test]
+    fn xref_resolves_inside_archived_project() {
+        use crate::model::{ArtifactRole, Xref, XrefRelation};
+        let dir = tempfile::tempdir().unwrap();
+        let s = Store::open_in_memory_at(dir.path()).unwrap();
+        s.add_project("haven", Some("HV"), "Haven", None).unwrap();
+        s.use_project("haven").unwrap();
+        let target = s
+            .add_item(
+                None,
+                NewItem {
+                    title: "target".into(),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let source = s
+            .add_item(
+                None,
+                NewItem {
+                    title: "source".into(),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        // An outbound Haven xref on `source` pointing at `target`.
+        s.add_artifact(
+            None,
+            &source.reference,
+            NewArtifact {
+                role: ArtifactRole::Spec,
+                content: Some("body".into()),
+                name: Some("spec.md".into()),
+                metadata: Some(serde_json::json!({
+                    "xref": [Xref {
+                        relation: XrefRelation::DerivedFrom,
+                        store: "haven".into(),
+                        target: target.reference.clone(),
+                        canonical: false,
+                    }]
+                })),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        // Now archive the project; the xref read must still resolve.
+        s.archive_project("haven", None, None).unwrap();
+        let report = s.xref(Some("haven"), &target.reference).unwrap();
+        assert_eq!(report.node, target.reference);
+        assert_eq!(
+            report.inbound.len(),
+            1,
+            "inbound backlink found under archive"
+        );
+        assert_eq!(report.inbound[0].source, source.reference);
     }
 }

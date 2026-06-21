@@ -82,7 +82,16 @@ The mistakes that actually bite — internalise these:
   `haven_handoff` and `item complete` / `haven_complete_item` — don't hand-assemble
   assign + update + add_artifact (you'll do it inconsistently).
 - **Archive, never delete.** There is no hard delete. "Drop it" = `archive
-  --rationale`; reversible via `reopen`.
+  --rationale`; reversible via `reopen`. This holds for **projects** too: to
+  retire a whole backlog, `haven project archive <key>` (MCP
+  `haven_archive_project`) — it hides the project from default listings and
+  refuses writes into it, while keeping the namespace **fully reserved** (key,
+  ref_prefix and the ref counter untouched, so refs are never reused);
+  `haven project reopen <key>` restores it completely. There is **no
+  hard-delete tool for projects** in this release — archive *is* how you drop a
+  project. (A separate, guarded hard-delete that cascades rows + content is a
+  future, irreversible exception; archive is the everyday, safe, reversible
+  default — reach for archive, not delete.)
 - **The two axes are orthogonal.** Maturity (`status`) ≠ commitment (`committed` +
   `priority`). "Make this ready" and "do this next" are different operations.
 - **On the CLI, commit/uncommit are their own verbs.** `haven item commit <ref>

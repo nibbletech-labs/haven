@@ -314,7 +314,9 @@ impl Store {
         const RELOCATION_MARKERS: &[&str] = &["MOVED", "RELOCATED"];
 
         let mut issues = Vec::new();
-        for proj in self.list_projects()? {
+        // Integrity scans skip archived projects by default (HV-123) — mirrors the
+        // node-level live filter; tombstoned projects are never listed.
+        for proj in self.list_projects(false)? {
             let base = self.project_dir(&proj.key);
 
             // (1) Tombstone packs: live containers holding a `context-pack` artifact
@@ -478,7 +480,8 @@ impl Store {
     /// store returns an empty vec.
     pub fn xref_integrity(&self) -> Result<Vec<IntegrityIssue>> {
         let mut issues = Vec::new();
-        for proj in self.list_projects()? {
+        // Skip archived projects by default (HV-123); tombstoned never listed.
+        for proj in self.list_projects(false)? {
             let raws = self.collect_project_xrefs(proj.id)?;
 
             // (1) Canonical conflict: group canonical:true xrefs by (store, target)
@@ -586,8 +589,13 @@ impl Store {
         let (project_id, _key) = self.require_project(project)?;
         let node_id = self.resolve_node_id(project_id, selector)?;
         let node_ref = self.node_ref(node_id)?;
+        // `include_archived=true` (HV-123): this is a project-resolution lookup, not
+        // a listing. `haven xref` must work inside an *archived* project (reads
+        // resolve under archive) — the default `false` filter would omit it and make
+        // an in-archived-project xref wrongly NotFound("project"). Tombstoned
+        // projects have no resolvable items, so excluding them is correct.
         let proj = self
-            .list_projects()?
+            .list_projects(true)?
             .into_iter()
             .find(|p| p.id == project_id)
             .ok_or_else(|| HavenError::NotFound("project".into()))?;
@@ -679,7 +687,7 @@ impl Store {
         selector: &str,
         new: NewArtifact,
     ) -> Result<Artifact> {
-        let (project_id, project_key) = self.require_project(project)?;
+        let (project_id, project_key) = self.require_project_mut(project)?;
         let node_id = self.resolve_node_id(project_id, selector)?;
         let node_ref = self.node_ref(node_id)?;
 
@@ -1001,7 +1009,7 @@ impl Store {
         selector_ref: &str,
         selector: ArtifactSelector,
     ) -> Result<Artifact> {
-        let (project_id, project_key) = self.require_project(project)?;
+        let (project_id, project_key) = self.require_project_mut(project)?;
         let node_id = self.resolve_node_id(project_id, selector_ref)?;
         let target = self.select_artifact(node_id, &selector)?;
 
@@ -1036,7 +1044,7 @@ impl Store {
         selector: ArtifactSelector,
         new_name: &str,
     ) -> Result<Artifact> {
-        let (project_id, project_key) = self.require_project(project)?;
+        let (project_id, project_key) = self.require_project_mut(project)?;
         let node_id = self.resolve_node_id(project_id, selector_ref)?;
         let node_ref = self.node_ref(node_id)?;
         let target = self.select_artifact(node_id, &selector)?;
@@ -1100,7 +1108,7 @@ impl Store {
     /// Append a free-text scratch line to the node's dated notes file. No DB row
     /// (the `notes/` folder is a free filesystem, SPEC §4).
     pub fn note(&self, project: Option<&str>, selector: &str, text: &str) -> Result<PathBuf> {
-        let (project_id, project_key) = self.require_project(project)?;
+        let (project_id, project_key) = self.require_project_mut(project)?;
         let node_id = self.resolve_node_id(project_id, selector)?;
         let node_ref = self.node_ref(node_id)?;
 
@@ -1135,7 +1143,21 @@ impl Store {
     }
 
     /// Build the backlog markdown (split out for testing without touching disk).
+    ///
+    /// Status-aware (HV-123): rendering an *archived* project emits one final
+    /// **ARCHIVED**-stamped header so the frozen projection is unmistakable. The
+    /// awareness lives here (keyed on the rendered project), not on the
+    /// lifecycle-command context — the implicit `maybe_render` only ever targets
+    /// the currently-selected project, which archive de-selects, so it never fires
+    /// for an archived project; explicit `haven render <archived-key>` is allowed
+    /// and lands here.
     pub fn backlog_markdown(&self, project_key: &str, title: &str) -> Result<String> {
+        // Best-effort status read: a missing/odd row degrades to the active header
+        // rather than failing the render.
+        let archived = self
+            .get_project(project_key)
+            .map(|p| p.status == ProjectStatus::Archived)
+            .unwrap_or(false);
         let committed = self.list_items(
             Some(project_key),
             &ItemFilter {
@@ -1156,7 +1178,14 @@ impl Store {
         )?;
 
         let mut out = String::new();
-        let _ = writeln!(out, "# {title} ({project_key})\n");
+        let stamp = if archived { " — ARCHIVED" } else { "" };
+        let _ = writeln!(out, "# {title} ({project_key}){stamp}\n");
+        if archived {
+            let _ = writeln!(
+                out,
+                "_This project is archived (read-only); reopen it to change items._\n"
+            );
+        }
         let _ = writeln!(out, "_Generated by `haven render`. Do not hand-edit._\n");
 
         let _ = writeln!(out, "## Committed\n");

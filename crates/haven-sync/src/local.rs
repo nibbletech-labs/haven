@@ -64,7 +64,11 @@ pub fn collect_push_batch(conn: &Connection) -> Result<PushBatch, SyncError> {
 fn collect_push_batch_inner(conn: &Connection) -> Result<PushBatch, SyncError> {
     let projects = query_rows(
         conn,
-        "SELECT public_id, key, ref_prefix, ref_counter, title, description, client_id, revision
+        // HV-123: the four lifecycle columns ride the same LWW row push as every
+        // other project field. `deleted_at` is projected too so a future delete
+        // tombstone converges on this very plumbing (no separate bolt-on).
+        "SELECT public_id, key, ref_prefix, ref_counter, title, description, client_id, revision,
+                status, archived_at, archived_reason, deleted_at
          FROM projects WHERE sync_state <> 'synced'",
         |r| {
             Ok(json!({
@@ -76,6 +80,10 @@ fn collect_push_batch_inner(conn: &Connection) -> Result<PushBatch, SyncError> {
                 "description": r.get::<_, Option<String>>(5)?,
                 "client_id": r.get::<_, String>(6)?,
                 "revision": r.get::<_, i64>(7)?,
+                "status": r.get::<_, String>(8)?,
+                "archived_at": r.get::<_, Option<String>>(9)?,
+                "archived_reason": r.get::<_, Option<String>>(10)?,
+                "deleted_at": r.get::<_, Option<String>>(11)?,
             }))
         },
     )?;
@@ -516,6 +524,12 @@ fn apply_projects(conn: &Connection, rows: &[Value]) -> Result<usize, SyncError>
         let cid = vstr_req(r, "client_id")?;
         let created = vstr(r, "created_at");
         let updated = vstr(r, "updated_at");
+        // HV-123 lifecycle columns. `status` defaults to 'active' for a row pushed
+        // by a pre-lifecycle peer; the three timestamps are nullable.
+        let status = vstr(r, "status").unwrap_or_else(|| "active".into());
+        let archived_at = vstr(r, "archived_at");
+        let archived_reason = vstr(r, "archived_reason");
+        let deleted_at = vstr(r, "deleted_at");
         match local_revision(conn, "projects", &pid)? {
             Some(local_rev) if rev <= local_rev => {}
             Some(_) => {
@@ -523,9 +537,24 @@ fn apply_projects(conn: &Connection, rows: &[Value]) -> Result<usize, SyncError>
                     "UPDATE projects SET key=?2, ref_prefix=?3, ref_counter=?4, title=?5,
                         description=?6, client_id=?7, revision=?8,
                         updated_at=COALESCE(?9, datetime('now')),
+                        status=?10, archived_at=?11, archived_reason=?12, deleted_at=?13,
                         sync_state='synced', last_synced_at=datetime('now')
                      WHERE public_id=?1",
-                    params![pid, key, prefix, counter, title, desc, cid, rev, updated],
+                    params![
+                        pid,
+                        key,
+                        prefix,
+                        counter,
+                        title,
+                        desc,
+                        cid,
+                        rev,
+                        updated,
+                        status,
+                        archived_at,
+                        archived_reason,
+                        deleted_at
+                    ],
                 )?;
                 n += 1;
             }
@@ -533,11 +562,28 @@ fn apply_projects(conn: &Connection, rows: &[Value]) -> Result<usize, SyncError>
                 conn.execute(
                     "INSERT INTO projects
                         (public_id, key, ref_prefix, ref_counter, title, description,
-                         created_at, updated_at, client_id, revision, sync_state, last_synced_at)
+                         created_at, updated_at, client_id, revision, sync_state, last_synced_at,
+                         status, archived_at, archived_reason, deleted_at)
                      VALUES (?1,?2,?3,?4,?5,?6,
                              COALESCE(?7, datetime('now')), COALESCE(?8, datetime('now')),
-                             ?9, ?10, 'synced', datetime('now'))",
-                    params![pid, key, prefix, counter, title, desc, created, updated, cid, rev],
+                             ?9, ?10, 'synced', datetime('now'),
+                             ?11, ?12, ?13, ?14)",
+                    params![
+                        pid,
+                        key,
+                        prefix,
+                        counter,
+                        title,
+                        desc,
+                        created,
+                        updated,
+                        cid,
+                        rev,
+                        status,
+                        archived_at,
+                        archived_reason,
+                        deleted_at
+                    ],
                 )?;
                 n += 1;
             }
@@ -1139,6 +1185,68 @@ mod tests {
             Some("2026-07-01")
         );
         assert_eq!(due_of(&conn_b, &undated.public_id), None);
+    }
+
+    /// HV-123: a project's `status`/`archived_at`/`archived_reason` converge on a
+    /// second store across an archive→push→pull cycle. Exercises every projects
+    /// sync seam at once: the push SELECT must emit the four lifecycle columns,
+    /// and the `apply_projects` UPDATE branch (higher revision) must carry them
+    /// without shifting a neighbouring column. The first sync lands the ACTIVE
+    /// project; the second (after archive) flips B to archived.
+    #[test]
+    fn pull_reconcile_round_trips_archive() {
+        // --- store A: a project with one item, synced active to B first ---
+        let dir_a = tempfile::tempdir().unwrap();
+        let db_a = dir_a.path().join("haven.db");
+        let a = Store::open(&db_a, dir_a.path()).unwrap();
+        a.add_project("haven", Some("HV"), "Haven", None).unwrap();
+        a.use_project("haven").unwrap();
+        let pid = a.get_project("haven").unwrap().public_id;
+
+        let conn_a = haven_core::db::open(&db_a).unwrap();
+        let snap1 = snapshot_from_batch(collect_push_batch(&conn_a).unwrap());
+
+        let dir_b = tempfile::tempdir().unwrap();
+        let db_b = dir_b.path().join("haven.db");
+        let _b = Store::open(&db_b, dir_b.path()).unwrap();
+        let conn_b = haven_core::db::open(&db_b).unwrap();
+        apply_snapshot(&conn_b, &snap1, dir_b.path()).unwrap();
+
+        let status_of = |conn: &Connection| -> (String, Option<String>, Option<String>) {
+            conn.query_row(
+                "SELECT status, archived_at, archived_reason FROM projects WHERE public_id=?1",
+                [&pid],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap()
+        };
+        // After the first sync B sees the project ACTIVE.
+        assert_eq!(status_of(&conn_b).0, "active");
+
+        // --- A archives the project, then pushes the dirty row ---
+        a.archive_project("haven", Some("done with it"), Some("alice"))
+            .unwrap();
+        let snap2 = snapshot_from_batch(collect_push_batch(&conn_a).unwrap());
+        // Only the project row is dirty (the item didn't change).
+        assert_eq!(snap2.projects.len(), 1);
+        let stats = apply_snapshot(&conn_b, &snap2, dir_b.path()).unwrap();
+        assert_eq!(stats.projects, 1, "the archived row converges via UPDATE");
+
+        // B now reflects the archive: status + archived_at + reason all landed.
+        let (status, archived_at, reason) = status_of(&conn_b);
+        assert_eq!(status, "archived");
+        assert!(archived_at.is_some(), "archived_at converged");
+        assert_eq!(reason.as_deref(), Some("done with it"));
+
+        // deleted_at rode the same plumbing and stayed NULL (no delete happened).
+        let deleted: Option<String> = conn_b
+            .query_row(
+                "SELECT deleted_at FROM projects WHERE public_id=?1",
+                [&pid],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(deleted, None);
     }
 
     #[test]

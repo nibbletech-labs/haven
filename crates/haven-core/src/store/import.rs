@@ -94,7 +94,7 @@ impl Store {
         items: Vec<ImportItem>,
         if_absent: bool,
     ) -> Result<Vec<ImportOutcome>> {
-        let (project_id, _key) = self.require_project(project)?;
+        let (project_id, _key) = self.require_project_mut(project)?;
         if items.is_empty() {
             return Ok(vec![]);
         }

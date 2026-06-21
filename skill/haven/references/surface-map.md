@@ -2,14 +2,14 @@
 
 The two front-ends drive the **same** store but are **not 1:1**. The CLI has many
 friendly verbs (for a human typing); the MCP is a deliberately smaller, more
-general set of 28 tools (for an agent). When a workflow runs over MCP, translate
+general set of 30 tools (for an agent). When a workflow runs over MCP, translate
 using the mapping below — and see the **[verb-divergence map](#verb-divergence-top-level-vs-item-nested-vs-mcp-only)**
 for the cases where the same verb lives at a different level on each surface.
 
 ## Contents
 - [Enums (valid values)](#enums)
 - [CLI command surface](#cli-command-surface)
-- [MCP tool catalogue (28 tools)](#mcp-tool-catalogue)
+- [MCP tool catalogue (30 tools)](#mcp-tool-catalogue)
 - [CLI → MCP mapping](#cli--mcp-mapping)
 - [Verb-divergence map (top-level vs item-nested vs MCP-only)](#verb-divergence-top-level-vs-item-nested-vs-mcp-only)
 - [CLI-only operations](#cli-only-operations)
@@ -52,7 +52,9 @@ haven link [--name Haven]  # visible repo-local workspace/projection; canonical 
 
 # Projects
 haven project add --key <k> --title <t> [--prefix HV] [--description …]
-haven project list | get <key> | use <key>
+haven project list [--include-archived] | get <key> | use <key>
+haven project archive <key> [--rationale "…" (alias --reason)] [--by <name>]  # reversible retire; namespace stays reserved
+haven project reopen  <key> [--by <name>]                                     # total restore (refs continue from preserved counter)
 
 # Items (nodes)
 haven item add "<title>" [--type] [--body] [--done-looks-like "…"] [--why "…"]
@@ -121,7 +123,7 @@ haven sync [status] [--watch]
 
 ## MCP tool catalogue
 
-28 tools, each taking an optional `project` and naming items by `ref` or
+30 tools, each taking an optional `project` and naming items by `ref` or
 `public_id`. Required args in **bold**.
 
 | Tool | Args |
@@ -148,8 +150,10 @@ haven sync [status] [--watch]
 | `haven_rm_artifact` | **`ref`**, one of `role?` \| `name?` \| `id?` — remove an artifact (row + backing file); an ambiguous `role` is refused |
 | `haven_mv_artifact` | **`ref`**, **`new_name`**, one of `role?` \| `name?` \| `id?` — rename the backing file (role/history preserved) |
 | `haven_status` | `project?` |
-| `haven_list_projects` | _(none)_ — discover backlogs |
+| `haven_list_projects` | `include_archived?` — discover backlogs (hides archived unless `include_archived:true`; a deleted project is never listed) |
 | `haven_add_project` | **`key`**, **`title`**, `prefix?, description?` |
+| `haven_archive_project` | **`key`**, `rationale?, by?` — soft-archive a project: retire it, namespace stays reserved (key/prefix/counter untouched, refs never reused). Reversible. The project-level analogue of `haven_archive`; there is no hard-delete tool |
+| `haven_reopen_project` | **`key`**, `by?` — reopen an archived project (total restore; refs continue from the preserved counter) |
 | `haven_archive` | **`ref`**, `rationale?, by?` |
 | `haven_reopen` | **`ref`**, `rationale?, by?` |
 | `haven_handoff` | **`ref`**, **`to`** (`human`\|`ai`), `from?, note?, status?, wait?, actor?` — atomic baton-pass |
@@ -196,6 +200,8 @@ The collapses that catch people out:
 | `xref` | `haven_xref` |
 | `docs` | `haven_docs` |
 | `project list` / `add` | `haven_list_projects` / `haven_add_project` |
+| `project list --include-archived` | `haven_list_projects {include_archived: true}` |
+| `project archive` / `reopen` | `haven_archive_project` / `haven_reopen_project` (required `key`) |
 
 So, over MCP: to commit, call `haven_update_item {ref, commit: true, priority}`;
 to add a decomposition edge, `haven_add_edge {kind:"decomposition", from, to}`.
@@ -212,7 +218,10 @@ call (loop); there's no batch tool.
 **passes `project: "<key>"` on every subsequent call** — selection is per-call
 (carry the chosen key through the conversation), not a stored default. There's no
 `haven_use_project` by design (it would clobber other sessions on a shared
-gateway). `haven_add_project` starts a new backlog remotely.
+gateway). `haven_add_project` starts a new backlog remotely, and
+`haven_archive_project` / `haven_reopen_project` retire and restore one (a phone /
+web client needs to retire a finished backlog — there is no hard-delete tool,
+archive is the reversible, namespace-reserving drop).
 
 ## Verb-divergence (top-level vs item-nested vs MCP-only)
 
@@ -252,8 +261,9 @@ corrective command (HV-158) — you don't have to memorise the table, but here i
 These have **no MCP tool** in v1 — a remote/headless client can't do them and
 must rely on a local CLI or a pre-arranged state:
 
-- **`project use` / `get`** — local conveniences. (`project list` / `add` *are*
-  available over MCP via `haven_list_projects` / `haven_add_project` — see
+- **`project use` / `get`** — local conveniences. (`project list` / `add` /
+  `archive` / `reopen` *are* available over MCP via `haven_list_projects` /
+  `haven_add_project` / `haven_archive_project` / `haven_reopen_project` — see
   "Selecting a project over MCP" above; a remote client discovers backlogs and
   selects per-call, so it never needs `use`.)
 - **`note`**, **`render`** — scratch lines and forced re-render (render happens

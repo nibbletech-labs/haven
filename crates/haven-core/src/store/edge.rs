@@ -195,7 +195,7 @@ impl Store {
         child: &str,
         remove: bool,
     ) -> Result<()> {
-        let (project_id, _) = self.require_project(project)?;
+        let (project_id, _) = self.require_project_mut(project)?;
         let parent_id = self.resolve_node_id(project_id, parent)?;
         let child_id = self.resolve_node_id(project_id, child)?;
         if remove {
@@ -216,7 +216,7 @@ impl Store {
         depends_on: &str,
         remove: bool,
     ) -> Result<()> {
-        let (project_id, _) = self.require_project(project)?;
+        let (project_id, _) = self.require_project_mut(project)?;
         let node_id = self.resolve_node_id(project_id, node)?;
         let dep_id = self.resolve_node_id(project_id, depends_on)?;
         if remove {
@@ -237,7 +237,7 @@ impl Store {
         member: &str,
         remove: bool,
     ) -> Result<()> {
-        let (project_id, _) = self.require_project(project)?;
+        let (project_id, _) = self.require_project_mut(project)?;
         let group_id = self.resolve_node_id(project_id, group)?;
         let member_id = self.resolve_node_id(project_id, member)?;
         if remove {
@@ -282,7 +282,7 @@ impl Store {
         to: &str,
         remove: bool,
     ) -> Result<Option<StaleRef>> {
-        let (project_id, _key) = self.require_project(project)?;
+        let (project_id, _key) = self.require_project_mut(project)?;
         // Resolve both endpoints' hints up front (this also validates they exist,
         // with the enriched not_found, before any write). Prefer the `from`
         // endpoint's hint; fall back to `to`.

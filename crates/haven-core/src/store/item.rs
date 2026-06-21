@@ -267,7 +267,7 @@ impl Store {
         if let Some(due) = new.due_at.as_deref() {
             validate_due_at(due)?;
         }
-        let (project_id, _key) = self.require_project(project)?;
+        let (project_id, _key) = self.require_project_mut(project)?;
         let tx = self.conn.unchecked_transaction()?;
 
         let node_type = new.node_type.unwrap_or(NodeType::Task);
@@ -546,7 +546,7 @@ impl Store {
         selector: &str,
         upd: ItemUpdate,
     ) -> Result<Item> {
-        let (project_id, _key) = self.require_project(project)?;
+        let (project_id, _key) = self.require_project_mut(project)?;
         let node_id = self.resolve_node_id(project_id, selector)?;
 
         // HV-80: `ready` requires acceptance. This is the single chokepoint for
@@ -657,7 +657,7 @@ impl Store {
         selector: &str,
         priority: Option<i64>,
     ) -> Result<Item> {
-        let (project_id, _key) = self.require_project(project)?;
+        let (project_id, _key) = self.require_project_mut(project)?;
         let node_id = self.resolve_node_id(project_id, selector)?;
         match priority {
             Some(p) => self.conn.execute(
@@ -676,7 +676,7 @@ impl Store {
 
     /// Commitment axis: back to the icebox (floating). Priority is retained.
     pub fn uncommit_item(&self, project: Option<&str>, selector: &str) -> Result<Item> {
-        let (project_id, _key) = self.require_project(project)?;
+        let (project_id, _key) = self.require_project_mut(project)?;
         let node_id = self.resolve_node_id(project_id, selector)?;
         self.conn.execute(
             "UPDATE nodes SET committed = 0, revision = revision + 1,
@@ -713,7 +713,7 @@ impl Store {
     /// Resolve every ref (erroring on the first unknown) before a batch mutation,
     /// so an unknown ref aborts the whole batch instead of half-applying it.
     fn validate_refs(&self, project: Option<&str>, refs: &[&str]) -> Result<()> {
-        let (project_id, _key) = self.require_project(project)?;
+        let (project_id, _key) = self.require_project_mut(project)?;
         for r in refs {
             self.resolve_node_id(project_id, r)?;
         }
@@ -728,7 +728,7 @@ impl Store {
         owner: OwnerKind,
         actor: Option<&str>,
     ) -> Result<Item> {
-        let (project_id, _key) = self.require_project(project)?;
+        let (project_id, _key) = self.require_project_mut(project)?;
         let node_id = self.resolve_node_id(project_id, selector)?;
         self.conn.execute(
             "UPDATE nodes SET owner_kind = ?1, assignee = ?2, revision = revision + 1,
@@ -829,7 +829,7 @@ impl Store {
         selector: &str,
         input: CompleteInput,
     ) -> Result<CompleteResult> {
-        let (project_id, _key) = self.require_project(project)?;
+        let (project_id, _key) = self.require_project_mut(project)?;
         let node_id = self.resolve_node_id(project_id, selector)?;
         let before = self.get_item(project, selector, &[])?;
         if matches!(before.status, Status::Superseded | Status::Archived) {
@@ -931,7 +931,7 @@ impl Store {
         before: Option<&str>,
         after: Option<&str>,
     ) -> Result<Item> {
-        let (project_id, _key) = self.require_project(project)?;
+        let (project_id, _key) = self.require_project_mut(project)?;
         let node_id = self.resolve_node_id(project_id, selector)?;
         let (target_sel, is_before) = match (before, after) {
             (Some(t), None) => (t, true),
@@ -1019,7 +1019,7 @@ impl Store {
         rationale: Option<&str>,
         by: Option<&str>,
     ) -> Result<Item> {
-        let (project_id, _key) = self.require_project(project)?;
+        let (project_id, _key) = self.require_project_mut(project)?;
         let node_id = self.resolve_node_id(project_id, selector)?;
         self.refuse_artifact_bearing_anchor(node_id, "archive")?;
         let tx = self.conn.unchecked_transaction()?;
@@ -1067,7 +1067,7 @@ impl Store {
         rationale: Option<&str>,
         by: Option<&str>,
     ) -> Result<Item> {
-        let (project_id, _key) = self.require_project(project)?;
+        let (project_id, _key) = self.require_project_mut(project)?;
         let node_id = self.resolve_node_id(project_id, selector)?;
         let tx = self.conn.unchecked_transaction()?;
         tx.execute(

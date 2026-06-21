@@ -240,7 +240,7 @@ impl Store {
                 "split requires at least one --into title".into(),
             ));
         }
-        let (project_id, _) = self.require_project(project)?;
+        let (project_id, _) = self.require_project_mut(project)?;
         let source_id = self.resolve_node_id(project_id, selector)?;
         let source_ref = self.node_ref(source_id)?;
 
@@ -308,7 +308,7 @@ impl Store {
         if title.trim().is_empty() {
             return Err(HavenError::Invalid("merge requires a --title".into()));
         }
-        let (project_id, _) = self.require_project(project)?;
+        let (project_id, _) = self.require_project_mut(project)?;
         let mut source_ids = Vec::new();
         let mut source_refs = Vec::new();
         for sel in selectors {
@@ -369,7 +369,7 @@ impl Store {
         rationale: Option<&str>,
         by: Option<&str>,
     ) -> Result<EvolveResult> {
-        let (project_id, _) = self.require_project(project)?;
+        let (project_id, _) = self.require_project_mut(project)?;
         let source_id = self.resolve_node_id(project_id, selector)?;
         let with_id = self.resolve_node_id(project_id, with)?;
         if source_id == with_id {

@@ -410,13 +410,34 @@ enum ConfigCmd {
 enum ProjectCmd {
     /// Create a project namespace/backlog.
     Add(ProjectAddArgs),
-    /// List project namespaces/backlogs.
-    List,
+    /// List project namespaces/backlogs. Hides archived projects unless
+    /// `--include-archived`.
+    List(ProjectListArgs),
     /// Get one project by key.
     #[command(alias = "show")]
     Get { key: String },
     /// Set the default project for later commands.
     Use { key: String },
+    /// Soft-archive a project: retire it (hidden from default listings, writes
+    /// refused) while keeping its namespace fully reserved. Reversible via
+    /// `project reopen`. The everyday "retire this" — never a hard delete.
+    Archive {
+        key: String,
+        /// Why it's being archived (recorded on the row). Alias: `--reason`.
+        #[arg(long, alias = "reason")]
+        rationale: Option<String>,
+        /// Actor handle, for audit.
+        #[arg(long)]
+        by: Option<String>,
+    },
+    /// Reopen an archived project: restore it fully (refs continue from the
+    /// preserved counter — nothing was destroyed).
+    Reopen {
+        key: String,
+        /// Actor handle, for audit.
+        #[arg(long)]
+        by: Option<String>,
+    },
 }
 
 #[derive(Args)]
@@ -433,6 +454,14 @@ struct ProjectAddArgs {
     /// Optional project description.
     #[arg(long)]
     description: Option<String>,
+}
+
+#[derive(Args)]
+struct ProjectListArgs {
+    /// Include archived projects in the listing (default: active only). Never
+    /// shows a deleted/tombstoned project.
+    #[arg(long = "include-archived")]
+    include_archived: bool,
 }
 
 #[derive(Subcommand)]
@@ -1879,7 +1908,7 @@ fn cmd_status(project: Option<&str>) -> Result<Output> {
         );
         obj.insert(
             "projects".into(),
-            serde_json::json!(s.list_projects()?.len()),
+            serde_json::json!(s.list_projects(false)?.len()),
         );
         obj.insert("auth".into(), serde_json::json!("not configured (Layer 6)"));
         let backups = paths.root.join("backups");
@@ -2304,11 +2333,19 @@ fn cmd_project(cmd: &ProjectCmd) -> Result<Output> {
             &a.title,
             a.description.as_deref(),
         )?)),
-        ProjectCmd::List => Ok(Output::Projects(s.list_projects()?)),
+        ProjectCmd::List(a) => Ok(Output::Projects(s.list_projects(a.include_archived)?)),
         ProjectCmd::Get { key } => Ok(Output::Project(s.get_project(key)?)),
         ProjectCmd::Use { key } => {
             s.use_project(key)?;
             Ok(Output::Message(format!("current project: {key}")))
+        }
+        ProjectCmd::Archive { key, rationale, by } => Ok(Output::Project(s.archive_project(
+            key,
+            rationale.as_deref(),
+            by.as_deref(),
+        )?)),
+        ProjectCmd::Reopen { key, by } => {
+            Ok(Output::Project(s.reopen_project(key, by.as_deref())?))
         }
     }
 }

@@ -451,6 +451,8 @@ fn is_mutating_tool(name: &str) -> bool {
             | "haven_rm_artifact"
             | "haven_mv_artifact"
             | "haven_add_project"
+            | "haven_archive_project"
+            | "haven_reopen_project"
             | "haven_archive"
             | "haven_reopen"
             | "haven_handoff"
@@ -463,9 +465,18 @@ fn is_mutating_tool(name: &str) -> bool {
 /// `current_project`). For these the success response echoes the resolved key,
 /// and a sticky fallback rides a warning (HV-153). The GLOBAL tools
 /// (`haven_list_projects`/`haven_add_project`) resolve no single project, so
-/// they're excluded — their results carry no project echo.
+/// they're excluded — their results carry no project echo. The lifecycle tools
+/// (`haven_archive_project`/`haven_reopen_project`) take a required `key`
+/// directly (operating on the namespace itself, like `haven_add_project`), so
+/// they too resolve no `project` arg and are excluded (HV-123).
 fn is_project_scoped_tool(name: &str) -> bool {
-    !matches!(name, "haven_list_projects" | "haven_add_project")
+    !matches!(
+        name,
+        "haven_list_projects"
+            | "haven_add_project"
+            | "haven_archive_project"
+            | "haven_reopen_project"
+    )
 }
 
 /// The single response-builder chokepoint for the project echo (HV-153): on a
@@ -932,7 +943,9 @@ fn dispatch_tool(store: &Store, name: &str, a: &Value) -> Result<Value> {
         "haven_status" => store.store_status(project),
         // Discover backlogs — a remote/headless client has no local `current_project`
         // to fall back on, so it lists, then selects by passing `project` per call.
-        "haven_list_projects" => to_value(store.list_projects()?),
+        "haven_list_projects" => {
+            to_value(store.list_projects(opt_bool(a, "include_archived").unwrap_or(false))?)
+        }
         // Start a new backlog remotely.
         "haven_add_project" => to_value(store.add_project(
             req_str(a, "key")?,
@@ -940,6 +953,19 @@ fn dispatch_tool(store: &Store, name: &str, a: &Value) -> Result<Value> {
             req_str(a, "title")?,
             opt_str(a, "description"),
         )?),
+        // Soft-archive a project (the reversible, namespace-reserving retire — the
+        // project-level analogue of haven_archive). Required explicit `key`; raw
+        // Project returned. There is NO hard-delete tool in this release.
+        "haven_archive_project" => to_value(store.archive_project(
+            req_str(a, "key")?,
+            opt_str(a, "rationale"),
+            opt_str(a, "by"),
+        )?),
+        // Reopen an archived project: total restore (refs continue from the
+        // preserved counter). Required explicit `key`; raw Project returned.
+        "haven_reopen_project" => {
+            to_value(store.reopen_project(req_str(a, "key")?, opt_str(a, "by"))?)
+        }
         // Park an item (never hard-delete): status → archived, emits an `archive`
         // lineage event. The MCP equivalent of `haven item archive`.
         "haven_archive" => to_value(store.archive_item(
@@ -1145,10 +1171,14 @@ fn tools_list() -> Value {
           "inputSchema": obj(json!({"ref":{"type":"string"},"new_name":{"type":"string"},"role":{"type":"string"},"name":{"type":"string"},"id":{"type":"string"},"project":{"type":"string"}}), json!(["ref","new_name"])) },
         { "name": "haven_status", "description": "Project counts and sync state.",
           "inputSchema": obj(json!({"project":{"type":"string"}}), json!([])) },
-        { "name": "haven_list_projects", "description": "List all projects (backlogs). Use this to discover what's available; then target one by passing its `key` as the `project` arg on subsequent calls (selection is per-call, not a stored default).",
-          "inputSchema": obj(json!({}), json!([])) },
+        { "name": "haven_list_projects", "description": "List all projects (backlogs). Use this to discover what's available; then target one by passing its `key` as the `project` arg on subsequent calls (selection is per-call, not a stored default). Hides archived projects unless `include_archived:true` (a deleted project is never listed).",
+          "inputSchema": obj(json!({"include_archived":{"type":"boolean"}}), json!([])) },
         { "name": "haven_add_project", "description": "Create a new project (backlog / namespace). `key` is the slug used as the `project` arg; `prefix` (e.g. HV) seeds item refs and defaults to the first two letters of the key.",
           "inputSchema": obj(json!({"key":{"type":"string"},"title":{"type":"string"},"prefix":{"type":"string"},"description":{"type":"string"}}), json!(["key","title"])) },
+        { "name": "haven_archive_project", "description": "Soft-archive a project: retire it (hidden from default listings, writes into it refused) while keeping its namespace fully RESERVED — key, ref_prefix and the ref counter are untouched, so refs are never reused. Reversible via haven_reopen_project. This is the everyday 'retire this project'; there is no hard-delete tool — archive IS how you drop a project. Required explicit `key` (operates on the namespace, never the implicit current project).",
+          "inputSchema": obj(json!({"key":{"type":"string"},"rationale":{"type":"string"},"by":{"type":"string"}}), json!(["key"])) },
+        { "name": "haven_reopen_project", "description": "Reopen an archived project: a total restore (nothing was destroyed) — refs continue minting from the preserved counter. Required explicit `key`. Errors if the project is not archived.",
+          "inputSchema": obj(json!({"key":{"type":"string"},"by":{"type":"string"}}), json!(["key"])) },
         { "name": "haven_archive", "description": "Park an item: status→archived, emits an append-only lineage event. There is no hard-delete; this is how you 'drop' an item. Reversible via haven_reopen.",
           "inputSchema": obj(json!({"ref":{"type":"string"},"rationale":{"type":"string"},"by":{"type":"string"},"project":{"type":"string"}}), json!(["ref"])) },
         { "name": "haven_reopen", "description": "Revive an archived/superseded item back into the maturity flow (status→discovery), emitting a lineage event.",
@@ -1279,7 +1309,7 @@ mod tests {
         assert_eq!(out.len(), 2);
         assert_eq!(out[0]["result"]["serverInfo"]["name"], "haven");
         let tools = out[1]["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 28);
+        assert_eq!(tools.len(), 30);
         assert!(tools.iter().any(|t| t["name"] == "haven_import"));
         assert!(tools.iter().any(|t| t["name"] == "haven_inbox"));
         assert!(tools.iter().any(|t| t["name"] == "haven_xref"));
@@ -1292,6 +1322,8 @@ mod tests {
         assert!(tools.iter().any(|t| t["name"] == "haven_docs"));
         assert!(tools.iter().any(|t| t["name"] == "haven_archive"));
         assert!(tools.iter().any(|t| t["name"] == "haven_list_projects"));
+        assert!(tools.iter().any(|t| t["name"] == "haven_archive_project"));
+        assert!(tools.iter().any(|t| t["name"] == "haven_reopen_project"));
     }
 
     #[test]
@@ -1794,6 +1826,86 @@ mod tests {
         assert_eq!(added["ref_prefix"], "GL");
         // Now both are visible.
         assert_eq!(tool_payload(&out[2]).as_array().unwrap().len(), 2);
+    }
+
+    /// HV-123: archive/reopen a project over MCP, and the `include_archived` arg
+    /// on `haven_list_projects`. Required explicit `key`; raw Project returned.
+    #[test]
+    fn archive_reopen_project_via_tools() {
+        let s = store(); // seeds a "haven" project, prefix HV
+        let out = session(
+            &s,
+            &[
+                // Archive haven, with rationale + by.
+                json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{
+                    "name":"haven_archive_project",
+                    "arguments":{"key":"haven","rationale":"done","by":"alice"}
+                }}),
+                // Default list hides the archived project.
+                json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{
+                    "name":"haven_list_projects","arguments":{}
+                }}),
+                // include_archived shows it.
+                json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{
+                    "name":"haven_list_projects","arguments":{"include_archived":true}
+                }}),
+                // Reopen restores it.
+                json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{
+                    "name":"haven_reopen_project","arguments":{"key":"haven"}
+                }}),
+                // Now the default list shows it again.
+                json!({"jsonrpc":"2.0","id":5,"method":"tools/call","params":{
+                    "name":"haven_list_projects","arguments":{}
+                }}),
+            ],
+        );
+
+        // Archive: raw Project, status flipped, namespace + reason preserved.
+        let arch = tool_payload(&out[0]);
+        assert_eq!(out[0]["result"]["isError"], false);
+        assert_eq!(arch["status"], "archived");
+        assert_eq!(arch["archived_reason"], "done");
+        assert_eq!(arch["ref_prefix"], "HV");
+
+        assert_eq!(
+            tool_payload(&out[1]).as_array().unwrap().len(),
+            0,
+            "archived hidden by default"
+        );
+        assert_eq!(
+            tool_payload(&out[2]).as_array().unwrap().len(),
+            1,
+            "include_archived shows it"
+        );
+
+        let reopened = tool_payload(&out[3]);
+        assert_eq!(reopened["status"], "active");
+        assert_eq!(
+            tool_payload(&out[4]).as_array().unwrap().len(),
+            1,
+            "reopened project back in the default list"
+        );
+    }
+
+    /// HV-123: archive/reopen require an explicit `key` (no implicit current
+    /// project); a missing key is a tool error, not a silent op on "haven".
+    #[test]
+    fn archive_project_requires_explicit_key() {
+        let s = store();
+        let out = session(
+            &s,
+            &[
+                json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{
+                    "name":"haven_archive_project","arguments":{}
+                }}),
+                json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{
+                    "name":"haven_reopen_project","arguments":{}
+                }}),
+            ],
+        );
+        assert_eq!(out[0]["result"]["isError"], true);
+        assert_eq!(tool_payload(&out[0])["error"]["code"], "invalid");
+        assert_eq!(out[1]["result"]["isError"], true);
     }
 
     #[test]

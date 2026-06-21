@@ -1523,7 +1523,7 @@ mod tests {
         assert!(!staging_root(root).exists());
         // The store still opens and reads.
         let s = Store::open(&db_path, root).unwrap();
-        assert_eq!(s.list_projects().unwrap().len(), 1);
+        assert_eq!(s.list_projects(false).unwrap().len(), 1);
     }
 
     #[test]
