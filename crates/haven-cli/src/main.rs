@@ -6,9 +6,11 @@ mod config;
 mod output;
 
 use std::path::PathBuf;
+use std::time::Instant;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use haven_core::{
+    telemetry::{self, TelemetryLine},
     ArtifactKind, ArtifactRole, ArtifactSelector, CompleteInput, DueUpdate, HandoffInput,
     HavenError, Include, IntegrityKind, ItemFilter, ItemUpdate, LineageDirection, NewArtifact,
     NewItem, NodeType, OwnerKind, Result, Status, Store, WaitState, WaitUpdate,
@@ -1033,7 +1035,7 @@ fn run(cli: &Cli) -> Result<Output> {
         Command::Doctor => cmd_doctor(),
         Command::Config { cmd } => cmd_config(cmd),
         Command::Project { cmd } => cmd_project(cmd),
-        Command::Item { cmd } => cmd_item(project, cmd),
+        Command::Item { cmd } => cmd_item_telemetered(project, cmd),
         Command::Import { file, if_absent } => cmd_import(project, file, *if_absent),
         Command::Next(a) => {
             let s = config::open_store()?;
@@ -2335,6 +2337,51 @@ fn cmd_import(project: Option<&str>, file: &std::path::Path, if_absent: bool) ->
     let s = config::open_store()?;
     let outcomes = s.import_items(project, items, if_absent)?;
     Ok(Output::Json(serde_json::to_value(outcomes)?))
+}
+
+/// Stable op name for the per-call telemetry line (HV-166), one per `ItemCmd`
+/// variant (`item.add`, `item.complete`, …).
+fn item_op_name(cmd: &ItemCmd) -> &'static str {
+    match cmd {
+        ItemCmd::Add(_) => "item.add",
+        ItemCmd::List(_) => "item.list",
+        ItemCmd::Get(_) => "item.get",
+        ItemCmd::Update(_) => "item.update",
+        ItemCmd::Commit { .. } => "item.commit",
+        ItemCmd::Uncommit { .. } => "item.uncommit",
+        ItemCmd::Assign(_) => "item.assign",
+        ItemCmd::Handoff(_) => "item.handoff",
+        ItemCmd::Complete(_) => "item.complete",
+        ItemCmd::Rank(_) => "item.rank",
+        ItemCmd::Archive { .. } => "item.archive",
+        ItemCmd::Reopen { .. } => "item.reopen",
+    }
+}
+
+/// The CLI item-dispatch chokepoint (HV-166): run the op timed, then emit ONE
+/// structured telemetry line to **stderr** for every item op — mirroring the MCP
+/// `handle_tool_call` line so drift between CLI and MCP is observable the same
+/// way. `project_passed` is the `-p`/`--project` selector as given; `project_resolved`
+/// is the key the op would resolve to (sticky `current_project` when none passed —
+/// the HV-153 drift), resolved best-effort with a read-only store open. stderr
+/// only: stdout is the structured `Output` channel and must stay clean.
+fn cmd_item_telemetered(project: Option<&str>, cmd: &ItemCmd) -> Result<Output> {
+    let started = Instant::now();
+    let result = cmd_item(project, cmd);
+    let latency_ms = started.elapsed().as_millis();
+
+    let project_resolved = config::open_store()
+        .ok()
+        .and_then(|s| s.resolve_project_key(project).ok());
+    TelemetryLine::new(
+        item_op_name(cmd),
+        project.map(str::to_string),
+        project_resolved,
+        telemetry::error_class(&result),
+        latency_ms,
+    )
+    .emit();
+    result
 }
 
 fn cmd_item(project: Option<&str>, cmd: &ItemCmd) -> Result<Output> {

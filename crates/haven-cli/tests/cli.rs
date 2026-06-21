@@ -41,13 +41,23 @@ impl Haven {
     }
 
     /// Run `haven <args>`, expect failure, parse the error envelope from stderr.
+    /// The per-call telemetry line (HV-166) also rides stderr, so strip it before
+    /// parsing the pretty-printed envelope — exactly what a real stderr consumer
+    /// of the envelope does.
     fn fail(&self, args: &[&str]) -> Value {
         let out = self.cmd(args).output().unwrap();
         assert!(
             !out.status.success(),
             "command {args:?} unexpectedly succeeded"
         );
-        serde_json::from_slice(&out.stderr).unwrap()
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let envelope: String = stderr
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("haven-telemetry "))
+            .collect::<Vec<_>>()
+            .join("\n");
+        serde_json::from_str(&envelope)
+            .unwrap_or_else(|e| panic!("bad error envelope from {args:?}: {e}\n{stderr}"))
     }
 
     fn ok(&self, args: &[&str]) {
@@ -57,6 +67,16 @@ impl Haven {
             "command {args:?} failed: {}",
             String::from_utf8_lossy(&out.stderr)
         );
+    }
+
+    /// Run `haven <args>` and return (stdout, stderr) regardless of exit status —
+    /// used to assert the per-call telemetry line on stderr (HV-166).
+    fn run_capturing(&self, args: &[&str]) -> (String, String) {
+        let out = self.cmd(args).output().unwrap();
+        (
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        )
     }
 
     fn cmd(&self, args: &[&str]) -> Command {
@@ -1212,4 +1232,78 @@ fn item_list_status_filter_still_reaches_dead_items() {
         titles.contains(&"Gone"),
         "explicit status reaches archived: {titles:?}"
     );
+}
+
+/// Pull the single `haven-telemetry {...}` line out of captured stderr (HV-166).
+fn telemetry_obj(stderr: &str) -> Value {
+    let line = stderr
+        .lines()
+        .find(|l| l.trim_start().starts_with("haven-telemetry "))
+        .unwrap_or_else(|| panic!("no telemetry line in stderr:\n{stderr}"));
+    let payload = line.trim_start().strip_prefix("haven-telemetry ").unwrap();
+    serde_json::from_str(payload).unwrap_or_else(|e| panic!("bad telemetry json: {e}\n{line}"))
+}
+
+#[test]
+fn cli_item_op_emits_telemetry_line_on_stderr() {
+    let h = Haven::new();
+    h.ok(&["setup", "--project-key", "demo", "--prefix", "DM"]);
+    // A known item op with an explicit project: stdout stays clean JSON, stderr
+    // carries exactly one well-formed telemetry line.
+    let (stdout, stderr) = h.run_capturing(&["item", "add", "A telemetered task", "-p", "demo"]);
+    // stdout is the structured Output channel — it must remain parseable JSON,
+    // i.e. the telemetry line is NOT on stdout.
+    let _: Value = serde_json::from_str(stdout.trim())
+        .unwrap_or_else(|e| panic!("stdout not clean JSON (telemetry leaked?): {e}\n{stdout}"));
+    assert!(
+        !stdout.contains("haven-telemetry"),
+        "telemetry must never be on stdout:\n{stdout}"
+    );
+    let v = telemetry_obj(&stderr);
+    assert_eq!(v["tool"], "item.add");
+    assert_eq!(v["project_passed"], "demo");
+    assert_eq!(v["project_resolved"], "demo");
+    assert_eq!(v["error_class"], "ok");
+    assert!(
+        v["latency_ms"].is_u64(),
+        "latency_ms numeric: {:?}",
+        v["latency_ms"]
+    );
+}
+
+#[test]
+fn cli_telemetry_surfaces_sticky_project_drift() {
+    // No -p: the op resolves via the sticky current_project. project_passed (null)
+    // != project_resolved ("demo") must be readable from the line — HV-153 drift.
+    let h = Haven::new();
+    h.ok(&["setup", "--project-key", "demo", "--prefix", "DM"]);
+    let (_stdout, stderr) = h.run_capturing(&["item", "list"]);
+    let v = telemetry_obj(&stderr);
+    assert_eq!(v["tool"], "item.list");
+    assert!(v["project_passed"].is_null(), "no -p was passed: {v}");
+    assert_eq!(v["project_resolved"], "demo");
+    assert_ne!(
+        v["project_passed"], v["project_resolved"],
+        "the drift must be observable from the line"
+    );
+}
+
+#[test]
+fn cli_telemetry_error_class_buckets_a_not_found() {
+    let h = Haven::new();
+    h.ok(&["setup", "--project-key", "demo", "--prefix", "DM"]);
+    // Completing a nonexistent ref fails NotFound → error_class "not_found".
+    let (_stdout, stderr) = h.run_capturing(&[
+        "item",
+        "complete",
+        "DM-9999",
+        "--evidence",
+        "x",
+        "-p",
+        "demo",
+    ]);
+    let v = telemetry_obj(&stderr);
+    assert_eq!(v["tool"], "item.complete");
+    assert_eq!(v["error_class"], "not_found");
+    assert_eq!(v["project_resolved"], "demo");
 }

@@ -8,8 +8,10 @@
 //! it directly rather than taking an SDK dependency.
 
 use std::io::{self, BufRead, Write};
+use std::time::Instant;
 
 use haven_core::{
+    telemetry::{self, TelemetryLine},
     Artifact, ArtifactKind, ArtifactRole, ArtifactSelector, CompleteInput, ContextPack, DueUpdate,
     EdgeKind, Edges, HandoffInput, HavenError, ImportItem, Include, Item, ItemFilter, ItemUpdate,
     LineageDirection, LineageEvent, NewArtifact, NewItem, NodeType, OwnerKind, Result, RollupState,
@@ -296,17 +298,76 @@ fn dispatch(store: &Store, req: &Request) -> Option<Response> {
 }
 
 /// `tools/call` → run the tool, wrapping success as an MCP text-content result
-/// and a `HavenError` as an `isError` tool result (so the model sees it).
+/// and a `HavenError` as an `isError` tool result (so the model sees it). Emits
+/// the per-call telemetry line to **stderr** (HV-166).
 fn handle_tool_call(store: &Store, id: Value, params: &Value) -> Response {
+    let (resp, telemetry) = handle_tool_call_inner(store, id, params);
+    // stderr only — stdout is the JSON-RPC channel.
+    if let Some(line) = telemetry {
+        line.emit();
+    }
+    resp
+}
+
+/// The chokepoint that wraps EVERY `tools/call` (HV-166): times `call_tool`,
+/// derives `{tool, project_passed, project_resolved, error_class, latency_ms}`,
+/// and returns the JSON-RPC `Response` alongside the telemetry line so the public
+/// wrapper can emit it (and tests can assert on it without intercepting stderr).
+///
+/// `project_resolved` is derived HERE for **every** project-scoped tool — including
+/// the bare-array tools (`haven_next`/`haven_search`/`haven_lineage`) that HV-153
+/// left wire-shape-unchanged. The telemetry line is how those tools' project drift
+/// becomes observable (the agreed HV-153→HV-166 delegation): we resolve the key
+/// at the chokepoint rather than only stamping object responses.
+///
+/// `telemetry` is `None` only for the malformed-call early return (no tool name),
+/// which never reaches `call_tool`.
+fn handle_tool_call_inner(
+    store: &Store,
+    id: Value,
+    params: &Value,
+) -> (Response, Option<TelemetryLine>) {
     let name = match params.get("name").and_then(|v| v.as_str()) {
         Some(n) => n,
-        None => return error_response(id, -32602, "tools/call missing 'name'".into()),
+        None => {
+            return (
+                error_response(id, -32602, "tools/call missing 'name'".into()),
+                None,
+            )
+        }
     };
     let args = params
         .get("arguments")
         .cloned()
         .unwrap_or_else(|| json!({}));
-    match call_tool(store, name, &args) {
+
+    // The `project` selector as the caller gave it (absent ⇒ None).
+    let project_passed = opt_str(&args, "project").map(str::to_string);
+
+    // Time the actual call (Instant, not wall-clock formatting).
+    let started = Instant::now();
+    let result = call_tool(store, name, &args);
+    let latency_ms = started.elapsed().as_millis();
+
+    // Resolve the project key the op would use — for every project-scoped tool,
+    // independent of the result's wire shape. Best-effort: on the rare resolution
+    // miss (e.g. the call itself errored before resolving) we leave it `None`.
+    let project_resolved = if is_project_scoped_tool(name) {
+        store.resolve_project_key(opt_str(&args, "project")).ok()
+    } else {
+        None
+    };
+
+    let error_class = telemetry::error_class(&result);
+    let line = TelemetryLine::new(
+        name,
+        project_passed,
+        project_resolved,
+        error_class,
+        latency_ms,
+    );
+
+    let resp = match result {
         Ok(value) => ok_response(
             id,
             json!({
@@ -321,7 +382,8 @@ fn handle_tool_call(store: &Store, id: Value, params: &Value) -> Response {
                 "isError": true,
             }),
         ),
-    }
+    };
+    (resp, Some(line))
 }
 
 // ---- argument helpers --------------------------------------------------------
@@ -1135,6 +1197,71 @@ mod tests {
         // Unwrap the MCP text-content envelope back into JSON.
         let text = resp["result"]["content"][0]["text"].as_str().unwrap();
         serde_json::from_str(text).unwrap()
+    }
+
+    /// Drive `tools/call` through the telemetry chokepoint and return the line.
+    fn call_with_telemetry(store: &Store, name: &str, args: Value) -> TelemetryLine {
+        let params = json!({ "name": name, "arguments": args });
+        let (_resp, line) = handle_tool_call_inner(store, json!(1), &params);
+        line.expect("a project/op tool call must produce a telemetry line")
+    }
+
+    /// Parse a rendered telemetry line back into its JSON object (HV-166).
+    fn parse_line(line: &TelemetryLine) -> Value {
+        let rendered = line.render();
+        let payload = rendered
+            .strip_prefix("haven-telemetry ")
+            .expect("telemetry line carries the `haven-telemetry ` prefix");
+        serde_json::from_str(payload).expect("telemetry payload is a JSON object")
+    }
+
+    #[test]
+    fn telemetry_line_present_and_well_formed_for_a_known_call() {
+        let s = store();
+        // A bare-array tool (haven_next) — HV-153 left its wire shape unchanged, so
+        // the telemetry line is the ONLY place its resolved project surfaces.
+        let line = call_with_telemetry(&s, "haven_next", json!({ "project": "haven" }));
+        let v = parse_line(&line);
+        assert_eq!(v["tool"], "haven_next");
+        assert_eq!(v["project_passed"], "haven");
+        assert_eq!(v["project_resolved"], "haven");
+        assert_eq!(v["error_class"], "ok");
+        assert!(
+            v["latency_ms"].is_u64(),
+            "latency_ms must be a numeric millis value, got {:?}",
+            v["latency_ms"]
+        );
+    }
+
+    #[test]
+    fn telemetry_surfaces_sticky_project_drift_for_array_tools() {
+        // No `project` arg → resolves via the sticky current_project ("haven").
+        // project_passed (null) != project_resolved ("haven") is readable from the
+        // line — the HV-153 silent drift, now visible even for the array tools.
+        let s = store();
+        let line = call_with_telemetry(&s, "haven_search", json!({ "query": "x" }));
+        let v = parse_line(&line);
+        assert!(v["project_passed"].is_null(), "no project was passed");
+        assert_eq!(v["project_resolved"], "haven");
+        assert_ne!(
+            v["project_passed"], v["project_resolved"],
+            "the drift must be observable from the line"
+        );
+    }
+
+    #[test]
+    fn telemetry_error_class_buckets_a_not_found() {
+        let s = store();
+        // Getting a nonexistent ref errors NotFound → error_class "not_found".
+        let line = call_with_telemetry(
+            &s,
+            "haven_get_item",
+            json!({ "project": "haven", "ref": "HV-9999" }),
+        );
+        let v = parse_line(&line);
+        assert_eq!(v["error_class"], "not_found");
+        // The project still resolved even though the op errored.
+        assert_eq!(v["project_resolved"], "haven");
     }
 
     #[test]
