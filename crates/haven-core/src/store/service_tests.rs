@@ -2087,8 +2087,12 @@ fn import_wires_temp_id_edges_in_one_batch() {
             None,
             import_batch(serde_json::json!([
                 // Forward reference: parent "epic" appears later in the file.
+                // Born `ready` is fine WITH acceptance; engaged born-states
+                // (in_progress/blocked/done, commit:true) are rejected — HV-159,
+                // covered by import_rejects_engaged_born_states below.
                 {"id": "api", "title": "Build API", "parent": "epic",
-                 "depends_on": ["HV-1"], "status": "ready", "commit": true},
+                 "depends_on": ["HV-1"], "status": "ready",
+                 "done_looks_like": "API returns 200"},
                 {"id": "ui", "title": "Build UI", "depends_on": ["api"], "group": "phase1"},
                 {"id": "epic", "title": "Auth epic"},
                 {"id": "phase1", "title": "Phase 1", "type": "phase"}
@@ -2193,6 +2197,118 @@ fn import_if_absent_dedupes_against_store_and_batch() {
     assert!(g.edges.iter().any(|e| e.kind == EdgeKind::Dependency
         && e.from == outcomes[1].item.reference
         && e.to == "HV-1"));
+}
+
+// ---- HV-159: import inherits the born-state guards -------------------------
+
+#[test]
+fn import_rejects_engaged_born_states() {
+    // Engaged states (in_progress/blocked/done, or commit:true) must not be
+    // minted at birth via import — the same spirit add_item enforces. Each is a
+    // hard reject; the whole batch rolls back, ref counter included.
+    let engaged = [
+        serde_json::json!([{"id": "x", "title": "Born running", "status": "in_progress"}]),
+        serde_json::json!([{"id": "x", "title": "Born blocked", "status": "blocked"}]),
+        serde_json::json!([{"id": "x", "title": "Born done", "status": "done"}]),
+        serde_json::json!([{"id": "x", "title": "Born committed", "commit": true}]),
+    ];
+    for case in engaged {
+        let s = store();
+        add(&s, "Anchor"); // HV-1; ref_counter = 1
+        let err = s
+            .import_items(None, import_batch(case.clone()), false)
+            .unwrap_err();
+        let msg = err.to_string();
+        // The error names the offending temp id so the caller can fix it.
+        assert!(msg.contains("\"x\""), "error should name temp id: {msg}");
+        // Nothing persisted; the minted ref counter rolled back too.
+        assert_eq!(s.store_status(None).unwrap()["total"], 1, "case: {case}");
+        assert_eq!(
+            s.get_project("haven").unwrap().ref_counter,
+            1,
+            "case: {case}"
+        );
+    }
+}
+
+#[test]
+fn import_rejects_ready_without_acceptance() {
+    // HV-80, applied to the import path: an item born `ready` without
+    // done_looks_like is rejected (the shared guard add_item enforces).
+    let s = store();
+    add(&s, "Anchor"); // HV-1
+
+    let err = s
+        .import_items(
+            None,
+            import_batch(serde_json::json!([
+                {"id": "r", "title": "Ready but undefined", "status": "ready"}
+            ])),
+            false,
+        )
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("acceptance"),
+        "error should mention acceptance: {err}"
+    );
+    // A born-`ready` item WITH acceptance imports fine (the guard fires only on
+    // the missing-acceptance case).
+    s.import_items(
+        None,
+        import_batch(serde_json::json!([
+            {"title": "Ready and defined", "status": "ready",
+             "done_looks_like": "it works"}
+        ])),
+        false,
+    )
+    .unwrap();
+    // Nothing minted by the rejected batch; only the second item exists.
+    assert_eq!(s.store_status(None).unwrap()["total"], 2);
+}
+
+#[test]
+fn import_rolls_back_whole_batch_on_one_engaged_item() {
+    // A single engaged item poisons the WHOLE batch (atomic): the good siblings
+    // are not minted, and the ref counter is restored.
+    let s = store();
+    add(&s, "Anchor"); // HV-1; ref_counter = 1
+
+    let err = s
+        .import_items(
+            None,
+            import_batch(serde_json::json!([
+                {"id": "good", "title": "Fine discovery item"},
+                {"id": "bad", "title": "Sneaky engaged item", "status": "in_progress"},
+                {"id": "good2", "title": "Another fine item"}
+            ])),
+            false,
+        )
+        .unwrap_err();
+    assert!(err.to_string().contains("\"bad\""), "got: {err}");
+    assert_eq!(s.store_status(None).unwrap()["total"], 1);
+    assert_eq!(s.get_project("haven").unwrap().ref_counter, 1);
+}
+
+#[test]
+fn import_default_payload_still_imports_clean() {
+    // The non-regression backstop: a plain discovery payload (defaults
+    // status=discovery, commit=false) is untouched by the guard.
+    let s = store();
+    let outcomes = s
+        .import_items(
+            None,
+            import_batch(serde_json::json!([
+                {"id": "a", "title": "Plain task"},
+                {"title": "Definition-stage task", "status": "definition"}
+            ])),
+            false,
+        )
+        .unwrap();
+    assert_eq!(outcomes.len(), 2);
+    assert!(outcomes.iter().all(|o| !o.existing));
+    assert_eq!(outcomes[0].item.status, Status::Discovery);
+    assert!(!outcomes[0].item.committed);
+    assert_eq!(outcomes[1].item.status, Status::Definition);
 }
 
 // ---- HV-67: due_at ------------------------------------------------------

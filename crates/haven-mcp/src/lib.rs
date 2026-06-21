@@ -11,7 +11,7 @@ use std::io::{self, BufRead, Write};
 
 use haven_core::{
     Artifact, ArtifactKind, ArtifactRole, ArtifactSelector, CompleteInput, ContextPack, DueUpdate,
-    EdgeKind, Edges, HandoffInput, HavenError, Include, Item, ItemFilter, ItemUpdate,
+    EdgeKind, Edges, HandoffInput, HavenError, ImportItem, Include, Item, ItemFilter, ItemUpdate,
     LineageDirection, LineageEvent, NewArtifact, NewItem, NodeType, OwnerKind, Result, RollupState,
     StaleRef, Status, Store, WaitState, WaitUpdate,
 };
@@ -393,6 +393,7 @@ fn is_mutating_tool(name: &str) -> bool {
             | "haven_reopen"
             | "haven_handoff"
             | "haven_complete_item"
+            | "haven_import"
     )
 }
 
@@ -601,6 +602,20 @@ fn dispatch_tool(store: &Store, name: &str, a: &Value) -> Result<Value> {
             };
             let if_absent = opt_bool(a, "if_absent").unwrap_or(false);
             to_value(store.add_item_checked(project, new, if_absent)?)
+        }
+        // Bulk add: the CLI `haven import` envelope inline (a JSON array of items,
+        // each carrying the item-add fields plus a temp `id` and ref-or-temp-id
+        // `parent`/`depends_on`/`group`). One atomic call over the SHARED
+        // Store::import_items — same temp-id/forward-ref resolution, if_absent
+        // dedupe, all-or-nothing rollback, and HV-159 born-state guard as the CLI.
+        "haven_import" => {
+            let raw = a.get("items").ok_or_else(|| {
+                HavenError::Invalid("missing required arg 'items' (a JSON array)".into())
+            })?;
+            let items: Vec<ImportItem> = serde_json::from_value(raw.clone())
+                .map_err(|e| HavenError::Invalid(format!("invalid import envelope: {e}")))?;
+            let if_absent = opt_bool(a, "if_absent").unwrap_or(false);
+            to_value(store.import_items(project, items, if_absent)?)
         }
         "haven_update_item" => {
             let reference = req_str(a, "ref")?;
@@ -996,6 +1011,29 @@ fn to_value<T: Serialize>(v: T) -> Result<Value> {
 /// enough for a client to know the argument names and which are required.
 fn tools_list() -> Value {
     let obj = |props: Value, required: Value| json!({"type": "object", "properties": props, "required": required});
+    // One element of `haven_import`'s `items` array — the `haven import` envelope
+    // entry (item-add fields + temp `id` + ref-or-temp-id edge fields). Built
+    // out here so the catalogue `json!([...])` below stays under the macro
+    // recursion limit.
+    let import_item_schema = json!({
+        "type": "object",
+        "properties": {
+            "title": {"type": "string"},
+            "id": {"type": "string", "description": "Temp id, local to this batch — referenceable by sibling edge fields."},
+            "type": {"type": "string", "enum": ["task","code","research","data","design","admin","release","phase","gate","anchor"]},
+            "body": {"type": "string"},
+            "done_looks_like": {"type": "string"},
+            "why": {"type": "string"},
+            "status": {"type": "string", "enum": ["discovery","definition","ready","in_progress","blocked","done","superseded","archived"], "description": "Defaults to discovery; engaged states (in_progress/blocked/done) are rejected on import."},
+            "priority": {"type": "integer", "minimum": 0, "maximum": 4},
+            "commit": {"type": "boolean", "description": "Rejected if true — import mints uncommitted; commit afterwards."},
+            "assign": {"type": "string", "enum": ["human","ai"]},
+            "parent": {"type": "string", "description": "Decomposition parent: an existing ref or a temp id from this batch."},
+            "depends_on": {"type": "array", "items": {"type": "string"}, "description": "Dependencies: existing refs or temp ids from this batch."},
+            "group": {"type": "string", "description": "Grouping container (release/phase/gate): an existing ref or a temp id from this batch."}
+        },
+        "required": ["title"]
+    });
     json!([
         { "name": "haven_list_items", "description": "List items in a project under filters. Returns a compact, paginated view {total, count, offset, items[]} — each item carries identity + axes only (ref, title, type, status, committed, owner, priority, wait); fetch prose/detail for one item with haven_get_item. Truncated to `limit` (default 100) from `offset`, in (priority, sort_key, created_at) order; `total` is the full match count. `wait` (on_human|on_dependency|on_external) answers 'what's waiting on me / stuck on X'; `stale` (days) surfaces items untouched for N+ days.",
           "inputSchema": obj(json!({"project":{"type":"string"},"status":{"type":"string","enum":["discovery","definition","ready","in_progress","blocked","done","superseded","archived"]},"type":{"type":"string","enum":["task","code","research","data","design","admin","release","phase","gate","anchor"]},"owner":{"type":"string","enum":["human","ai"]},"committed":{"type":"boolean"},"icebox":{"type":"boolean"},"group":{"type":"string"},"wait":{"type":"string","enum":["on_human","on_dependency","on_external"]},"stale":{"type":"integer"},"limit":{"type":"integer"},"offset":{"type":"integer"}}), json!([])) },
@@ -1013,6 +1051,8 @@ fn tools_list() -> Value {
           "inputSchema": obj(json!({"ref":{"type":"string"},"project":{"type":"string"},"before":{"type":"string"},"after":{"type":"string"}}), json!(["ref"])) },
         { "name": "haven_add_item", "description": "Create a work-graph item (node). `done_looks_like` is the acceptance statement output is verified against; `why` is a one-line provenance trace. `due_at` is an optional deadline as a calendar date YYYY-MM-DD (no time/timezone), validated on write. Pass `if_absent: true` to return an existing live item with the same normalized title (marked `existing: true`) instead of creating a duplicate; responses may carry `similar` — up to 3 live items with overlapping titles (advisory).",
           "inputSchema": obj(json!({"title":{"type":"string"},"project":{"type":"string"},"type":{"type":"string","enum":["task","code","research","data","design","admin","release","phase","gate","anchor"],"description":"Node type. Leaves: task (default), code, research, data, design, admin. Containers (the only valid group targets): release, phase, gate. anchor = a long-lived project-docs / overview node."},"body":{"type":"string"},"done_looks_like":{"type":"string"},"why":{"type":"string"},"due_at":{"type":"string"},"status":{"type":"string","enum":["discovery","definition","ready","in_progress","blocked","done","superseded","archived"]},"priority":{"type":"integer","minimum":0,"maximum":4},"commit":{"type":"boolean"},"assign":{"type":"string","enum":["human","ai"]},"parent":{"type":"string"},"depends_on":{"type":"string"},"group":{"type":"string","description":"Add this new item to a release/phase/gate container (creates a grouping edge from that container to this item)."},"if_absent":{"type":"boolean"}}), json!(["title"])) },
+        { "name": "haven_import", "description": "Bulk-add an N-node sub-graph in ONE atomic call — the `haven import` envelope inline. `items` is a JSON array; each element carries the haven_add_item fields (title*, type, body, done_looks_like, why, status, priority, commit, assign) PLUS a temp `id` (file-local, lets siblings reference it) and ref-or-temp-id edge fields `parent` / `depends_on` (array) / `group`. Edge targets may be an existing ref OR a temp id from this batch, including forward references (a target appearing later in the array). All-or-nothing: any failure — a bad edge target, a cycle, a born-engaged item — rolls the WHOLE batch back, ref counter included. `if_absent: true` skips items whose normalized title matches a live item (their temp ids resolve to the match). Like haven_add_item, items cannot be born in an engaged state (status in_progress/blocked/done or commit:true), and a `ready` item needs done_looks_like. Returns one outcome per input item (temp `id` echoed, the created/matched item, and `existing`).",
+          "inputSchema": obj(json!({"items":{"type":"array","items":import_item_schema},"if_absent":{"type":"boolean"},"project":{"type":"string"}}), json!(["items"])) },
         { "name": "haven_update_item", "description": "Update maturity/commitment/ownership/grouping of an item. Set `done_looks_like` (acceptance) when it becomes ready so dispatch can verify against it. `due_at` sets the YYYY-MM-DD deadline (validated on write); pass `\"none\"` to clear it. Pass `group` to add the item to a release/phase/gate container (mirrors haven_add_item). Returns the updated item in full (same shape as haven_get_item). If the ref is superseded/archived the update still applies, but the response carries `stale_ref` {ref, resolved_to} — re-target the live item.",
           "inputSchema": obj(json!({"ref":{"type":"string"},"title":{"type":"string"},"body":{"type":"string"},"done_looks_like":{"type":"string"},"why":{"type":"string"},"due_at":{"type":"string"},"status":{"type":"string","enum":["discovery","definition","ready","in_progress","blocked","done","superseded","archived"]},"priority":{"type":"integer","minimum":0,"maximum":4},"type":{"type":"string","enum":["task","code","research","data","design","admin","release","phase","gate","anchor"],"description":"Node type. Leaves: task (default), code, research, data, design, admin. Containers (the only valid group targets): release, phase, gate. anchor = a long-lived project-docs / overview node."},"wait":{"type":"string","enum":["on_human","on_dependency","on_external","none"],"description":"none clears the wait"},"commit":{"type":"boolean"},"assign":{"type":"string","enum":["human","ai"]},"group":{"type":"string","description":"Add this item to a release/phase/gate container (creates a grouping edge from that container to this item). To remove, use haven_add_edge {kind:\"grouping\", remove:true}."},"actor":{"type":"string"},"project":{"type":"string"}}), json!(["ref"])) },
         { "name": "haven_add_edge", "description": "Add (or `remove:true`) a structural edge; direction matters. decomposition: from=parent → to=child. dependency: from=the blocked item → to=its blocker (the prerequisite). grouping: from=container → to=member, and the container (`from`) MUST be a release/phase/gate node. If an endpoint is superseded/archived the edge still forms, but the response carries `stale_ref` {ref, resolved_to} so you can re-point it at the live item.",
@@ -1108,7 +1148,8 @@ mod tests {
         assert_eq!(out.len(), 2);
         assert_eq!(out[0]["result"]["serverInfo"]["name"], "haven");
         let tools = out[1]["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 27);
+        assert_eq!(tools.len(), 28);
+        assert!(tools.iter().any(|t| t["name"] == "haven_import"));
         assert!(tools.iter().any(|t| t["name"] == "haven_inbox"));
         assert!(tools.iter().any(|t| t["name"] == "haven_xref"));
         assert!(tools.iter().any(|t| t["name"] == "haven_next"));
@@ -2498,5 +2539,160 @@ mod tests {
             projects.is_array(),
             "list_projects returns the project array"
         );
+    }
+
+    /// HV-155 round-trip: an import envelope (item-add fields + temp `id` and
+    /// ref-or-temp-id edge fields) commits an N-node subgraph in one atomic
+    /// `haven_import` call, reusing `Store::import_items` (same temp-id /
+    /// forward-ref resolution as `haven import`). Verified envelope-in →
+    /// graph-out via `haven_graph`.
+    #[test]
+    fn import_round_trips_subgraph_via_graph() {
+        let s = store();
+        let out = session(
+            &s,
+            &[
+                json!({"jsonrpc":"2.0","method":"tools/call","id":1,"params":{
+                "name":"haven_import","arguments":{"items":[
+                    // Forward ref: parent "epic" appears later.
+                    {"id":"api","title":"Build API","parent":"epic","depends_on":["ui"]},
+                    {"id":"ui","title":"Build UI","group":"phase1"},
+                    {"id":"epic","title":"Auth epic"},
+                    {"id":"phase1","title":"Phase 1","type":"phase"}
+                ]}}}),
+                json!({"jsonrpc":"2.0","method":"tools/call","id":2,"params":{
+                    "name":"haven_graph","arguments":{}}}),
+            ],
+        );
+
+        assert_eq!(out[0]["result"]["isError"], false);
+        let outcomes = tool_payload(&out[0]);
+        let outcomes = outcomes.as_array().unwrap();
+        assert_eq!(outcomes.len(), 4);
+        // Temp ids are echoed back for correlation, sequential refs minted.
+        assert_eq!(outcomes[0]["id"], "api");
+        assert_eq!(outcomes[0]["ref"], "HV-1");
+        assert_eq!(outcomes[3]["ref"], "HV-4");
+
+        // Envelope-in → graph-out: every edge resolved (incl. temp-id +
+        // forward-ref targets).
+        let g = tool_payload(&out[1]);
+        let edges = g["edges"].as_array().unwrap();
+        let has = |kind: &str, from: &str, to: &str| {
+            edges
+                .iter()
+                .any(|e| e["kind"] == kind && e["from"] == from && e["to"] == to)
+        };
+        assert!(has("decomposition", "HV-3", "HV-1"), "epic ⊃ api: {g}");
+        assert!(has("dependency", "HV-1", "HV-2"), "api → ui: {g}");
+        assert!(has("grouping", "HV-4", "HV-2"), "phase1 ∋ ui: {g}");
+        assert_eq!(g["nodes"].as_array().unwrap().len(), 4);
+    }
+
+    /// HV-155 rollback: one bad edge target rolls the WHOLE batch back —
+    /// node count AND the minted ref counter restored (the all-or-nothing
+    /// transaction of `Store::import_items`, surfaced over MCP).
+    #[test]
+    fn import_rolls_back_on_bad_edge_target() {
+        let s = store();
+        let out = session(
+            &s,
+            &[
+                // Establish a baseline node so ref_counter starts at 1.
+                json!({"jsonrpc":"2.0","method":"tools/call","id":1,"params":{
+                    "name":"haven_add_item","arguments":{"title":"Anchor"}}}),
+                // One good item + one with a dangling edge target → whole batch fails.
+                json!({"jsonrpc":"2.0","method":"tools/call","id":2,"params":{
+                "name":"haven_import","arguments":{"items":[
+                    {"id":"good","title":"Would-be item"},
+                    {"title":"Dangling","depends_on":["nope"]}
+                ]}}}),
+                // The graph still holds only the anchor — nothing from the batch.
+                json!({"jsonrpc":"2.0","method":"tools/call","id":3,"params":{
+                    "name":"haven_graph","arguments":{}}}),
+                // ref_counter restored: the next add mints HV-2, not HV-4.
+                json!({"jsonrpc":"2.0","method":"tools/call","id":4,"params":{
+                    "name":"haven_add_item","arguments":{"title":"After rollback"}}}),
+            ],
+        );
+
+        assert_eq!(out[0]["result"]["isError"], false);
+        assert_eq!(
+            out[1]["result"]["isError"], true,
+            "bad edge target must fail"
+        );
+        let g = tool_payload(&out[2]);
+        assert_eq!(
+            g["nodes"].as_array().unwrap().len(),
+            1,
+            "only the anchor survives: {g}"
+        );
+        // ref_counter rolled back → the post-rollback add is HV-2.
+        assert_eq!(tool_payload(&out[3])["ref"], "HV-2");
+    }
+
+    /// HV-155 inherits HV-159: an engaged-state payload over `haven_import` is
+    /// rejected by the SHARED `Store::import_items` guard (not re-implemented in
+    /// the MCP layer) — no engaged-born item can be minted via the bulk op.
+    #[test]
+    fn import_inherits_born_state_guard() {
+        let s = store();
+        let out = session(
+            &s,
+            &[
+                json!({"jsonrpc":"2.0","method":"tools/call","id":1,"params":{
+                "name":"haven_import","arguments":{"items":[
+                    {"id":"x","title":"Born running","status":"in_progress"}
+                ]}}}),
+                // commit:true is likewise refused.
+                json!({"jsonrpc":"2.0","method":"tools/call","id":2,"params":{
+                "name":"haven_import","arguments":{"items":[
+                    {"id":"y","title":"Born committed","commit":true}
+                ]}}}),
+                // Nothing was minted by either rejected batch.
+                json!({"jsonrpc":"2.0","method":"tools/call","id":3,"params":{
+                    "name":"haven_graph","arguments":{}}}),
+            ],
+        );
+        assert_eq!(out[0]["result"]["isError"], true, "engaged status rejected");
+        assert_eq!(out[1]["result"]["isError"], true, "commit:true rejected");
+        let g = tool_payload(&out[2]);
+        assert_eq!(
+            g["nodes"].as_array().unwrap().len(),
+            0,
+            "nothing minted: {g}"
+        );
+    }
+
+    /// HV-155: the bulk op is mutating (it triggers the daily-backup chokepoint)
+    /// and `if_absent` dedupe rides through to the shared core.
+    #[test]
+    fn import_is_mutating_and_dedupes_with_if_absent() {
+        assert!(is_mutating_tool("haven_import"));
+        let s = store();
+        let out = session(
+            &s,
+            &[
+                json!({"jsonrpc":"2.0","method":"tools/call","id":1,"params":{
+                    "name":"haven_add_item","arguments":{"title":"Setup CI"}}}),
+                json!({"jsonrpc":"2.0","method":"tools/call","id":2,"params":{
+                "name":"haven_import","arguments":{"if_absent":true,"items":[
+                    {"title":"setup  ci."},
+                    {"title":"Run tests"}
+                ]}}}),
+            ],
+        );
+        assert_eq!(out[1]["result"]["isError"], false);
+        let outcomes = tool_payload(&out[1]);
+        let outcomes = outcomes.as_array().unwrap();
+        // First matched the pre-existing node; only "Run tests" is new.
+        // `existing` is skip_serializing_if-false, so a new item simply omits it.
+        assert_eq!(outcomes[0]["existing"], true);
+        assert_eq!(outcomes[0]["ref"], "HV-1");
+        assert!(
+            outcomes[1].get("existing").is_none(),
+            "new item omits existing"
+        );
+        assert_eq!(outcomes[1]["ref"], "HV-2");
     }
 }

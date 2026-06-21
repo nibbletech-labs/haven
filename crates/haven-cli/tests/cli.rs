@@ -771,7 +771,9 @@ fn import_creates_a_wired_batch_in_one_transaction() {
     std::fs::write(
         &file,
         serde_json::json!([
-            {"id": "api", "title": "Build API", "parent": "epic", "status": "ready", "commit": true, "done_looks_like": "it works"},
+            // Born `ready` is fine WITH acceptance; engaged born-states
+            // (in_progress/blocked/done, commit:true) are rejected (HV-159).
+            {"id": "api", "title": "Build API", "parent": "epic", "status": "ready", "done_looks_like": "it works"},
             {"id": "ui", "title": "Build UI", "depends_on": ["api"]},
             {"id": "epic", "title": "Auth epic"}
         ])

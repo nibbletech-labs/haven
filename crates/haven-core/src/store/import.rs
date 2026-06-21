@@ -10,8 +10,17 @@ use serde::{Deserialize, Serialize};
 use crate::error::{HavenError, Result};
 use crate::model::*;
 
-use super::item::normalize_title;
+use super::item::{acceptance_blank, normalize_title};
 use super::Store;
+
+/// "Engaged" statuses an item must not be born in via import (HV-159): these
+/// imply work already underway/finished, which a bulk capture has no business
+/// minting at birth. Mirrors the spirit of [`Store::add_item`]'s born-state
+/// rules (`ready` needs acceptance) — the same guard now applies to import so a
+/// future `haven_import` (HV-155) inherits it from this shared core path.
+fn engaged_status(status: Status) -> bool {
+    matches!(status, Status::InProgress | Status::Blocked | Status::Done)
+}
 
 /// One item in an import file. Mirrors the `item add` surface, plus `id` (a
 /// temp id local to the file) and ref-or-temp-id edge fields. Unknown keys are
@@ -113,27 +122,67 @@ impl Store {
                     )));
                 }
             }
+            let node_type = item
+                .node_type
+                .as_deref()
+                .map(NodeType::parse)
+                .transpose()
+                .map_err(|e| HavenError::Invalid(format!("items[{i}]: {e}")))?
+                .unwrap_or(NodeType::Task);
+            let status = item
+                .status
+                .as_deref()
+                .map(Status::parse)
+                .transpose()
+                .map_err(|e| HavenError::Invalid(format!("items[{i}]: {e}")))?
+                .unwrap_or(Status::Discovery);
+            let assign = item
+                .assign
+                .as_deref()
+                .map(OwnerKind::parse)
+                .transpose()
+                .map_err(|e| HavenError::Invalid(format!("items[{i}]: {e}")))?;
+
+            // HV-159: a bulk import must not silently mint items in an "engaged"
+            // born-state. Hard-reject (matching add_item's spirit — no opt-in
+            // flag): an item born `in_progress`/`blocked`/`done` or `commit:true`
+            // implies work already underway, which capture doesn't create; and an
+            // item born `ready` still needs acceptance (HV-80, the same guard
+            // add_item enforces — reusing `acceptance_blank`). The error names the
+            // offending item by its temp id, else its batch index. Living in this
+            // validation pass (before any write) keeps the whole batch atomic.
+            let label = match item.id.as_deref() {
+                Some(id) => format!("{id:?}"),
+                None => format!("index {i}"),
+            };
+            if engaged_status(status) {
+                return Err(HavenError::Invalid(format!(
+                    "items[{i}]: cannot import item {label} born {} — \
+                     bulk import must not mint items in an engaged state \
+                     (in_progress/blocked/done); import at discovery/definition/ready \
+                     and advance it afterwards",
+                    status.as_str(),
+                )));
+            }
+            if item.commit {
+                return Err(HavenError::Invalid(format!(
+                    "items[{i}]: cannot import item {label} with commit:true — \
+                     bulk import must not mint committed items; import uncommitted \
+                     and commit it afterwards",
+                )));
+            }
+            if matches!(status, Status::Ready) && acceptance_blank(item.done_looks_like.as_deref())
+            {
+                return Err(HavenError::Invalid(format!(
+                    "items[{i}]: cannot import item {label} as ready without acceptance \
+                     — set done_looks_like first",
+                )));
+            }
+
             axes.push(ParsedAxes {
-                node_type: item
-                    .node_type
-                    .as_deref()
-                    .map(NodeType::parse)
-                    .transpose()
-                    .map_err(|e| HavenError::Invalid(format!("items[{i}]: {e}")))?
-                    .unwrap_or(NodeType::Task),
-                status: item
-                    .status
-                    .as_deref()
-                    .map(Status::parse)
-                    .transpose()
-                    .map_err(|e| HavenError::Invalid(format!("items[{i}]: {e}")))?
-                    .unwrap_or(Status::Discovery),
-                assign: item
-                    .assign
-                    .as_deref()
-                    .map(OwnerKind::parse)
-                    .transpose()
-                    .map_err(|e| HavenError::Invalid(format!("items[{i}]: {e}")))?,
+                node_type,
+                status,
+                assign,
             });
         }
         // Every edge target must be a temp id from this file or resolve in the

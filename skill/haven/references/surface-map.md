@@ -8,7 +8,7 @@ using the mapping below.
 ## Contents
 - [Enums (valid values)](#enums)
 - [CLI command surface](#cli-command-surface)
-- [MCP tool catalogue (24 tools)](#mcp-tool-catalogue)
+- [MCP tool catalogue (28 tools)](#mcp-tool-catalogue)
 - [CLI → MCP mapping](#cli--mcp-mapping)
 - [CLI-only operations](#cli-only-operations)
 - [The content channel](#the-content-channel)
@@ -114,7 +114,7 @@ haven sync [status] [--watch]
 
 ## MCP tool catalogue
 
-26 tools, each taking an optional `project` and naming items by `ref` or
+28 tools, each taking an optional `project` and naming items by `ref` or
 `public_id`. Required args in **bold**.
 
 | Tool | Args |
@@ -127,6 +127,7 @@ haven sync [status] [--watch]
 | `haven_next_explain` | `owner?` — diagnose an empty queue (counts by reason + hint) |
 | `haven_rank` | **`ref`**, `before?` \| `after?` (exactly one) — reorder within a priority band (fine ordering) |
 | `haven_add_item` | **`title`**, `type?, body?, done_looks_like?, why?, status?, priority?, commit?, assign?, due_at?, parent?, depends_on?, group?, if_absent?` — with `if_absent` a normalized-title match returns the existing item (`existing: true`); responses may carry advisory `similar` |
+| `haven_import` | **`items`** (array of `{title*, id?, type?, body?, done_looks_like?, why?, status?, priority?, commit?, assign?, parent?, depends_on?, group?}`), `if_absent?` — the `haven import` envelope inline: bulk-add an N-node sub-graph in ONE atomic call (temp-id / forward-ref resolution, all-or-nothing rollback, `if_absent` dedupe). Inherits the born-state guard (no engaged-born / committed item; `ready` needs `done_looks_like`). Returns one outcome per item (`id` echoed, the item, `existing`) |
 | `haven_update_item` | **`ref`**, `title?, body?, done_looks_like?, why?, status?, priority?, type?, wait?, due_at?, commit?, assign?, group?, actor?` (`due_at` accepts `"none"` to clear; `group` adds the item to a release/phase/gate container, mirroring `haven_add_item`). A dead (superseded/archived) `ref` still updates but rides a `stale_ref` hint |
 | `haven_add_edge` | **`kind`** (`decomposition`\|`dependency`\|`grouping`), **`from`**, **`to`**, `remove?` — direction: `from→to` is parent→child / blocked→blocker / container→member (the container `from` must be release/phase/gate). A dead endpoint still forms the edge but rides a `stale_ref` hint (re-point it) |
 | `haven_evolve` | **`op`** (`split`\|`merge`\|`supersede`), **`refs`**, `into?, with?, title?, rationale?, by?` |
@@ -172,6 +173,7 @@ The collapses that catch people out:
 |---|---|
 | `item list` / `get` / `add` | `haven_list_items` / `haven_get_item` / `haven_add_item` |
 | `item add --if-absent` | `haven_add_item {if_absent: true}` — both surfaces return `existing`/`similar` on the add response |
+| `import <file.json>` | `haven_import {items: [...]}` — the file's JSON array passed inline; same atomic batch (temp-id/forward-ref resolution, `if_absent` dedupe, born-state guard) |
 | `item update` **+** `commit` / `uncommit` / `assign` | **all one tool:** `haven_update_item` (fields `commit: true/false`, `assign`, plus the update fields) |
 | `decompose` / `depend` / `group` | **one tool:** `haven_add_edge {kind: "decomposition"\|"dependency"\|"grouping", from, to}` |
 | `evolve split`/`merge`/`supersede` | `haven_evolve {op, refs, …}` |
@@ -216,9 +218,6 @@ must rely on a local CLI or a pre-arranged state:
   selects per-call, so it never needs `use`.)
 - **`note`**, **`render`** — scratch lines and forced re-render (render happens
   automatically anyway).
-- **`import`** — bulk capture from a JSON file (plan-loading is an
-  at-the-terminal act). Over MCP, loop `haven_add_item` — with
-  `if_absent: true` for dedupe — one call per item.
 - **Lifecycle/admin** — `setup`, `init`, `doctor`, `config`, `link`, `skill`,
   `auth`, `sync`.
 

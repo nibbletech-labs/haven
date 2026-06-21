@@ -199,8 +199,9 @@ pub struct ItemFilter {
 
 /// True when an acceptance statement is absent or only whitespace. The
 /// `ready`-requires-`done_looks_like` guard (HV-80) treats both as "no
-/// acceptance".
-fn acceptance_blank(done: Option<&str>) -> bool {
+/// acceptance". `pub(super)` so the import path (HV-159) reuses the exact same
+/// "blank acceptance" notion rather than re-deriving it.
+pub(super) fn acceptance_blank(done: Option<&str>) -> bool {
     match done {
         None => true,
         Some(s) => s.trim().is_empty(),
