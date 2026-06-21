@@ -280,11 +280,17 @@ impl Store {
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
-    /// Resolve a (possibly superseded/archived) ref forward through lineage to
-    /// its live descendant(s). A live node resolves to itself (SPEC §1).
-    pub fn resolve_live(&self, project: Option<&str>, selector: &str) -> Result<Vec<Item>> {
-        let (project_id, _) = self.require_project(project)?;
-        let node_id = self.resolve_node_id(project_id, selector)?;
+    /// The live descendant(s) of `node_id`, walking *lineage* forward (the
+    /// supersede/split/merge graph — distinct from the structural
+    /// [`Self::live_descendants`] that walks decomposition/grouping). A live node
+    /// resolves to itself (SPEC §1); a superseded/archived node resolves to its
+    /// live successor(s), or to nothing when there is no live successor.
+    ///
+    /// HV-154: this is the lineage walk that used to be the body of the public
+    /// `resolve_live`. It now lives in the read path and runs automatically on
+    /// every item resolution (see [`Store::resolve_node_id_hinted`]); the public
+    /// `resolve_live` is a one-release deprecated alias over it.
+    pub(crate) fn live_lineage_descendants(&self, node_id: i64) -> Result<Vec<Item>> {
         let mut stmt = self.conn.prepare(&format!(
             "WITH RECURSIVE descendants(id) AS (
                  SELECT ?1
@@ -298,6 +304,24 @@ impl Store {
         ))?;
         let rows = stmt.query_map([node_id], item_from_row)?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// Resolve a (possibly superseded/archived) ref forward through lineage to
+    /// its live descendant(s). A live node resolves to itself (SPEC §1).
+    ///
+    /// **Deprecated (HV-154):** the lineage walk now runs automatically in the
+    /// read path — `get_item`/`update_item`/`add_edge` ride a `stale_ref` hint
+    /// when the ref is dead. This public entry point is kept for one release as a
+    /// thin alias over [`Store::live_descendants`]; prefer the automatic hint.
+    #[deprecated(
+        since = "0.2.0",
+        note = "the lineage walk now runs automatically in the read path; \
+                callers see a stale_ref hint on get_item/update_item/add_edge"
+    )]
+    pub fn resolve_live(&self, project: Option<&str>, selector: &str) -> Result<Vec<Item>> {
+        let (project_id, _) = self.require_project(project)?;
+        let node_id = self.resolve_node_id(project_id, selector)?;
+        self.live_lineage_descendants(node_id)
     }
 
     /// The whole project work-graph in one read: every node, plus the structural

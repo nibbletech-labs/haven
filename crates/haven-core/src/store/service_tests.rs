@@ -1063,6 +1063,7 @@ fn grouping_requires_container_node() {
 }
 
 #[test]
+#[allow(deprecated)] // exercises the resolve_live alias (HV-154)
 fn split_records_lineage_and_supersedes_source() {
     let s = store();
     let big = add(&s, "Big epic");
@@ -1098,6 +1099,7 @@ fn split_records_lineage_and_supersedes_source() {
 }
 
 #[test]
+#[allow(deprecated)] // exercises the resolve_live alias (HV-154)
 fn merge_and_supersede() {
     let s = store();
     let a = add(&s, "Auth backend");
@@ -2318,4 +2320,198 @@ fn due_at_read_shape_full_carries_it_and_null_is_omitted() {
         j.get("due_at").is_none(),
         "null due_at must be omitted from the full read shape, got: {j}"
     );
+}
+
+// ---- HV-154: stale-ref recovery + not_found hints -----------------------
+
+/// A read on a SUPERSEDED ref still resolves the (dead) item, but now carries a
+/// `stale_ref{resolved_to}` hint pointing at the live descendant — instead of
+/// silently returning the dead item with no signal.
+#[test]
+fn get_item_hinted_flags_superseded_ref() {
+    let s = store();
+    let old = add(&s, "Old"); // HV-1
+    let new = add(&s, "New"); // HV-2
+    s.evolve_supersede(None, &old.reference, &new.reference, None, None)
+        .unwrap();
+
+    let (item, hint) = s.get_item_hinted(None, &old.reference, &[]).unwrap();
+    // The item itself still resolves (it's the dead node).
+    assert_eq!(item.reference, "HV-1");
+    let hint = hint.expect("superseded ref must carry a stale_ref hint");
+    assert_eq!(hint.requested, "HV-1");
+    assert_eq!(hint.resolved_to, vec!["HV-2".to_string()]);
+
+    // A LIVE ref carries no hint.
+    let (_live, none) = s.get_item_hinted(None, &new.reference, &[]).unwrap();
+    assert!(none.is_none(), "a live ref must not carry a stale_ref hint");
+}
+
+/// An ARCHIVED ref (no live descendant) is also flagged stale — the hint is
+/// present with an empty `resolved_to` (there is nothing live to forward to).
+#[test]
+fn get_item_hinted_flags_archived_ref() {
+    let s = store();
+    let it = add(&s, "Dead end"); // HV-1
+    s.archive_item(None, &it.reference, None, None).unwrap();
+
+    let (item, hint) = s.get_item_hinted(None, &it.reference, &[]).unwrap();
+    assert_eq!(item.reference, "HV-1");
+    let hint = hint.expect("archived ref must carry a stale_ref hint");
+    assert_eq!(hint.requested, "HV-1");
+    assert!(
+        hint.resolved_to.is_empty(),
+        "an archived ref with no successor resolves to nothing live"
+    );
+}
+
+/// `add_edge` and `update_item` on a superseded ref return the same hint, so a
+/// stale endpoint never lands silently in the graph / on a write.
+#[test]
+fn add_edge_and_update_item_hinted_flag_superseded_ref() {
+    let s = store();
+    let old = add(&s, "Old"); // HV-1
+    let new = add(&s, "New"); // HV-2
+    let other = add(&s, "Other"); // HV-3
+    s.evolve_supersede(None, &old.reference, &new.reference, None, None)
+        .unwrap();
+
+    // update on the stale ref still applies, but is flagged.
+    let (_item, uhint) = s
+        .update_item_hinted(
+            None,
+            &old.reference,
+            ItemUpdate {
+                body: Some("touched".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let uhint = uhint.expect("update on a superseded ref must be flagged");
+    assert_eq!(uhint.resolved_to, vec!["HV-2".to_string()]);
+
+    // add_edge with a stale `from` endpoint is flagged (the dependency still
+    // forms on the dead node — the caller is told to re-point it).
+    let ehint = s
+        .add_edge_hinted(
+            None,
+            EdgeKind::Dependency,
+            &old.reference,
+            &other.reference,
+            false,
+        )
+        .unwrap();
+    let ehint = ehint.expect("add_edge with a stale endpoint must be flagged");
+    assert_eq!(ehint.requested, "HV-1");
+    assert_eq!(ehint.resolved_to, vec!["HV-2".to_string()]);
+}
+
+/// A split forwards a stale ref to MORE THAN ONE live descendant — the hint
+/// carries them all.
+#[test]
+fn stale_ref_hint_carries_all_split_descendants() {
+    let s = store();
+    let big = add(&s, "Big"); // HV-1
+    let res = s
+        .evolve_split(
+            None,
+            &big.reference,
+            &["Part A".to_string(), "Part B".to_string()],
+            None,
+            None,
+        )
+        .unwrap();
+    let mut want: Vec<String> = res.new.iter().map(|i| i.reference.clone()).collect();
+    want.sort();
+
+    let (_item, hint) = s.get_item_hinted(None, &big.reference, &[]).unwrap();
+    let hint = hint.expect("split source is superseded → flagged");
+    let mut got = hint.resolved_to.clone();
+    got.sort();
+    assert_eq!(got, want);
+}
+
+/// A not_found ref (no matching row) returns nearest same-prefix LIVE refs by
+/// numeric proximity (≤3), plus the prefix line.
+#[test]
+fn not_found_lists_nearest_live_refs_and_prefix() {
+    let s = store();
+    for _ in 0..5 {
+        add(&s, "x"); // HV-1..HV-5
+    }
+    // HV-3 is superseded → must be excluded from "nearest live".
+    let new = add(&s, "successor"); // HV-6
+    s.evolve_supersede(None, "HV-3", &new.reference, None, None)
+        .unwrap();
+
+    let err = s.get_item(None, "HV-4-bogus-miss", &[]).unwrap_err();
+    // Sanity: this is a real not_found (wrong format → no row).
+    assert_eq!(err.code(), "not_found");
+    let msg = err.to_string();
+    // Nearest LIVE same-prefix refs (HV-3 excluded as superseded).
+    assert!(
+        msg.contains("closest live:"),
+        "not_found should list closest live refs, got: {msg}"
+    );
+    assert!(
+        msg.contains("refs here use prefix HV"),
+        "not_found should name the project's ref prefix, got: {msg}"
+    );
+    assert!(
+        !msg.contains("HV-3"),
+        "superseded HV-3 must not appear in closest-live, got: {msg}"
+    );
+}
+
+/// Numeric proximity test: a miss near a counter returns the closest live refs
+/// by |counter - n|, capped at 3.
+#[test]
+fn not_found_nearest_is_by_numeric_proximity_capped() {
+    let s = store();
+    for _ in 0..10 {
+        add(&s, "x"); // HV-1..HV-10
+    }
+    let err = s.get_item(None, "HV-50", &[]).unwrap_err();
+    let msg = err.to_string();
+    // Closest to 50 are 10, 9, 8 (descending proximity), capped at 3.
+    assert!(msg.contains("HV-10"), "got: {msg}");
+    assert!(msg.contains("HV-9"), "got: {msg}");
+    assert!(msg.contains("HV-8"), "got: {msg}");
+    assert!(!msg.contains("HV-7"), "cap is 3, got: {msg}");
+}
+
+/// A not_found ref whose PREFIX belongs to a DIFFERENT project names that
+/// project (the wrong-project-prefix hint, shared with HV-153).
+#[test]
+fn not_found_names_wrong_project_prefix() {
+    let s = store();
+    s.add_project("billing", Some("BI"), "Billing", None)
+        .unwrap();
+    // Querying the haven project for a BI-prefixed ref.
+    let err = s.get_item(Some("haven"), "BI-7", &[]).unwrap_err();
+    assert_eq!(err.code(), "not_found");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("billing"),
+        "wrong-prefix not_found should name the owning project, got: {msg}"
+    );
+    assert!(
+        msg.contains("BI"),
+        "wrong-prefix not_found should mention the prefix BI, got: {msg}"
+    );
+}
+
+/// The retired `resolve_live` keeps working as a deprecated alias, delegating to
+/// the same lineage logic the read path now runs automatically.
+#[test]
+#[allow(deprecated)]
+fn resolve_live_alias_still_resolves() {
+    let s = store();
+    let old = add(&s, "Old"); // HV-1
+    let new = add(&s, "New"); // HV-2
+    s.evolve_supersede(None, &old.reference, &new.reference, None, None)
+        .unwrap();
+    let live = s.resolve_live(None, &old.reference).unwrap();
+    assert_eq!(live.len(), 1);
+    assert_eq!(live[0].reference, "HV-2");
 }

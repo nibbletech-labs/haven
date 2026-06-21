@@ -46,6 +46,33 @@ pub(crate) const ITEM_SELECT: &str = "\
 
 pub(crate) const ITEM_FROM: &str = "nodes n JOIN projects p ON p.id = n.project_id";
 
+/// A "the ref you used is dead" advisory raised on the success response of a read
+/// (`get_item`) or a write that takes a ref (`add_edge`/`update_item`) when the
+/// resolved node is `superseded`/`archived` (HV-154). The op still applies to the
+/// dead node — the hint just tells the caller where the live work moved, running
+/// the lineage walk (formerly the public `resolve_live`) automatically.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct StaleRef {
+    /// The (canonical) ref the caller asked for — the dead one.
+    #[serde(rename = "ref")]
+    pub requested: String,
+    /// The live descendant ref(s) the dead ref forwards to, walking lineage
+    /// forward. Empty when there is no live successor (e.g. a plain archive).
+    pub resolved_to: Vec<String>,
+}
+
+/// Split a ref like `HV-42` into its `(prefix, counter)`. `None` when it doesn't
+/// have the `PREFIX-<digits>` shape (e.g. a `public_id` UUID, or junk). Used for
+/// the not_found nearest-live + wrong-project-prefix hints (HV-154).
+pub(crate) fn parse_ref(reference: &str) -> Option<(String, i64)> {
+    let (prefix, num) = reference.rsplit_once('-')?;
+    if prefix.is_empty() {
+        return None;
+    }
+    let counter: i64 = num.parse().ok()?;
+    Some((prefix.to_string(), counter))
+}
+
 /// Map a row selected via [`ITEM_SELECT`] into an [`Item`] (no includes).
 pub(crate) fn item_from_row(row: &Row<'_>) -> rusqlite::Result<Item> {
     let metadata_str: String = row.get(14)?;
@@ -283,6 +310,12 @@ impl Store {
     /// Resolve an item selector (`ref` like `HV-42`, or a `public_id` UUID) to
     /// its local node id, scoped to `project_id`. `public_id` is globally unique
     /// so it resolves regardless of project.
+    ///
+    /// On a miss the `NotFound` is enriched (HV-154): nearest live refs by
+    /// numeric proximity + the project's ref prefix, and — when the requested
+    /// ref's prefix belongs to a *different* project — that project is named.
+    /// This is the single chokepoint every item op shares, so the CLI and MCP
+    /// both get the better message for free.
     pub(crate) fn resolve_node_id(&self, project_id: i64, selector: &str) -> Result<i64> {
         let id = self
             .conn
@@ -293,8 +326,132 @@ impl Store {
                 |r| r.get(0),
             )
             .optional()?
-            .ok_or_else(|| HavenError::NotFound(format!("item {selector:?}")))?;
+            .ok_or_else(|| {
+                HavenError::NotFound(format!(
+                    "item {selector:?}{}",
+                    self.not_found_hint(project_id, selector)
+                ))
+            })?;
         Ok(id)
+    }
+
+    /// Resolve a selector AND surface a [`StaleRef`] hint when the resolved node
+    /// is `superseded`/`archived` — so the read path can ride a "this ref is
+    /// dead; here's its live descendant(s)" warning on the success response
+    /// instead of silently returning the dead item (HV-154). The lineage walk
+    /// (formerly the public `resolve_live`) now runs here automatically. One
+    /// place — `get_item`/`update_item`/`add_edge` all route through it.
+    pub(crate) fn resolve_node_id_hinted(
+        &self,
+        project_id: i64,
+        selector: &str,
+    ) -> Result<(i64, Option<StaleRef>)> {
+        let node_id = self.resolve_node_id(project_id, selector)?;
+        let hint = self.stale_ref_for(node_id, selector)?;
+        Ok((node_id, hint))
+    }
+
+    /// `Some(StaleRef)` when `node_id` is `superseded`/`archived`; `None` when it
+    /// is live. `resolved_to` is the live descendant(s) reached by walking
+    /// lineage forward (empty when the dead node has no live successor, e.g. a
+    /// plain archive). The `requested` field echoes the ref the caller passed,
+    /// for a clear "you asked for X; it's dead" message.
+    fn stale_ref_for(&self, node_id: i64, requested: &str) -> Result<Option<StaleRef>> {
+        let status: Status =
+            self.conn
+                .query_row("SELECT status FROM nodes WHERE id = ?1", [node_id], |r| {
+                    r.get(0)
+                })?;
+        if !matches!(status, Status::Superseded | Status::Archived) {
+            return Ok(None);
+        }
+        let resolved_to = self
+            .live_lineage_descendants(node_id)?
+            .into_iter()
+            .map(|i| i.reference)
+            .collect();
+        // Echo the requested ref by its canonical form (the row's `ref`), so a
+        // hint raised on a `public_id` selector still names the human ref.
+        let canonical = self.node_ref(node_id).unwrap_or_else(|_| requested.into());
+        Ok(Some(StaleRef {
+            requested: canonical,
+            resolved_to,
+        }))
+    }
+
+    /// The not_found message tail (HV-154, shared with HV-153): nearest live
+    /// same-prefix refs + the project's prefix, and a wrong-project-prefix note
+    /// when the requested ref's prefix names a *different* project. Best-effort —
+    /// any query error degrades to an empty tail rather than masking the original
+    /// not_found. Returns a leading-space-prefixed fragment, or `""`.
+    fn not_found_hint(&self, project_id: i64, selector: &str) -> String {
+        // The project we searched: its key + prefix.
+        let Ok((prefix, project_key)): rusqlite::Result<(String, String)> = self.conn.query_row(
+            "SELECT ref_prefix, key FROM projects WHERE id = ?1",
+            [project_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        ) else {
+            return String::new();
+        };
+
+        // Wrong-project-prefix: if the selector's prefix belongs to ANOTHER
+        // project, name it — "you're in project X; PREFIX is project Y's".
+        let mut wrong = String::new();
+        if let Some((sel_prefix, _)) = parse_ref(selector) {
+            if !sel_prefix.eq_ignore_ascii_case(&prefix) {
+                if let Ok(other_key) = self.conn.query_row(
+                    "SELECT key FROM projects WHERE ref_prefix = ?1 COLLATE NOCASE",
+                    [&sel_prefix],
+                    |r| r.get::<_, String>(0),
+                ) {
+                    wrong = format!(
+                        " — prefix {sel_prefix} is project {other_key:?}, not {project_key:?}"
+                    );
+                }
+            }
+        }
+
+        let nearest = self
+            .nearest_live_refs(project_id, selector, 3)
+            .unwrap_or_default();
+        let closest = if nearest.is_empty() {
+            String::new()
+        } else {
+            format!("; closest live: {}", nearest.join(", "))
+        };
+        format!(" — no {selector} in {project_key}{closest}{wrong}; refs here use prefix {prefix}")
+    }
+
+    /// Up to `cap` LIVE same-prefix refs in `project_id`, nearest the requested
+    /// counter by numeric proximity (HV-154). Live-only (excludes
+    /// `archived`/`superseded`). When the selector has no parseable counter, or
+    /// no live refs exist, returns the lowest live refs as a fallback so the
+    /// message still orients. Reuses the `find_live_by_norm_title`/`similar_live`
+    /// live-set precedent at `store/item.rs`.
+    fn nearest_live_refs(
+        &self,
+        project_id: i64,
+        selector: &str,
+        cap: usize,
+    ) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT ref FROM nodes
+             WHERE project_id = ?1 AND status NOT IN ('archived','superseded')",
+        )?;
+        let rows = stmt.query_map([project_id], |r| r.get::<_, String>(0))?;
+        let mut refs: Vec<(i64, String)> = rows
+            .filter_map(|r| r.ok())
+            .filter_map(|reference| parse_ref(&reference).map(|(_, n)| (n, reference)))
+            .collect();
+        // Numeric proximity to the requested counter; ties break low-counter
+        // first (deterministic). With no counter to anchor on, fall back to the
+        // lowest live refs.
+        let target = parse_ref(selector).map(|(_, n)| n);
+        match target {
+            Some(t) => refs.sort_by_key(|(n, _)| ((n - t).abs(), *n)),
+            None => refs.sort_by_key(|(n, _)| *n),
+        }
+        Ok(refs.into_iter().take(cap).map(|(_, r)| r).collect())
     }
 
     /// The `ref` for a node id (for resolving edge endpoints back to handles).

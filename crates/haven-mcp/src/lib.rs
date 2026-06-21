@@ -13,7 +13,7 @@ use haven_core::{
     Artifact, ArtifactKind, ArtifactRole, ArtifactSelector, CompleteInput, ContextPack, DueUpdate,
     EdgeKind, Edges, HandoffInput, HavenError, Include, Item, ItemFilter, ItemUpdate,
     LineageDirection, LineageEvent, NewArtifact, NewItem, NodeType, OwnerKind, Result, RollupState,
-    Status, Store, WaitState, WaitUpdate,
+    StaleRef, Status, Store, WaitState, WaitUpdate,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -361,6 +361,19 @@ fn str_array(v: &Value, k: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// Attach a `stale_ref` advisory to a success payload when the resolved ref was
+/// dead (superseded/archived) — HV-154. Rides the response object the same way
+/// `similar`/`grooming_nudge` do: present only when there's something to say, so
+/// the common live-ref path is unchanged. `out` must be a JSON object.
+fn attach_stale_ref(out: &mut Value, stale: Option<StaleRef>) -> Result<()> {
+    if let Some(stale) = stale {
+        if let Value::Object(map) = out {
+            map.insert("stale_ref".into(), to_value(&stale)?);
+        }
+    }
+    Ok(())
+}
+
 /// Tools that mutate the work-graph — the choke point for the opportunistic
 /// daily backup. The MCP server opens one `Store` for the whole session, so the
 /// trigger must live per tools/call here (not in `serve`, which fires once).
@@ -473,8 +486,13 @@ fn call_tool(store: &Store, name: &str, a: &Value) -> Result<Value> {
                 .iter()
                 .map(|s| Include::parse(s))
                 .collect::<Result<Vec<_>>>()?;
-            let item = store.get_item(project, req_str(a, "ref")?, &includes)?;
-            to_value(McpItem::full(&item))
+            // HV-154: a dead (superseded/archived) ref still returns the item,
+            // but rides a `stale_ref{ref, resolved_to}` hint so the caller learns
+            // where the live work moved instead of acting on the dead node.
+            let (item, stale) = store.get_item_hinted(project, req_str(a, "ref")?, &includes)?;
+            let mut out = to_value(McpItem::full(&item))?;
+            attach_stale_ref(&mut out, stale)?;
+            Ok(out)
         }
         "haven_next" => {
             let items = store.next(
@@ -557,6 +575,10 @@ fn call_tool(store: &Store, name: &str, a: &Value) -> Result<Value> {
                 || upd.node_type.is_some()
                 || upd.wait.is_some()
                 || upd.due.is_some();
+            // HV-154: capture the stale-ref hint up front (this also validates
+            // the ref exists, with the enriched not_found, before any write). The
+            // update still applies to the dead node; the caller is told it moved.
+            let (_node, stale) = store.get_item_hinted(project, reference, &[])?;
             if has_update {
                 store.update_item(project, reference, upd)?;
             }
@@ -585,19 +607,26 @@ fn call_tool(store: &Store, name: &str, a: &Value) -> Result<Value> {
                 store.group(project, group, reference, false)?;
             }
             let item = store.get_item(project, reference, &[])?;
-            to_value(McpItem::full(&item))
+            let mut out = to_value(McpItem::full(&item))?;
+            attach_stale_ref(&mut out, stale)?;
+            Ok(out)
         }
         "haven_add_edge" => {
             let kind = EdgeKind::parse(req_str(a, "kind")?)?;
             let remove = opt_bool(a, "remove").unwrap_or(false);
-            store.add_edge(
+            // HV-154: a stale (superseded/archived) endpoint never lands silently
+            // in the graph — the edge forms, and a `stale_ref` hint tells the
+            // caller to re-point it at the live descendant.
+            let stale = store.add_edge_hinted(
                 project,
                 kind,
                 req_str(a, "from")?,
                 req_str(a, "to")?,
                 remove,
             )?;
-            Ok(json!({ "ok": true }))
+            let mut out = json!({ "ok": true });
+            attach_stale_ref(&mut out, stale)?;
+            Ok(out)
         }
         "haven_evolve" => {
             let op = req_str(a, "op")?;
@@ -633,8 +662,11 @@ fn call_tool(store: &Store, name: &str, a: &Value) -> Result<Value> {
         }
         // Follow a possibly-stale ref forward through lineage to its live
         // descendant(s) — handoffs and docs often carry superseded refs. A live
-        // item resolves to itself.
+        // item resolves to itself. DEPRECATED (HV-154): the read path now runs
+        // this walk automatically and rides a `stale_ref` hint on
+        // get_item/update_item/add_edge. Kept one release as a thin alias.
         "haven_resolve_live" => {
+            #[allow(deprecated)]
             let items = store.resolve_live(project, req_str(a, "ref")?)?;
             to_value(items.iter().map(McpItem::compact).collect::<Vec<_>>())
         }
@@ -903,7 +935,7 @@ fn tools_list() -> Value {
           "inputSchema": obj(json!({"project":{"type":"string"},"owner":{"type":"string","enum":["human","ai"]},"limit":{"type":"integer"},"offset":{"type":"integer"}}), json!([])) },
         { "name": "haven_xref", "description": "Cross-store links (HV-69) on a node's artifacts: a deterministic, sorted {node, outbound[], inbound[]} report. `outbound` is every typed xref {relation, store, target, canonical?} on this node's own artifacts; `inbound` is every other Haven artifact whose xref `target` resolves to this node (backlinks). Read-only. Cross-store targets are reported as-is; only Haven-ref targets resolve to nodes.",
           "inputSchema": obj(json!({"ref":{"type":"string"},"project":{"type":"string"}}), json!(["ref"])) },
-        { "name": "haven_get_item", "description": "Fetch one item in full (prose + requested edges/artifacts/lineage); internal sync fields (public_id/sync_state/revision) are omitted. The detail door for an item shown compactly by haven_list_items/haven_next.",
+        { "name": "haven_get_item", "description": "Fetch one item in full (prose + requested edges/artifacts/lineage); internal sync fields (public_id/sync_state/revision) are omitted. The detail door for an item shown compactly by haven_list_items/haven_next. If the ref is superseded/archived the item still returns, but the response also carries `stale_ref` {ref, resolved_to:[live ref(s)]} — the work has moved; follow resolved_to.",
           "inputSchema": obj(json!({"ref":{"type":"string"},"project":{"type":"string"},"include":{"type":"array","items":{"type":"string"}}}), json!(["ref"])) },
         { "name": "haven_next", "description": "Items ready to dispatch (committed, ready, unblocked). Returns a compact view per item (identity + axes, no prose — fetch full via haven_get_item).",
           "inputSchema": obj(json!({"project":{"type":"string"},"owner":{"type":"string","enum":["human","ai"]},"limit":{"type":"integer"}}), json!([])) },
@@ -913,15 +945,15 @@ fn tools_list() -> Value {
           "inputSchema": obj(json!({"ref":{"type":"string"},"project":{"type":"string"},"before":{"type":"string"},"after":{"type":"string"}}), json!(["ref"])) },
         { "name": "haven_add_item", "description": "Create a work-graph item (node). `done_looks_like` is the acceptance statement output is verified against; `why` is a one-line provenance trace. `due_at` is an optional deadline as a calendar date YYYY-MM-DD (no time/timezone), validated on write. Pass `if_absent: true` to return an existing live item with the same normalized title (marked `existing: true`) instead of creating a duplicate; responses may carry `similar` — up to 3 live items with overlapping titles (advisory).",
           "inputSchema": obj(json!({"title":{"type":"string"},"project":{"type":"string"},"type":{"type":"string","description":"Node type. Leaves: task (default), code, research, data, design, admin. Containers (the only valid group targets): release, phase, gate. anchor = a long-lived project-docs / overview node."},"body":{"type":"string"},"done_looks_like":{"type":"string"},"why":{"type":"string"},"due_at":{"type":"string"},"status":{"type":"string"},"priority":{"type":"integer","minimum":0,"maximum":4},"commit":{"type":"boolean"},"assign":{"type":"string","enum":["human","ai"]},"parent":{"type":"string"},"depends_on":{"type":"string"},"group":{"type":"string","description":"Add this new item to a release/phase/gate container (creates a grouping edge from that container to this item)."},"if_absent":{"type":"boolean"}}), json!(["title"])) },
-        { "name": "haven_update_item", "description": "Update maturity/commitment/ownership/grouping of an item. Set `done_looks_like` (acceptance) when it becomes ready so dispatch can verify against it. `due_at` sets the YYYY-MM-DD deadline (validated on write); pass `\"none\"` to clear it. Pass `group` to add the item to a release/phase/gate container (mirrors haven_add_item). Returns the updated item in full (same shape as haven_get_item).",
+        { "name": "haven_update_item", "description": "Update maturity/commitment/ownership/grouping of an item. Set `done_looks_like` (acceptance) when it becomes ready so dispatch can verify against it. `due_at` sets the YYYY-MM-DD deadline (validated on write); pass `\"none\"` to clear it. Pass `group` to add the item to a release/phase/gate container (mirrors haven_add_item). Returns the updated item in full (same shape as haven_get_item). If the ref is superseded/archived the update still applies, but the response carries `stale_ref` {ref, resolved_to} — re-target the live item.",
           "inputSchema": obj(json!({"ref":{"type":"string"},"title":{"type":"string"},"body":{"type":"string"},"done_looks_like":{"type":"string"},"why":{"type":"string"},"due_at":{"type":"string"},"status":{"type":"string"},"priority":{"type":"integer","minimum":0,"maximum":4},"type":{"type":"string","description":"Node type. Leaves: task (default), code, research, data, design, admin. Containers (the only valid group targets): release, phase, gate. anchor = a long-lived project-docs / overview node."},"wait":{"type":"string","enum":["on_human","on_dependency","on_external","none"],"description":"none clears the wait"},"commit":{"type":"boolean"},"assign":{"type":"string","enum":["human","ai"]},"group":{"type":"string","description":"Add this item to a release/phase/gate container (creates a grouping edge from that container to this item). To remove, use haven_add_edge {kind:\"grouping\", remove:true}."},"actor":{"type":"string"},"project":{"type":"string"}}), json!(["ref"])) },
-        { "name": "haven_add_edge", "description": "Add (or `remove:true`) a structural edge; direction matters. decomposition: from=parent → to=child. dependency: from=the blocked item → to=its blocker (the prerequisite). grouping: from=container → to=member, and the container (`from`) MUST be a release/phase/gate node.",
+        { "name": "haven_add_edge", "description": "Add (or `remove:true`) a structural edge; direction matters. decomposition: from=parent → to=child. dependency: from=the blocked item → to=its blocker (the prerequisite). grouping: from=container → to=member, and the container (`from`) MUST be a release/phase/gate node. If an endpoint is superseded/archived the edge still forms, but the response carries `stale_ref` {ref, resolved_to} so you can re-point it at the live item.",
           "inputSchema": obj(json!({"kind":{"type":"string","enum":["decomposition","dependency","grouping"]},"from":{"type":"string"},"to":{"type":"string"},"remove":{"type":"boolean"},"project":{"type":"string"}}), json!(["kind","from","to"])) },
         { "name": "haven_evolve", "description": "Split/merge/supersede items (lineage).",
           "inputSchema": obj(json!({"op":{"type":"string"},"refs":{"type":"array","items":{"type":"string"}},"into":{"type":"array","items":{"type":"string"}},"with":{"type":"string"},"title":{"type":"string"},"rationale":{"type":"string"},"project":{"type":"string"}}), json!(["op","refs"])) },
         { "name": "haven_lineage", "description": "Lineage graph around an item.",
           "inputSchema": obj(json!({"ref":{"type":"string"},"direction":{"type":"string","enum":["ancestors","descendants","both"]},"depth":{"type":"integer"},"project":{"type":"string"}}), json!(["ref"])) },
-        { "name": "haven_resolve_live", "description": "Resolve a possibly superseded/archived item ref forward through lineage to its live descendant(s); a live item resolves to itself. Use to follow stale refs found in handoffs or docs. Returns compact items.",
+        { "name": "haven_resolve_live", "description": "DEPRECATED (kept one release) — prefer the automatic stale_ref hint. haven_get_item/haven_update_item/haven_add_edge now resolve a superseded/archived ref forward through lineage automatically and ride a `stale_ref` {ref, resolved_to} field on the success response, so you rarely need to call this directly. Still resolves a possibly superseded/archived ref to its live descendant(s) (a live item resolves to itself); returns compact items.",
           "inputSchema": obj(json!({"ref":{"type":"string"},"project":{"type":"string"}}), json!(["ref"])) },
         { "name": "haven_search", "description": "Full-text search over item title/body.",
           "inputSchema": obj(json!({"query":{"type":"string"},"project":{"type":"string"},"limit":{"type":"integer"}}), json!(["query"])) },
@@ -1538,6 +1570,83 @@ mod tests {
         assert_eq!(out[0]["result"]["isError"], true);
         let payload = tool_payload(&out[0]);
         assert_eq!(payload["error"]["code"], "not_found");
+    }
+
+    // ---- HV-154: stale-ref hint + enriched not_found over MCP ---------------
+
+    /// get_item / update_item / add_edge on a SUPERSEDED ref ride a
+    /// `stale_ref{ref, resolved_to}` hint on the success response (not a silent
+    /// dead item).
+    #[test]
+    fn stale_ref_hint_rides_get_update_and_add_edge() {
+        let s = store();
+        let out = session(
+            &s,
+            &[
+                json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{
+                    "name":"haven_add_item","arguments":{"title":"Old"}}}),
+                json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{
+                    "name":"haven_add_item","arguments":{"title":"New"}}}),
+                json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{
+                    "name":"haven_add_item","arguments":{"title":"Other"}}}),
+                json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{
+                    "name":"haven_evolve","arguments":{"op":"supersede","refs":["HV-1"],"with":"HV-2"}}}),
+                // get on the stale ref: returns the item AND a stale_ref hint.
+                json!({"jsonrpc":"2.0","id":5,"method":"tools/call","params":{
+                    "name":"haven_get_item","arguments":{"ref":"HV-1"}}}),
+                // update on the stale ref: also flagged.
+                json!({"jsonrpc":"2.0","id":6,"method":"tools/call","params":{
+                    "name":"haven_update_item","arguments":{"ref":"HV-1","body":"touched"}}}),
+                // add_edge with a stale endpoint: flagged.
+                json!({"jsonrpc":"2.0","id":7,"method":"tools/call","params":{
+                    "name":"haven_add_edge","arguments":{"kind":"dependency","from":"HV-1","to":"HV-3"}}}),
+                // a LIVE ref carries no hint.
+                json!({"jsonrpc":"2.0","id":8,"method":"tools/call","params":{
+                    "name":"haven_get_item","arguments":{"ref":"HV-2"}}}),
+            ],
+        );
+
+        let got = tool_payload(&out[4]);
+        assert_eq!(got["ref"], "HV-1", "the (dead) item still resolves");
+        assert_eq!(got["stale_ref"]["ref"], "HV-1");
+        assert_eq!(got["stale_ref"]["resolved_to"][0], "HV-2");
+
+        let upd = tool_payload(&out[5]);
+        assert_eq!(upd["stale_ref"]["resolved_to"][0], "HV-2");
+
+        let edge = tool_payload(&out[6]);
+        assert_eq!(edge["ok"], true);
+        assert_eq!(edge["stale_ref"]["ref"], "HV-1");
+        assert_eq!(edge["stale_ref"]["resolved_to"][0], "HV-2");
+
+        let live = tool_payload(&out[7]);
+        assert!(
+            live.get("stale_ref").is_none(),
+            "a live ref must not carry a stale_ref hint, got: {live}"
+        );
+    }
+
+    /// A not_found over MCP carries the nearest-live + prefix hint in the error
+    /// message — the example wording from the acceptance.
+    #[test]
+    fn not_found_over_mcp_carries_nearest_live_and_prefix() {
+        let s = store();
+        let mut reqs: Vec<Value> = (1..=5)
+            .map(|i| {
+                json!({"jsonrpc":"2.0","id":i,"method":"tools/call","params":{
+                    "name":"haven_add_item","arguments":{"title":format!("item {i}")}}})
+            })
+            .collect();
+        reqs.push(
+            json!({"jsonrpc":"2.0","id":99,"method":"tools/call","params":{
+            "name":"haven_get_item","arguments":{"ref":"HV-91"}}}),
+        );
+        let out = session(&s, &reqs);
+        let payload = tool_payload(out.last().unwrap());
+        assert_eq!(payload["error"]["code"], "not_found");
+        let msg = payload["error"]["message"].as_str().unwrap();
+        assert!(msg.contains("closest live:"), "got: {msg}");
+        assert!(msg.contains("refs here use prefix HV"), "got: {msg}");
     }
 
     #[test]

@@ -9,7 +9,7 @@ use crate::error::{HavenError, Result};
 use crate::model::*;
 use crate::sortkey;
 
-use super::{item_from_row, new_uuid, NewArtifact, Store, ITEM_FROM, ITEM_SELECT};
+use super::{item_from_row, new_uuid, NewArtifact, StaleRef, Store, ITEM_FROM, ITEM_SELECT};
 
 /// Milliseconds since the Unix epoch — only used to disambiguate handoff
 /// artifact filenames so successive handoffs on one item don't overwrite.
@@ -380,6 +380,21 @@ impl Store {
     }
 
     /// Fetch one item, optionally hydrating edges/artifacts/lineage.
+    /// [`Store::get_item`] plus a [`StaleRef`] hint when the ref is dead
+    /// (superseded/archived) — the read still returns the item, but the caller
+    /// learns where the live work moved (HV-154). The MCP read surface uses this;
+    /// the CLI keeps `get_item` (the hint rides MCP responses).
+    pub fn get_item_hinted(
+        &self,
+        project: Option<&str>,
+        selector: &str,
+        include: &[Include],
+    ) -> Result<(Item, Option<StaleRef>)> {
+        let (project_id, _key) = self.require_project(project)?;
+        let (_node_id, hint) = self.resolve_node_id_hinted(project_id, selector)?;
+        Ok((self.get_item(project, selector, include)?, hint))
+    }
+
     pub fn get_item(
         &self,
         project: Option<&str>,
@@ -477,6 +492,20 @@ impl Store {
         let params = rusqlite::params_from_iter(args.iter().map(|b| b.as_ref()));
         let rows = stmt.query_map(params, item_from_row)?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// [`Store::update_item`] plus a [`StaleRef`] hint when the target ref is dead
+    /// (superseded/archived) — the update still applies, but the caller is told
+    /// the work has moved on (HV-154). The MCP write surface uses this.
+    pub fn update_item_hinted(
+        &self,
+        project: Option<&str>,
+        selector: &str,
+        upd: ItemUpdate,
+    ) -> Result<(Item, Option<StaleRef>)> {
+        let (project_id, _key) = self.require_project(project)?;
+        let (_node_id, hint) = self.resolve_node_id_hinted(project_id, selector)?;
+        Ok((self.update_item(project, selector, upd)?, hint))
     }
 
     /// Update mutable attributes (maturity axis + content). Bumps revision.

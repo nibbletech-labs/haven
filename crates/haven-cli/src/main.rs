@@ -2468,7 +2468,14 @@ fn cmd_evolve(project: Option<&str>, cmd: &EvolveCmd) -> Result<Output> {
             let g = s.evolve_graph(project, &a.reference, dir, a.depth)?;
             Ok(Output::Json(serde_json::to_value(g)?))
         }
-        EvolveCmd::Resolve { reference } => Ok(Output::Items(s.resolve_live(project, reference)?)),
+        EvolveCmd::Resolve { reference } => {
+            // `evolve resolve` is the CLI's one-release alias over the retired
+            // public `resolve_live` (HV-154); MCP reads now ride a stale_ref hint
+            // automatically. Kept working, deprecated at the Store boundary.
+            #[allow(deprecated)]
+            let live = s.resolve_live(project, reference)?;
+            Ok(Output::Items(live))
+        }
     }
 }
 

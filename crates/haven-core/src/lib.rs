@@ -23,5 +23,5 @@ pub use store::{
     DueUpdate, EdgeKind, EvolveResult, GraphEdge, HandoffInput, HandoffResult, ImportItem,
     ImportOutcome, Include, Integrity, ItemFilter, ItemUpdate, LineageDirection, LineageGraph,
     LineageLink, NewArtifact, NewItem, ProjectArchive, ProjectGraph, RestoreReport, SimilarItem,
-    Store, WaitUpdate,
+    StaleRef, Store, WaitUpdate,
 };

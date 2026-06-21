@@ -122,16 +122,16 @@ haven sync [status] [--watch]
 | `haven_list_items` | `status?, type?, owner?, committed?, icebox?, group?, wait?, stale?, limit?, offset?` — returns a compact, paginated envelope `{total, count, offset, items[]}` (default `limit` 100) |
 | `haven_inbox` | `owner?, limit?, offset?` — untriaged floaters (uncommitted, live, no `done_looks_like` yet); same compact paginated envelope as `haven_list_items` |
 | `haven_xref` | **`ref`** — cross-store links on the node's artifacts: a sorted `{node, outbound[], inbound[]}` report (outbound xrefs + inbound backlinks); read-only |
-| `haven_get_item` | **`ref`**, `include?: ["edges","artifacts","lineage"]` — the full item (prose + includes); the detail door |
+| `haven_get_item` | **`ref`**, `include?: ["edges","artifacts","lineage"]` — the full item (prose + includes); the detail door. A superseded/archived ref still returns the item but rides a `stale_ref` `{ref, resolved_to:[…]}` hint (the work moved — follow `resolved_to`) |
 | `haven_next` | `owner?, limit?` — compact items; `owner` filters ASSIGNMENT (`owner_kind = owner`), unassigned (NULL) excluded |
 | `haven_next_explain` | `owner?` — diagnose an empty queue (counts by reason + hint) |
 | `haven_rank` | **`ref`**, `before?` \| `after?` (exactly one) — reorder within a priority band (fine ordering) |
 | `haven_add_item` | **`title`**, `type?, body?, done_looks_like?, why?, status?, priority?, commit?, assign?, due_at?, parent?, depends_on?, group?, if_absent?` — with `if_absent` a normalized-title match returns the existing item (`existing: true`); responses may carry advisory `similar` |
-| `haven_update_item` | **`ref`**, `title?, body?, done_looks_like?, why?, status?, priority?, type?, wait?, due_at?, commit?, assign?, group?, actor?` (`due_at` accepts `"none"` to clear; `group` adds the item to a release/phase/gate container, mirroring `haven_add_item`) |
-| `haven_add_edge` | **`kind`** (`decomposition`\|`dependency`\|`grouping`), **`from`**, **`to`**, `remove?` — direction: `from→to` is parent→child / blocked→blocker / container→member (the container `from` must be release/phase/gate) |
+| `haven_update_item` | **`ref`**, `title?, body?, done_looks_like?, why?, status?, priority?, type?, wait?, due_at?, commit?, assign?, group?, actor?` (`due_at` accepts `"none"` to clear; `group` adds the item to a release/phase/gate container, mirroring `haven_add_item`). A dead (superseded/archived) `ref` still updates but rides a `stale_ref` hint |
+| `haven_add_edge` | **`kind`** (`decomposition`\|`dependency`\|`grouping`), **`from`**, **`to`**, `remove?` — direction: `from→to` is parent→child / blocked→blocker / container→member (the container `from` must be release/phase/gate). A dead endpoint still forms the edge but rides a `stale_ref` hint (re-point it) |
 | `haven_evolve` | **`op`** (`split`\|`merge`\|`supersede`), **`refs`**, `into?, with?, title?, rationale?, by?` |
 | `haven_lineage` | **`ref`**, `direction?, depth?` |
-| `haven_resolve_live` | **`ref`** — follow a stale (superseded/archived) ref to its live descendant(s); compact items |
+| `haven_resolve_live` | **`ref`** — _deprecated (kept one release):_ follow a stale (superseded/archived) ref to its live descendant(s); compact items. The read path now runs this automatically — `haven_get_item`/`haven_update_item`/`haven_add_edge` ride a `stale_ref` hint — so you rarely call this directly |
 | `haven_search` | **`query`**, `limit?` |
 | `haven_graph` | `lineage?, all?` — the whole project graph (compact nodes + `{kind,from,to}` edges) in one read; live nodes only unless `all` |
 | `haven_docs` | `project?` — live project-doc anchors and their artifacts |

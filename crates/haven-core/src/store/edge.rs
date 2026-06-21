@@ -7,7 +7,7 @@ use rusqlite::{params, Connection};
 use crate::error::{HavenError, Result};
 use crate::model::*;
 
-use super::{new_uuid, Store};
+use super::{new_uuid, StaleRef, Store};
 
 /// Which structural edge layer an `add_edge`/`remove_edge` call targets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -250,6 +250,30 @@ impl Store {
             EdgeKind::Dependency => self.depend(project, from, to, remove),
             EdgeKind::Grouping => self.group(project, from, to, remove),
         }
+    }
+
+    /// [`Store::add_edge`] plus a [`StaleRef`] hint when an endpoint is dead
+    /// (superseded/archived) — so a stale endpoint never lands silently in the
+    /// graph (HV-154). The edge still forms; the caller is told to re-point it.
+    /// The hint is keyed on `from` (the edge's subject), falling back to `to` so
+    /// a dead blocker/parent/container is caught too. The MCP write surface uses
+    /// this.
+    pub fn add_edge_hinted(
+        &self,
+        project: Option<&str>,
+        kind: EdgeKind,
+        from: &str,
+        to: &str,
+        remove: bool,
+    ) -> Result<Option<StaleRef>> {
+        let (project_id, _key) = self.require_project(project)?;
+        // Resolve both endpoints' hints up front (this also validates they exist,
+        // with the enriched not_found, before any write). Prefer the `from`
+        // endpoint's hint; fall back to `to`.
+        let (_from_id, from_hint) = self.resolve_node_id_hinted(project_id, from)?;
+        let (_to_id, to_hint) = self.resolve_node_id_hinted(project_id, to)?;
+        self.add_edge(project, kind, from, to, remove)?;
+        Ok(from_hint.or(to_hint))
     }
 
     // ---- edge loading -----------------------------------------------------
