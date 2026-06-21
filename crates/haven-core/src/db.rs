@@ -20,6 +20,7 @@ const MIGRATION_004: &str = include_str!("../../../migrations/004_due_at.sql");
 const MIGRATION_005: &str = include_str!("../../../migrations/005_owner_eligible.sql");
 const MIGRATION_006: &str = include_str!("../../../migrations/006_drop_owner_eligible.sql");
 const MIGRATION_007: &str = include_str!("../../../migrations/007_context_pack_role.sql");
+const MIGRATION_008: &str = include_str!("../../../migrations/008_project_lifecycle.sql");
 
 /// The ordered migration SQL, embedded at compile time. Adding a migration here
 /// is the only edit needed: the supported schema version is this list's length,
@@ -32,6 +33,7 @@ const MIGRATION_SQL: &[&str] = &[
     MIGRATION_005,
     MIGRATION_006,
     MIGRATION_007,
+    MIGRATION_008,
 ];
 
 /// Highest `user_version` this binary can open, derived from `MIGRATION_SQL`.
@@ -120,7 +122,118 @@ mod tests {
         // adding a migration forces a one-line edit here, a moment to confirm
         // intent (and to bump the release/version if needed).
         assert_eq!(latest_schema_migration(), MIGRATION_SQL.len() as i64);
-        assert_eq!(latest_schema_migration(), 7);
+        assert_eq!(latest_schema_migration(), 8);
+    }
+
+    /// HV-112: migration 008 adds the four project-lifecycle columns IN PLACE (no
+    /// rebuild): an existing `projects` row gains `status='active'` and NULL
+    /// `archived_at`/`archived_reason`/`deleted_at`, and the new `status` CHECK
+    /// rejects an out-of-domain value. Stage a row at schema v7, migrate to v8, and
+    /// assert defaults + the CHECK.
+    #[test]
+    fn migration_008_adds_project_lifecycle_columns_with_defaults_and_check() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+
+        // Stage at schema v7 (pre-008: the lifecycle columns do not exist).
+        let to_v7 = Migrations::new(
+            MIGRATION_SQL[..7]
+                .iter()
+                .copied()
+                .map(M::up)
+                .collect::<Vec<_>>(),
+        );
+        to_v7.to_latest(&mut conn).unwrap();
+        assert_eq!(
+            conn.pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))
+                .unwrap(),
+            7,
+            "staged at schema v7"
+        );
+        // The columns being added by 008 must NOT exist yet.
+        assert!(
+            conn.prepare("SELECT status FROM projects").is_err(),
+            "status must not exist before migration 008"
+        );
+
+        conn.execute(
+            "INSERT INTO projects (public_id, key, ref_prefix, title, client_id)
+             VALUES ('p-uuid', 'haven', 'HV', 'Haven', 'pc')",
+            [],
+        )
+        .unwrap();
+
+        // Migrate the SAME connection to latest (runs 008, the in-place ADD COLUMNs).
+        migrations().to_latest(&mut conn).unwrap();
+        let v8: i64 = conn
+            .pragma_query_value(None, "user_version", |r| r.get(0))
+            .unwrap();
+        assert_eq!(v8, latest_schema_migration());
+        assert_eq!(v8, 8);
+
+        // The existing row gained the four columns with the correct defaults.
+        let status: String = conn
+            .query_row("SELECT status FROM projects WHERE key='haven'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(status, "active", "status defaults to 'active'");
+        let archived_at: Option<String> = conn
+            .query_row(
+                "SELECT archived_at FROM projects WHERE key='haven'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let archived_reason: Option<String> = conn
+            .query_row(
+                "SELECT archived_reason FROM projects WHERE key='haven'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let deleted_at: Option<String> = conn
+            .query_row(
+                "SELECT deleted_at FROM projects WHERE key='haven'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(archived_at, None, "archived_at defaults NULL");
+        assert_eq!(archived_reason, None, "archived_reason defaults NULL");
+        assert_eq!(deleted_at, None, "deleted_at defaults NULL");
+
+        // The status CHECK is live: a bad value is rejected, a valid one accepted.
+        assert!(
+            conn.execute("UPDATE projects SET status='bogus' WHERE key='haven'", [])
+                .is_err(),
+            "the status CHECK must reject an out-of-domain value"
+        );
+        conn.execute(
+            "UPDATE projects SET status='archived' WHERE key='haven'",
+            [],
+        )
+        .unwrap();
+        // And a bad value at INSERT time is rejected too.
+        assert!(
+            conn.execute(
+                "INSERT INTO projects (public_id, key, ref_prefix, title, client_id, status)
+                 VALUES ('p2', 'other', 'OT', 'Other', 'pc2', 'nonsense')",
+                [],
+            )
+            .is_err(),
+            "the status CHECK must reject a bad value on INSERT"
+        );
+
+        // The supporting index exists.
+        let idx: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type='index' AND name='idx_projects_status'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(idx, 1, "idx_projects_status must be created");
     }
 
     /// HV-66: the migration-005 `nodes` REBUILD must preserve every row's
@@ -501,12 +614,20 @@ mod tests {
         )
         .unwrap();
 
-        // Migrate to latest (runs 007).
-        migrations().to_latest(&mut conn).unwrap();
+        // Migrate the SAME connection through 007 (the reclassification under test).
+        // Pinned to v7: later migrations (008+) don't touch artifacts, so this test
+        // owns the 007-era invariant and migration_008_* owns its own.
+        let to_v7 = Migrations::new(
+            MIGRATION_SQL[..7]
+                .iter()
+                .copied()
+                .map(M::up)
+                .collect::<Vec<_>>(),
+        );
+        to_v7.to_latest(&mut conn).unwrap();
         let v7: i64 = conn
             .pragma_query_value(None, "user_version", |r| r.get(0))
             .unwrap();
-        assert_eq!(v7, latest_schema_migration());
         assert_eq!(v7, 7);
 
         let role_of = |pubid: &str| -> String {

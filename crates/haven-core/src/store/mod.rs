@@ -226,7 +226,8 @@ impl Store {
         self.conn
             .query_row(
                 "SELECT id, public_id, key, ref_prefix, ref_counter, title, description,
-                        created_at, updated_at, revision, sync_state
+                        created_at, updated_at, revision, sync_state,
+                        status, archived_at, archived_reason, deleted_at
                  FROM projects WHERE key = ?1",
                 [key],
                 project_from_row,
@@ -238,7 +239,8 @@ impl Store {
     pub fn list_projects(&self) -> Result<Vec<Project>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, public_id, key, ref_prefix, ref_counter, title, description,
-                    created_at, updated_at, revision, sync_state
+                    created_at, updated_at, revision, sync_state,
+                    status, archived_at, archived_reason, deleted_at
              FROM projects ORDER BY key",
         )?;
         let rows = stmt.query_map([], project_from_row)?;
@@ -489,6 +491,10 @@ fn project_from_row(row: &Row<'_>) -> rusqlite::Result<Project> {
         updated_at: row.get(8)?,
         revision: row.get(9)?,
         sync_state: row.get(10)?,
+        status: row.get(11)?,
+        archived_at: row.get(12)?,
+        archived_reason: row.get(13)?,
+        deleted_at: row.get(14)?,
     })
 }
 

@@ -308,8 +308,11 @@ fn doctor_reports_install_health() {
         .unwrap()["detail"]
         .as_str()
         .unwrap();
+    // Derive the expected version from the binary so this never drifts when a
+    // migration is added (mirrors db.rs's "no hand-bumped constant" philosophy).
+    let supported = haven_core::db::latest_schema_migration();
     assert!(
-        schema_detail.contains("binary supports v7"),
+        schema_detail.contains(&format!("binary supports v{supported}")),
         "schema detail was: {schema_detail}"
     );
     assert_eq!(status_of(&before, "claude_mcp"), "warn");

@@ -176,6 +176,26 @@ sql_enum! {
     SyncState { Local => "local", Synced => "synced", Failed => "failed" }
 }
 
+sql_enum! {
+    /// Project lifecycle axis (HV-112) — a *separate, binary* axis from the node
+    /// maturity [`Status`]: a project has no maturity, so reopen→`active` is
+    /// unambiguous. Delete's terminal state is NOT a third value here — it is the
+    /// orthogonal `deleted_at` column — so this live read-path enum stays binary.
+    ProjectStatus { Active => "active", Archived => "archived" }
+}
+
+// Default = Active. Written as a manual impl rather than `#[derive(Default)]` +
+// `#[default]` because the shared `sql_enum!` macro derives a fixed trait set for
+// every enum it generates; teaching it `#[default]` would force a default variant
+// on NodeType/Status/etc. too. The lint's derive suggestion targets the macro,
+// not this type, so it is suppressed locally.
+#[allow(clippy::derivable_impls)]
+impl Default for ProjectStatus {
+    fn default() -> Self {
+        ProjectStatus::Active
+    }
+}
+
 /// A container's effective state, derived ON READ from its committed subtree —
 /// never stored, never parsed back (so no `sql_enum!`): a pure read projection.
 /// Computed for container nodes only; leaves carry `None`.
@@ -352,6 +372,17 @@ pub struct Project {
     pub updated_at: String,
     pub revision: i64,
     pub sync_state: SyncState,
+    /// Lifecycle axis (HV-112) — `active` | `archived`. Always serialized.
+    pub status: ProjectStatus,
+    /// When the project was soft-archived; NULL while active. Mirrors `Item::archived_at`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub archived_at: Option<String>,
+    /// Optional archive rationale (no lineage edge target for projects).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub archived_reason: Option<String>,
+    /// Delete tombstone marker (HV-112) — only ever set on a tombstoned row.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deleted_at: Option<String>,
 }
 
 /// The four edge layers, resolved to human `ref`s, attached to an item on
