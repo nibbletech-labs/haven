@@ -227,6 +227,11 @@ list (the same shape `add_edge` takes, so your fixes round-trip).
 
 - **Reference items by `ref`** (`HV-42`) in human-facing flows; `public_id` only
   across machines.
+- **Report progress as capabilities, not refs.** When you tell a person where things
+  are — status, what's next, what a run just shipped — lead with *what they can now do*
+  (before → now), grouped by capability. A list of `HV-…` refs or node titles is **not** a
+  progress report; it reads as backlog gobbledygook. Cite a ref only parenthetically for
+  traceability, never as the headline or the whole message. Keep it short and undense.
 - **Let `backlog.md` regenerate** — it re-renders after every mutation; never
   hand-edit it.
 - **Repo-local `Haven/` is a projection.** It is a visible alias for humans and
