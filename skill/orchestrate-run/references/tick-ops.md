@@ -85,8 +85,18 @@ recipe is what the step-7 verifier re-runs independently (`references/dispatch-p
 No Haven op — the unattended gate **is** the standalone `verify` skill (Mode 1): a fresh verifier
 agent given only `done_looks_like` + pack shared-requirements + the diff, running
 `build + lint + test` + an acceptance judgment, returning PASS / NEEDS-HUMAN / FAIL + evidence. The
-attended gate is a human plan-mode "go". **See `skill/verify` (and `references/dispatch-policy.md`
-§GATE) for the verifier contract** — the executor consumes the verdict, it does not re-implement it.
+attended gate is a human plan-mode "go".
+
+**Composing `verify` = FORWARDING its contract, because a spawned subagent does NOT inherit
+skills.** Read `skill/verify` (its `SKILL.md` + `references/verdict-contract.md` +
+`references/evaluation-lens.md`) and **inline that contract into the verifier's prompt**: the
+PASS / NEEDS-HUMAN / FAIL definitions, the independence rule (judge from `done_looks_like` +
+shared-requirements + diff only — never the builder's reasoning), and the **exhaustive
+acceptance-clause walk**. "See `skill/verify`" is *your* reading instruction; the verifier only
+knows what its prompt carries. The executor still does not **re-implement** the judgment — it
+forwards `verify`'s own contract verbatim so the one judgment runs in the spawned agent. (Sibling:
+HV-148 — the same forward-into-a-non-inheriting-subagent fix on the build path.) **Collect the
+verdict explicitly** — an idle signal means *fetch the verdict*, never proceed on an absent one.
 
 ## 8. Merge — serialized lock → rebase → re-gate → ff
 

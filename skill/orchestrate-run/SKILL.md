@@ -147,8 +147,14 @@ human-gated knowledge promotion — is in `references/executor-discipline.md`.
    + the pack's shared requirements + the diff — **not** the build agent's reasoning — which
    runs `build + lint + test` (exit-0) and judges acceptance, returning pass/fail + evidence.
    A same-context reviewer is structurally blind; the verifier's independence is the point.
-   *Attended:* native plan-mode human approval. A fail stays in the worktree — nothing
-   merged, siblings untouched → failure path (§ below).
+   **The verifier is a spawned subagent and does NOT inherit the `verify` skill** — so
+   "compose `verify`" means the executor **reads `skill/verify` and FORWARDS its contract into
+   the verifier's prompt**: the PASS / NEEDS-HUMAN / FAIL definitions
+   (`verify/references/verdict-contract.md`), the independence rule, and the **exhaustive
+   every-acceptance-clause walk** + lens (`verify/references/evaluation-lens.md`). Naming the
+   skill reaches nothing — the spawned agent only knows what its prompt carries; you forward the
+   contract, you don't re-implement the judgment. *Attended:* native plan-mode human approval. A
+   fail stays in the worktree — nothing merged, siblings untouched → failure path (§ below).
 8. **MERGE (serialized).** Acquire the single merge lock; `rebase` the batch branch onto
    current `main`; **re-run the deterministic gate post-rebase** (catches semantic conflicts
    a clean textual merge hid); only a green re-gate **fast-forwards** to `main`. Rebase
@@ -162,6 +168,14 @@ human-gated knowledge promotion — is in `references/executor-discipline.md`.
    **not** silently build the stale leaf — bounce that branch back to `orchestrate-plan`
    (the pack's "structurally-wrong → re-plan" escape, applied in the *run* loop). Remove
    the worktree; release the lock.
+
+**Collecting a spawned agent's result (build § 6, gate § 7).** A spawned agent often signals
+**idle/complete WITHOUT delivering its final report** — treat the idle signal as *"go fetch the
+report,"* never as the report itself. After any build or verifier agent goes idle, **explicitly
+retrieve and confirm its structured result** (the build self-check outcome / the
+PASS·NEEDS-HUMAN·FAIL verdict + evidence) — `SendMessage` to pull it when it didn't arrive — and
+**never advance the tick on a missing or empty report**: a silent absent verdict must not be read
+as a pass. The loop waits for the *report*, not merely the completion notification.
 
 Loop to step 0. **Converge** when `haven next --owner ai` is empty **and** nothing is in
 flight → report blocked-on-human items (`next --owner human` / `wait_state on_human`) and

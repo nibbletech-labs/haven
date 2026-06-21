@@ -35,9 +35,13 @@ effort on the first retry and bump on the second.
   standalone `verify` skill (Mode 1) — a fresh verifier agent given **only** the leaf's
   `done_looks_like` + the pack's shared-requirements + the diff (never the build agent's reasoning
   or worktree narrative), running `build + lint + test` (exit-0) + an independent acceptance
-  judgment, and returning a **PASS / NEEDS-HUMAN / FAIL** verdict + evidence. **See `skill/verify`
-  (`SKILL.md` + `references/verdict-contract.md`) for the contract — do not restate it here.** The
-  executor **consumes** the verdict; it never re-implements the judgment. Only **PASS** merges; a
+  judgment, and returning a **PASS / NEEDS-HUMAN / FAIL** verdict + evidence. **Read `skill/verify`
+  (`SKILL.md` + `references/verdict-contract.md` + `references/evaluation-lens.md`) for the contract
+  and FORWARD it into the verifier's prompt** — the verifier is a spawned subagent that inherits no
+  skill (§ Dispatch-prompt quality below), so naming the skill reaches nothing; *"do not restate it
+  here"* means don't duplicate the contract in **this** doc, **not** withhold it from the verifier.
+  The executor **consumes** the verdict — it forwards `verify`'s contract verbatim and never
+  re-implements the judgment. Only **PASS** merges; a
   **FAIL** keeps the batch in the worktree → failure path (STRIKES below); a **NEEDS-HUMAN**
   escalates straight to `handoff` (ambiguity won't clear on a blind retry). The verifier's
   independence by construction is the load-bearing quality guarantee — deterministic exit-0 alone
@@ -116,7 +120,10 @@ not to gesture at it.
 ## Don't peek, don't race
 
 Once a batch is dispatched, **do not read the agent's working files mid-flight**, and **do not
-predict or fabricate its results**. Wait for the completion notification, then process the output.
+predict or fabricate its results**. Wait for completion — then **explicitly retrieve and confirm
+the agent's report before processing it**: an idle/completion signal is **not** the report (agents
+frequently go idle without delivering one), so `SendMessage` to pull the structured result and
+**never advance on an absent or empty verdict** (a silent missing verdict must not read as a pass).
 Peeking tempts you to act on a half-written state (which the stateless reorient does not model)
 and racing tempts you to invent a verdict the verifier hasn't returned — both poison the one
 truth the loop trusts. The graph's `in_progress` status, the worktree, and the done-marker are
