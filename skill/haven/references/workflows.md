@@ -125,7 +125,14 @@ ordered plan.
      (workflow 10) **to the bar in `spec-quality.md`** — score the gap, **clarify with
      the human before writing** where it's genuinely under-defined (don't assume), and
      give the spec its backbone (scope boundary + constraints).
-   - Too big → split (workflow 7). Duplicate → merge (workflow 7).
+   - Too coarse to firm — you **can't** give it one concrete, testable `done_looks_like`
+     because it's secretly several outcomes (multi-level, with ordering and unknowns) → it
+     needs **decomposition, not grooming**: hand it to **`orchestrate-plan`** (the decompose
+     loop — recursive break to buildable leaves, real dependency edges, acceptance per leaf,
+     foundation-first for any shared contract, and AI-first research/discovery nodes for what
+     isn't knowable yet). Don't casually hand-create children — that under-thinks it.
+   - Just two or three obvious mechanical pieces (not a tree) → `split` (workflow 7).
+     Duplicate → `merge` (workflow 7).
    - Stale / won't-do → `haven item archive HV-7 --rationale "…"` (never delete).
    - Floating but clearly in-play → commit (workflow 2).
 3. Clear stale waits: if the external thing arrived,
@@ -135,6 +142,11 @@ ordered plan.
 - **Ready means dispatchable** — someone could pick it up and start *without
   further definition*. If you'd have to ask "what does this even mean," it's not
   ready.
+- **The acceptance test is the decompose signal.** Step 2's "set its acceptance" *is* the
+  test: if an item won't reduce to one concrete, testable `done_looks_like` because it's
+  several outcomes, that's the tell it's too coarse to groom — escalate to `orchestrate-plan`,
+  don't firm or shallow-split it. The boundary reads both ways: `orchestrate-plan` likewise
+  stops and defers back to this workflow when it hits an untriaged/stale `grooming_nudge`.
 - **Clarify, don't assume.** Scale the work to the gap (`spec-quality.md`: rich →
   fast-validate, thin → ask 2–4 targeted questions *then* write). With a human in the
   loop, asking beats inferring a pile of assumptions into a big unvalidated spec.
