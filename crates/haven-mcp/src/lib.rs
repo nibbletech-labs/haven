@@ -396,9 +396,57 @@ fn is_mutating_tool(name: &str) -> bool {
     )
 }
 
+/// Tools that resolve a single project (explicit `project` arg, else the sticky
+/// `current_project`). For these the success response echoes the resolved key,
+/// and a sticky fallback rides a warning (HV-153). The GLOBAL tools
+/// (`haven_list_projects`/`haven_add_project`) resolve no single project, so
+/// they're excluded — their results carry no project echo.
+fn is_project_scoped_tool(name: &str) -> bool {
+    !matches!(name, "haven_list_projects" | "haven_add_project")
+}
+
+/// The single response-builder chokepoint for the project echo (HV-153): on a
+/// project-scoped tool's success, stamp the resolved project key onto the result
+/// object, and — when the project was NOT passed explicitly (it came from the
+/// sticky `current_project` fallback) — ride a warning naming it, so a drifting
+/// sticky default is observable. Only stamps JSON *objects* (the array-shaped
+/// results — `haven_next`, `haven_search`, … — are left as-is); the key is
+/// otherwise observable on the abundant object-shaped responses.
+fn attach_project_echo(out: &mut Value, resolved: &str, explicit: bool) {
+    if let Value::Object(map) = out {
+        map.insert("project_resolved".into(), json!(resolved));
+        if !explicit {
+            map.insert(
+                "project_warning".into(),
+                json!(format!(
+                    "no `project` arg given — resolved to current_project {resolved:?} \
+                     (sticky default); pass `project` explicitly to be sure"
+                )),
+            );
+        }
+    }
+}
+
+/// Dispatch a `haven_*` tool, then (for project-scoped tools) stamp the resolved
+/// project echo onto the success payload — the HV-153 chokepoint, threaded once
+/// here rather than per-tool.
+fn call_tool(store: &Store, name: &str, a: &Value) -> Result<Value> {
+    let explicit_project = opt_str(a, "project").is_some();
+    let mut out = dispatch_tool(store, name, a)?;
+    if is_project_scoped_tool(name) {
+        // Resolve the key the dispatch actually used. Best-effort: a resolution
+        // error here would already have surfaced from dispatch_tool, so on the
+        // rare miss we simply skip the echo rather than mask the success.
+        if let Ok(resolved) = store.resolve_project_key(opt_str(a, "project")) {
+            attach_project_echo(&mut out, &resolved, explicit_project);
+        }
+    }
+    Ok(out)
+}
+
 /// Dispatch a `haven_*` tool to the matching `Store` method. Returns the raw
 /// JSON payload (wrapped into MCP content by the caller).
-fn call_tool(store: &Store, name: &str, a: &Value) -> Result<Value> {
+fn dispatch_tool(store: &Store, name: &str, a: &Value) -> Result<Value> {
     // Best-effort backup hooks; stderr only (stdout is the JSON-RPC channel).
     let backups = store.content_root().join("backups");
     // Quarantine warning on EVERY tools/call (incl. read-only), so a long
@@ -482,16 +530,32 @@ fn call_tool(store: &Store, name: &str, a: &Value) -> Result<Value> {
         // method as CLI `haven xref`.
         "haven_xref" => to_value(store.xref(project, req_str(a, "ref")?)?),
         "haven_get_item" => {
-            let includes = str_array(a, "include")
-                .iter()
-                .map(|s| Include::parse(s))
-                .collect::<Result<Vec<_>>>()?;
+            // HV-152: partial-accept — an invalid `include` rejects only the bad
+            // key while honouring the valid ones (no whole-set short-circuit).
+            // The valid keys load; the bad keys ride an `invalid_include` advisory
+            // naming them + the legal set.
+            let mut includes = Vec::new();
+            let mut invalid: Vec<String> = Vec::new();
+            for s in str_array(a, "include") {
+                match Include::parse(&s) {
+                    Ok(inc) => includes.push(inc),
+                    Err(_) => invalid.push(s),
+                }
+            }
             // HV-154: a dead (superseded/archived) ref still returns the item,
             // but rides a `stale_ref{ref, resolved_to}` hint so the caller learns
             // where the live work moved instead of acting on the dead node.
             let (item, stale) = store.get_item_hinted(project, req_str(a, "ref")?, &includes)?;
             let mut out = to_value(McpItem::full(&item))?;
             attach_stale_ref(&mut out, stale)?;
+            if !invalid.is_empty() {
+                if let Value::Object(map) = &mut out {
+                    map.insert(
+                        "invalid_include".into(),
+                        json!({ "keys": invalid, "valid": "edges, artifacts, lineage" }),
+                    );
+                }
+            }
             Ok(out)
         }
         "haven_next" => {
@@ -649,7 +713,11 @@ fn call_tool(store: &Store, name: &str, a: &Value) -> Result<Value> {
                         .ok_or_else(|| HavenError::Invalid("supersede needs refs[0]".into()))?;
                     store.evolve_supersede(project, source, req_str(a, "with")?, rationale, by)?
                 }
-                other => return Err(HavenError::Invalid(format!("unknown evolve op {other:?}"))),
+                other => {
+                    return Err(HavenError::Invalid(format!(
+                        "unknown evolve op {other:?} — valid: split, merge, supersede"
+                    )))
+                }
             };
             to_value(result)
         }
@@ -930,13 +998,13 @@ fn tools_list() -> Value {
     let obj = |props: Value, required: Value| json!({"type": "object", "properties": props, "required": required});
     json!([
         { "name": "haven_list_items", "description": "List items in a project under filters. Returns a compact, paginated view {total, count, offset, items[]} — each item carries identity + axes only (ref, title, type, status, committed, owner, priority, wait); fetch prose/detail for one item with haven_get_item. Truncated to `limit` (default 100) from `offset`, in (priority, sort_key, created_at) order; `total` is the full match count. `wait` (on_human|on_dependency|on_external) answers 'what's waiting on me / stuck on X'; `stale` (days) surfaces items untouched for N+ days.",
-          "inputSchema": obj(json!({"project":{"type":"string"},"status":{"type":"string"},"type":{"type":"string"},"owner":{"type":"string","enum":["human","ai"]},"committed":{"type":"boolean"},"icebox":{"type":"boolean"},"group":{"type":"string"},"wait":{"type":"string","enum":["on_human","on_dependency","on_external"]},"stale":{"type":"integer"},"limit":{"type":"integer"},"offset":{"type":"integer"}}), json!([])) },
+          "inputSchema": obj(json!({"project":{"type":"string"},"status":{"type":"string","enum":["discovery","definition","ready","in_progress","blocked","done","superseded","archived"]},"type":{"type":"string","enum":["task","code","research","data","design","admin","release","phase","gate","anchor"]},"owner":{"type":"string","enum":["human","ai"]},"committed":{"type":"boolean"},"icebox":{"type":"boolean"},"group":{"type":"string"},"wait":{"type":"string","enum":["on_human","on_dependency","on_external"]},"stale":{"type":"integer"},"limit":{"type":"integer"},"offset":{"type":"integer"}}), json!([])) },
         { "name": "haven_inbox", "description": "Untriaged floaters: uncommitted, live (not archived/superseded), with no acceptance (done_looks_like) set yet — the triage queue behind capture→triage→next. Same compact, paginated {total, count, offset, items[]} envelope as haven_list_items.",
           "inputSchema": obj(json!({"project":{"type":"string"},"owner":{"type":"string","enum":["human","ai"]},"limit":{"type":"integer"},"offset":{"type":"integer"}}), json!([])) },
         { "name": "haven_xref", "description": "Cross-store links (HV-69) on a node's artifacts: a deterministic, sorted {node, outbound[], inbound[]} report. `outbound` is every typed xref {relation, store, target, canonical?} on this node's own artifacts; `inbound` is every other Haven artifact whose xref `target` resolves to this node (backlinks). Read-only. Cross-store targets are reported as-is; only Haven-ref targets resolve to nodes.",
           "inputSchema": obj(json!({"ref":{"type":"string"},"project":{"type":"string"}}), json!(["ref"])) },
-        { "name": "haven_get_item", "description": "Fetch one item in full (prose + requested edges/artifacts/lineage); internal sync fields (public_id/sync_state/revision) are omitted. The detail door for an item shown compactly by haven_list_items/haven_next. If the ref is superseded/archived the item still returns, but the response also carries `stale_ref` {ref, resolved_to:[live ref(s)]} — the work has moved; follow resolved_to.",
-          "inputSchema": obj(json!({"ref":{"type":"string"},"project":{"type":"string"},"include":{"type":"array","items":{"type":"string"}}}), json!(["ref"])) },
+        { "name": "haven_get_item", "description": "Fetch one item in full (prose + requested edges/artifacts/lineage); internal sync fields (public_id/sync_state/revision) are omitted. The detail door for an item shown compactly by haven_list_items/haven_next. If the ref is superseded/archived the item still returns, but the response also carries `stale_ref` {ref, resolved_to:[live ref(s)]} — the work has moved; follow resolved_to. An unknown `include` key is rejected on its own (the valid keys still load) and reported under `invalid_include`.",
+          "inputSchema": obj(json!({"ref":{"type":"string"},"project":{"type":"string"},"include":{"type":"array","items":{"type":"string","enum":["edges","artifacts","lineage"]}}}), json!(["ref"])) },
         { "name": "haven_next", "description": "Items ready to dispatch (committed, ready, unblocked). Returns a compact view per item (identity + axes, no prose — fetch full via haven_get_item).",
           "inputSchema": obj(json!({"project":{"type":"string"},"owner":{"type":"string","enum":["human","ai"]},"limit":{"type":"integer"}}), json!([])) },
         { "name": "haven_next_explain", "description": "Diagnose why the dispatch queue is empty: the dispatchable count plus a per-reason breakdown (owner-mismatch, blocked-by-dependency, waiting, committed-not-ready, ready-but-uncommitted) and a hint. Call when haven_next returns nothing — diagnose, don't invent work.",
@@ -944,13 +1012,13 @@ fn tools_list() -> Value {
         { "name": "haven_rank", "description": "Reorder an item within its priority band: place it immediately before or after another item (exactly one of `before`/`after`). Fine ordering for 'do X before Y' — use `haven_update_item {priority}` for coarse band moves.",
           "inputSchema": obj(json!({"ref":{"type":"string"},"project":{"type":"string"},"before":{"type":"string"},"after":{"type":"string"}}), json!(["ref"])) },
         { "name": "haven_add_item", "description": "Create a work-graph item (node). `done_looks_like` is the acceptance statement output is verified against; `why` is a one-line provenance trace. `due_at` is an optional deadline as a calendar date YYYY-MM-DD (no time/timezone), validated on write. Pass `if_absent: true` to return an existing live item with the same normalized title (marked `existing: true`) instead of creating a duplicate; responses may carry `similar` — up to 3 live items with overlapping titles (advisory).",
-          "inputSchema": obj(json!({"title":{"type":"string"},"project":{"type":"string"},"type":{"type":"string","description":"Node type. Leaves: task (default), code, research, data, design, admin. Containers (the only valid group targets): release, phase, gate. anchor = a long-lived project-docs / overview node."},"body":{"type":"string"},"done_looks_like":{"type":"string"},"why":{"type":"string"},"due_at":{"type":"string"},"status":{"type":"string"},"priority":{"type":"integer","minimum":0,"maximum":4},"commit":{"type":"boolean"},"assign":{"type":"string","enum":["human","ai"]},"parent":{"type":"string"},"depends_on":{"type":"string"},"group":{"type":"string","description":"Add this new item to a release/phase/gate container (creates a grouping edge from that container to this item)."},"if_absent":{"type":"boolean"}}), json!(["title"])) },
+          "inputSchema": obj(json!({"title":{"type":"string"},"project":{"type":"string"},"type":{"type":"string","enum":["task","code","research","data","design","admin","release","phase","gate","anchor"],"description":"Node type. Leaves: task (default), code, research, data, design, admin. Containers (the only valid group targets): release, phase, gate. anchor = a long-lived project-docs / overview node."},"body":{"type":"string"},"done_looks_like":{"type":"string"},"why":{"type":"string"},"due_at":{"type":"string"},"status":{"type":"string","enum":["discovery","definition","ready","in_progress","blocked","done","superseded","archived"]},"priority":{"type":"integer","minimum":0,"maximum":4},"commit":{"type":"boolean"},"assign":{"type":"string","enum":["human","ai"]},"parent":{"type":"string"},"depends_on":{"type":"string"},"group":{"type":"string","description":"Add this new item to a release/phase/gate container (creates a grouping edge from that container to this item)."},"if_absent":{"type":"boolean"}}), json!(["title"])) },
         { "name": "haven_update_item", "description": "Update maturity/commitment/ownership/grouping of an item. Set `done_looks_like` (acceptance) when it becomes ready so dispatch can verify against it. `due_at` sets the YYYY-MM-DD deadline (validated on write); pass `\"none\"` to clear it. Pass `group` to add the item to a release/phase/gate container (mirrors haven_add_item). Returns the updated item in full (same shape as haven_get_item). If the ref is superseded/archived the update still applies, but the response carries `stale_ref` {ref, resolved_to} — re-target the live item.",
-          "inputSchema": obj(json!({"ref":{"type":"string"},"title":{"type":"string"},"body":{"type":"string"},"done_looks_like":{"type":"string"},"why":{"type":"string"},"due_at":{"type":"string"},"status":{"type":"string"},"priority":{"type":"integer","minimum":0,"maximum":4},"type":{"type":"string","description":"Node type. Leaves: task (default), code, research, data, design, admin. Containers (the only valid group targets): release, phase, gate. anchor = a long-lived project-docs / overview node."},"wait":{"type":"string","enum":["on_human","on_dependency","on_external","none"],"description":"none clears the wait"},"commit":{"type":"boolean"},"assign":{"type":"string","enum":["human","ai"]},"group":{"type":"string","description":"Add this item to a release/phase/gate container (creates a grouping edge from that container to this item). To remove, use haven_add_edge {kind:\"grouping\", remove:true}."},"actor":{"type":"string"},"project":{"type":"string"}}), json!(["ref"])) },
+          "inputSchema": obj(json!({"ref":{"type":"string"},"title":{"type":"string"},"body":{"type":"string"},"done_looks_like":{"type":"string"},"why":{"type":"string"},"due_at":{"type":"string"},"status":{"type":"string","enum":["discovery","definition","ready","in_progress","blocked","done","superseded","archived"]},"priority":{"type":"integer","minimum":0,"maximum":4},"type":{"type":"string","enum":["task","code","research","data","design","admin","release","phase","gate","anchor"],"description":"Node type. Leaves: task (default), code, research, data, design, admin. Containers (the only valid group targets): release, phase, gate. anchor = a long-lived project-docs / overview node."},"wait":{"type":"string","enum":["on_human","on_dependency","on_external","none"],"description":"none clears the wait"},"commit":{"type":"boolean"},"assign":{"type":"string","enum":["human","ai"]},"group":{"type":"string","description":"Add this item to a release/phase/gate container (creates a grouping edge from that container to this item). To remove, use haven_add_edge {kind:\"grouping\", remove:true}."},"actor":{"type":"string"},"project":{"type":"string"}}), json!(["ref"])) },
         { "name": "haven_add_edge", "description": "Add (or `remove:true`) a structural edge; direction matters. decomposition: from=parent → to=child. dependency: from=the blocked item → to=its blocker (the prerequisite). grouping: from=container → to=member, and the container (`from`) MUST be a release/phase/gate node. If an endpoint is superseded/archived the edge still forms, but the response carries `stale_ref` {ref, resolved_to} so you can re-point it at the live item.",
           "inputSchema": obj(json!({"kind":{"type":"string","enum":["decomposition","dependency","grouping"]},"from":{"type":"string"},"to":{"type":"string"},"remove":{"type":"boolean"},"project":{"type":"string"}}), json!(["kind","from","to"])) },
-        { "name": "haven_evolve", "description": "Split/merge/supersede items (lineage).",
-          "inputSchema": obj(json!({"op":{"type":"string"},"refs":{"type":"array","items":{"type":"string"}},"into":{"type":"array","items":{"type":"string"}},"with":{"type":"string"},"title":{"type":"string"},"rationale":{"type":"string"},"project":{"type":"string"}}), json!(["op","refs"])) },
+        { "name": "haven_evolve", "description": "Evolve items along lineage. `op` (split|merge|supersede) selects the operation, and which other args are required follows from it: split — refs[0] is the source, `into` lists the new child titles; merge — `refs` are the sources, `title` names the NEW node minted to replace them; supersede — refs[0] is the source folded into the EXISTING node named by `with`. So merge MINTS a new node (needs `title`) while supersede points at an existing one (needs `with`).",
+          "inputSchema": obj(json!({"op":{"type":"string","enum":["split","merge","supersede"],"description":"split: refs[0] → new children in `into`. merge: `refs` → a NEW node (requires `title`). supersede: refs[0] folded into an EXISTING node (requires `with`)."},"refs":{"type":"array","items":{"type":"string"}},"into":{"type":"array","items":{"type":"string"},"description":"split only: titles of the new child items."},"with":{"type":"string","description":"supersede only: the EXISTING ref that refs[0] is folded into."},"title":{"type":"string","description":"merge only: the title of the NEW node minted from `refs`."},"rationale":{"type":"string"},"by":{"type":"string"},"project":{"type":"string"}}), json!(["op","refs"])) },
         { "name": "haven_lineage", "description": "Lineage graph around an item.",
           "inputSchema": obj(json!({"ref":{"type":"string"},"direction":{"type":"string","enum":["ancestors","descendants","both"]},"depth":{"type":"integer"},"project":{"type":"string"}}), json!(["ref"])) },
         { "name": "haven_resolve_live", "description": "DEPRECATED (kept one release) — prefer the automatic stale_ref hint. haven_get_item/haven_update_item/haven_add_edge now resolve a superseded/archived ref forward through lineage automatically and ride a `stale_ref` {ref, resolved_to} field on the success response, so you rarely need to call this directly. Still resolves a possibly superseded/archived ref to its live descendant(s) (a live item resolves to itself); returns compact items.",
@@ -2153,5 +2221,282 @@ mod tests {
         assert_eq!(tool_payload(&out[3])["path"], "items/HV-1/spec.md");
         // After removal the artifact is gone.
         assert_eq!(out[4]["result"]["isError"], true);
+    }
+
+    // ---- HV-152: enum/closed-set messages + schema enums + include partial-accept
+
+    /// An invalid `include` key rejects ONLY the bad key while honouring the
+    /// valid ones (no whole-set short-circuit) — the valid include still loads,
+    /// and an `invalid_include` advisory names the bad key + the legal set.
+    #[test]
+    fn get_item_invalid_include_honours_valid_keys_and_flags_the_bad_one() {
+        let s = store();
+        let out = session(
+            &s,
+            &[
+                json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{
+                    "name":"haven_add_item","arguments":{"title":"Has edges"}}}),
+                json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{
+                    "name":"haven_add_item","arguments":{"title":"child","parent":"HV-1"}}}),
+                // include has one valid (edges) and one bogus (comments) key.
+                json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{
+                    "name":"haven_get_item","arguments":{"ref":"HV-1","include":["edges","comments"]}}}),
+            ],
+        );
+        // The call SUCCEEDS (not a whole-set rejection) …
+        assert_eq!(
+            out[2]["result"]["isError"], false,
+            "a bad include key must not fail the whole call"
+        );
+        let item = tool_payload(&out[2]);
+        // … the valid include is honoured (edges loaded) …
+        assert!(
+            item.get("edges").is_some(),
+            "the valid 'edges' include must still load: {item}"
+        );
+        // … and the bad key is signalled, naming the legal set.
+        let inv = &item["invalid_include"];
+        let bad: Vec<&str> = inv["keys"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert_eq!(bad, ["comments"], "names exactly the bad key: {item}");
+        let msg = inv["valid"].as_str().unwrap();
+        for v in ["edges", "artifacts", "lineage"] {
+            assert!(msg.contains(v), "names the legal include set: {msg}");
+        }
+    }
+
+    /// A get_item with ONLY a bad include key still returns the item (no valid
+    /// keys to honour) and flags the bad one — never a silent empty whole-set drop.
+    #[test]
+    fn get_item_all_invalid_include_still_returns_item_and_flags() {
+        let s = store();
+        let out = session(
+            &s,
+            &[
+                json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{
+                    "name":"haven_add_item","arguments":{"title":"Item"}}}),
+                json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{
+                    "name":"haven_get_item","arguments":{"ref":"HV-1","include":["bogus"]}}}),
+            ],
+        );
+        assert_eq!(out[1]["result"]["isError"], false);
+        let item = tool_payload(&out[1]);
+        assert_eq!(item["ref"], "HV-1");
+        assert_eq!(item["invalid_include"]["keys"][0], "bogus");
+    }
+
+    /// HV-152: get_item.include, add_item/update_item.type, and list/query status
+    /// carry JSON-Schema enums (the three HV-146 left without), and every enum
+    /// value is one the matching parser accepts (no schema↔model drift).
+    #[test]
+    fn type_status_include_carry_schema_enums() {
+        let tools = tools_list();
+        let tools = tools.as_array().unwrap();
+        let props = |name: &str| -> Value {
+            tools.iter().find(|t| t["name"] == name).unwrap()["inputSchema"]["properties"].clone()
+        };
+        let enum_of = |props: &Value, key: &str| -> Vec<String> {
+            props[key]["enum"]
+                .as_array()
+                .unwrap_or_else(|| panic!("{key} should carry an enum"))
+                .iter()
+                .map(|v| v.as_str().unwrap().to_string())
+                .collect()
+        };
+        // type enums are real NodeType values.
+        for tool in ["haven_add_item", "haven_update_item"] {
+            let vals = enum_of(&props(tool), "type");
+            assert!(!vals.is_empty(), "{tool}.type enum is empty");
+            for v in &vals {
+                assert!(
+                    NodeType::parse(v).is_ok(),
+                    "{tool}.type enum {v:?} not a real NodeType"
+                );
+            }
+        }
+        // status enums are real Status values.
+        for tool in ["haven_list_items", "haven_add_item", "haven_update_item"] {
+            let vals = enum_of(&props(tool), "status");
+            assert!(!vals.is_empty(), "{tool}.status enum is empty");
+            for v in &vals {
+                assert!(
+                    Status::parse(v).is_ok(),
+                    "{tool}.status enum {v:?} not a real Status"
+                );
+            }
+        }
+        // include is an ARRAY param — the enum constrains its items.
+        let inc: Vec<String> = props("haven_get_item")["include"]["items"]["enum"]
+            .as_array()
+            .expect("get_item.include.items should carry an enum")
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect();
+        assert!(!inc.is_empty(), "include item enum is empty");
+        for v in &inc {
+            assert!(
+                Include::parse(v).is_ok(),
+                "get_item.include enum {v:?} not a real Include"
+            );
+        }
+    }
+
+    /// HV-152 (folds HV-157): haven_evolve `op` is a closed enum [split|merge|
+    /// supersede], the description distinguishes merge (new node, needs title)
+    /// from supersede (existing node, needs `with`), and per-op required args are
+    /// signalled in-schema.
+    #[test]
+    fn evolve_op_is_enum_with_merge_vs_supersede_described() {
+        let tools = tools_list();
+        let tools = tools.as_array().unwrap();
+        let evolve = tools.iter().find(|t| t["name"] == "haven_evolve").unwrap();
+        let op = &evolve["inputSchema"]["properties"]["op"];
+        let vals: Vec<&str> = op["enum"]
+            .as_array()
+            .expect("evolve.op should carry an enum")
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert_eq!(vals, ["split", "merge", "supersede"]);
+        let desc = op["description"].as_str().unwrap();
+        // merge mints a NEW node (needs title); supersede folds into an EXISTING
+        // node (needs `with`) — both distinctions named in the schema.
+        assert!(desc.contains("merge") && desc.contains("supersede"));
+        assert!(desc.contains("title"), "merge needs title: {desc}");
+        assert!(desc.contains("with"), "supersede needs with: {desc}");
+    }
+
+    /// HV-152: a closed-set rejection surfaced over MCP carries the legal set in
+    /// the error message (so an agent self-corrects without a tools/list round-trip).
+    #[test]
+    fn closed_set_rejection_over_mcp_names_the_legal_set() {
+        let s = store();
+        let out = session(
+            &s,
+            &[
+                // bad status on add → error naming the set + the synonym hint.
+                json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{
+                    "name":"haven_add_item","arguments":{"title":"X","status":"doing"}}}),
+                // bad edge kind → error naming the set + the dependency synonym.
+                json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{
+                    "name":"haven_add_item","arguments":{"title":"Y"}}}),
+                json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{
+                    "name":"haven_add_edge","arguments":{"kind":"depends_on","from":"HV-1","to":"HV-2"}}}),
+            ],
+        );
+        assert_eq!(out[0]["result"]["isError"], true);
+        let msg = tool_payload(&out[0])["error"]["message"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert!(msg.contains("in_progress"), "status set named: {msg}");
+        assert!(msg.contains("in_progress"), "synonym mapped: {msg}");
+
+        assert_eq!(out[2]["result"]["isError"], true);
+        let msg = tool_payload(&out[2])["error"]["message"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert!(
+            msg.contains("dependency"),
+            "edge set + synonym named: {msg}"
+        );
+    }
+
+    // ---- HV-153: ref-omitting call echoes the resolved project; sticky warns ---
+
+    /// A project-scoped success response echoes the resolved project key, and a
+    /// call that fell back to the sticky `current_project` (no explicit `project`
+    /// arg) ALSO carries a `project_warning` naming it — so a drifting sticky
+    /// default is observable, not silent (HV-153). An explicit `project` echoes
+    /// the key with NO warning.
+    #[test]
+    fn project_resolved_echoes_and_sticky_fallback_warns() {
+        let s = store(); // seeds + selects "haven" as the sticky current_project
+        let out = session(
+            &s,
+            &[
+                // 1: explicit project → echoes project_resolved, NO warning.
+                json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{
+                    "name":"haven_add_item","arguments":{"title":"Explicit","project":"haven"}}}),
+                // 2: omitted project → resolves via sticky, echoes + WARNS.
+                json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{
+                    "name":"haven_add_item","arguments":{"title":"Sticky"}}}),
+                // 3: a read (get_item) omitting project also echoes + warns.
+                json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{
+                    "name":"haven_get_item","arguments":{"ref":"HV-1"}}}),
+                // 4: a read WITH explicit project echoes, no warning.
+                json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{
+                    "name":"haven_get_item","arguments":{"ref":"HV-1","project":"haven"}}}),
+                // 5: a list (compact envelope) omitting project echoes + warns.
+                json!({"jsonrpc":"2.0","id":5,"method":"tools/call","params":{
+                    "name":"haven_list_items","arguments":{}}}),
+            ],
+        );
+
+        // 1: explicit → echo, no warning.
+        let explicit = tool_payload(&out[0]);
+        assert_eq!(explicit["project_resolved"], "haven");
+        assert!(
+            explicit.get("project_warning").is_none(),
+            "explicit project must not warn: {explicit}"
+        );
+
+        // 2: sticky → echo + warning naming the resolved project.
+        let sticky = tool_payload(&out[1]);
+        assert_eq!(sticky["project_resolved"], "haven");
+        let warn = sticky["project_warning"].as_str().unwrap();
+        assert!(
+            warn.contains("haven"),
+            "sticky fallback warning must name the resolved project: {warn}"
+        );
+
+        // 3: read via sticky → echo + warn.
+        let read_sticky = tool_payload(&out[2]);
+        assert_eq!(read_sticky["project_resolved"], "haven");
+        assert!(read_sticky.get("project_warning").is_some());
+
+        // 4: read explicit → echo, no warn.
+        let read_explicit = tool_payload(&out[3]);
+        assert_eq!(read_explicit["project_resolved"], "haven");
+        assert!(read_explicit.get("project_warning").is_none());
+
+        // 5: list envelope (object) carries the echo + warning too.
+        let list = tool_payload(&out[4]);
+        assert_eq!(list["project_resolved"], "haven");
+        assert!(list.get("project_warning").is_some());
+    }
+
+    /// The project echo/warning is NOT hard-requiring `project` — a ref-omitting
+    /// call still succeeds (the footgun is mitigated, not removed), and the
+    /// GLOBAL tools (list_projects/add_project) carry no project echo at all.
+    #[test]
+    fn project_echo_does_not_hard_require_and_skips_global_tools() {
+        let s = store();
+        let out = session(
+            &s,
+            &[
+                // A project-less call still succeeds (no hard requirement).
+                json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{
+                    "name":"haven_add_item","arguments":{"title":"No project arg"}}}),
+                // A global tool carries no project_resolved/warning.
+                json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{
+                    "name":"haven_list_projects","arguments":{}}}),
+            ],
+        );
+        assert_eq!(
+            out[0]["result"]["isError"], false,
+            "must not hard-require project"
+        );
+        // list_projects is global → returns a bare array, no project echo.
+        let projects = tool_payload(&out[1]);
+        assert!(
+            projects.is_array(),
+            "list_projects returns the project array"
+        );
     }
 }

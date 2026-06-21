@@ -13,8 +13,16 @@ use crate::error::{HavenError, Result};
 
 /// Generate an enum whose serde representation and SQL representation are the
 /// same literal string for every variant — preventing wire/DB drift.
+///
+/// The generated `parse` error names the full legal value-set inline (HV-152),
+/// so a closed-set rejection is self-correcting in one step rather than echoing
+/// only the offending value. An optional `synonyms { "open" => "discovery", … }`
+/// block additionally NAMES common wrong values as the correct one in the error
+/// (the synonym is *named, never accepted* — it still errors).
 macro_rules! sql_enum {
-    ($(#[$meta:meta])* $name:ident { $($variant:ident => $lit:literal),+ $(,)? }) => {
+    // With an optional synonym map for the parse-error hint.
+    ($(#[$meta:meta])* $name:ident { $($variant:ident => $lit:literal),+ $(,)? }
+     $(synonyms { $($syn:literal => $canon:literal),+ $(,)? })?) => {
         $(#[$meta])*
         #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
         pub enum $name {
@@ -25,11 +33,29 @@ macro_rules! sql_enum {
             pub fn as_str(self) -> &'static str {
                 match self { $( $name::$variant => $lit ),+ }
             }
+            /// The comma-joined legal value-set, named in the `parse` error so a
+            /// closed-set rejection is recoverable in one step (HV-152).
+            pub fn legal_values() -> &'static str {
+                concat!($($lit, ", "),+).trim_end_matches(", ")
+            }
+            /// `Some(canonical)` when `s` is a recognized synonym of a legal value
+            /// — surfaced in the rejection ("use X"), never silently accepted.
+            fn synonym_hint(_s: &str) -> Option<&'static str> {
+                $( match _s { $( $syn => return Some($canon), )+ _ => {} } )?
+                None
+            }
             pub fn parse(s: &str) -> Result<Self> {
                 match s {
                     $( $lit => Ok($name::$variant), )+
-                    other => Err(HavenError::Invalid(
-                        format!("invalid {} value: {:?}", stringify!($name), other))),
+                    other => {
+                        let did_you_mean = match Self::synonym_hint(other) {
+                            Some(c) => format!(" — did you mean {c:?}?"),
+                            None => String::new(),
+                        };
+                        Err(HavenError::Invalid(format!(
+                            "invalid {} value: {:?}{} — valid: {}",
+                            stringify!($name), other, did_you_mean, Self::legal_values())))
+                    }
                 }
             }
         }
@@ -64,6 +90,7 @@ sql_enum! {
         Design => "design", Admin => "admin", Release => "release",
         Phase => "phase", Gate => "gate", Anchor => "anchor",
     }
+    synonyms { "bug" => "code", "feature" => "code", "idea" => "task", "story" => "task", "chore" => "task" }
 }
 
 impl NodeType {
@@ -82,6 +109,12 @@ sql_enum! {
         Discovery => "discovery", Definition => "definition", Ready => "ready",
         InProgress => "in_progress", Blocked => "blocked", Done => "done",
         Superseded => "superseded", Archived => "archived",
+    }
+    synonyms {
+        "open" => "discovery", "icebox" => "discovery", "new" => "discovery",
+        "backlog" => "ready", "todo" => "ready",
+        "doing" => "in_progress", "in-progress" => "in_progress", "wip" => "in_progress",
+        "closed" => "done", "complete" => "done", "completed" => "done",
     }
 }
 
@@ -125,6 +158,11 @@ sql_enum! {
         Handoff => "handoff", Decision => "decision", Scratch => "scratch",
         Source => "source", Delivery => "delivery", Vision => "vision",
         ContextPack => "context-pack",
+    }
+    synonyms {
+        "doc" => "spec", "docs" => "spec", "document" => "spec",
+        "context_pack" => "context-pack", "contextpack" => "context-pack", "pack" => "context-pack",
+        "result" => "delivery", "output" => "delivery", "deliverable" => "delivery",
     }
 }
 
@@ -517,5 +555,74 @@ mod tests {
         for s in ["on_human", "on_dependency", "on_external"] {
             assert_eq!(WaitState::parse(s).unwrap().as_str(), s);
         }
+    }
+
+    /// HV-152: every closed-set rejection names the legal value-set inline — not
+    /// just the offending value — so a wrong value is self-correcting in one step.
+    #[test]
+    fn enum_parse_error_names_the_legal_set() {
+        let err = Status::parse("doing").unwrap_err().to_string();
+        // The bad value is still named …
+        assert!(err.contains("doing"), "names the offending value: {err}");
+        // … and so is the full legal set (every variant literal).
+        for v in [
+            "discovery",
+            "definition",
+            "ready",
+            "in_progress",
+            "blocked",
+            "done",
+            "superseded",
+            "archived",
+        ] {
+            assert!(err.contains(v), "Status error must name {v:?}: {err}");
+        }
+
+        // NodeType too (same macro): the legal set rides the message.
+        let err = NodeType::parse("bug").unwrap_err().to_string();
+        for v in ["task", "code", "research", "design", "phase", "anchor"] {
+            assert!(err.contains(v), "NodeType error must name {v:?}: {err}");
+        }
+
+        // ArtifactRole too.
+        let err = ArtifactRole::parse("doc").unwrap_err().to_string();
+        for v in ["spec", "design", "delivery", "context-pack"] {
+            assert!(err.contains(v), "ArtifactRole error must name {v:?}: {err}");
+        }
+    }
+
+    /// HV-152: common synonyms are NAMED in the rejection as the correct value
+    /// (not silently accepted as aliases). bug/idea→type, open/icebox/doing/
+    /// backlog→status, doc→artifact role.
+    #[test]
+    fn enum_parse_error_names_common_synonyms() {
+        // type synonyms.
+        let err = NodeType::parse("bug").unwrap_err().to_string();
+        assert!(err.contains("code"), "bug should point to code: {err}");
+        let err = NodeType::parse("idea").unwrap_err().to_string();
+        assert!(err.contains("task"), "idea should point to task: {err}");
+        // status synonyms.
+        for (syn, want) in [
+            ("open", "discovery"),
+            ("icebox", "discovery"),
+            ("doing", "in_progress"),
+            ("backlog", "ready"),
+        ] {
+            let err = Status::parse(syn).unwrap_err().to_string();
+            assert!(
+                err.contains(want),
+                "status {syn:?} should point to {want:?}: {err}"
+            );
+        }
+        // artifact-role synonym.
+        let err = ArtifactRole::parse("doc").unwrap_err().to_string();
+        assert!(
+            err.contains("spec") || err.contains("design"),
+            "doc should point to a real role: {err}"
+        );
+        // Synonyms are NAMED, never accepted — they still error.
+        assert!(NodeType::parse("bug").is_err());
+        assert!(Status::parse("doing").is_err());
+        assert!(ArtifactRole::parse("doc").is_err());
     }
 }

@@ -280,6 +280,16 @@ impl Store {
         }
     }
 
+    /// The resolved project KEY for a selector — the same resolution every
+    /// project-scoped op uses (explicit `selector`, else the sticky
+    /// `current_project`). Exposed so the MCP layer can echo the key it actually
+    /// resolved on a success response, making a ref-omitting call's project
+    /// observable rather than silent (HV-153).
+    pub fn resolve_project_key(&self, selector: Option<&str>) -> Result<String> {
+        let (_id, key) = self.require_project(selector)?;
+        Ok(key)
+    }
+
     /// Resolve a project selector to `(id, key)`. Falls back to the current
     /// project when `selector` is `None`.
     pub(crate) fn require_project(&self, selector: Option<&str>) -> Result<(i64, String)> {

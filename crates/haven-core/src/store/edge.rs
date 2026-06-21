@@ -23,7 +23,23 @@ impl EdgeKind {
             "decomposition" => Ok(EdgeKind::Decomposition),
             "dependency" => Ok(EdgeKind::Dependency),
             "grouping" => Ok(EdgeKind::Grouping),
-            other => Err(HavenError::Invalid(format!("unknown edge kind {other:?}"))),
+            other => {
+                // Name common synonyms as the correct kind (HV-152) — never
+                // accept them silently as aliases.
+                let did_you_mean = match other {
+                    "depends_on" | "depends-on" | "blocks" | "blocked_by" | "blocked-by"
+                    | "needs" | "requires" => " — did you mean \"dependency\"?",
+                    "parent" | "child" | "subtask" | "decompose" => {
+                        " — did you mean \"decomposition\"?"
+                    }
+                    "group" | "member" | "contains" => " — did you mean \"grouping\"?",
+                    _ => "",
+                };
+                Err(HavenError::Invalid(format!(
+                    "unknown edge kind {other:?}{did_you_mean} \
+                     — valid: decomposition, dependency, grouping"
+                )))
+            }
         }
     }
 
@@ -362,5 +378,33 @@ impl Store {
                 other => Err(other),
             })?;
         Ok(found.is_some())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// HV-152: an unknown edge kind names the legal set inline (recovery aid),
+    /// and a common synonym (depends_on/blocks) is named as the correct kind.
+    #[test]
+    fn edge_kind_parse_error_names_set_and_synonyms() {
+        let err = EdgeKind::parse("blarg").unwrap_err().to_string();
+        assert!(err.contains("blarg"), "names the bad value: {err}");
+        for v in ["decomposition", "dependency", "grouping"] {
+            assert!(err.contains(v), "edge-kind error must name {v:?}: {err}");
+        }
+        // depends_on / blocks → dependency (named, not accepted).
+        for syn in ["depends_on", "blocks"] {
+            let err = EdgeKind::parse(syn).unwrap_err().to_string();
+            assert!(
+                err.contains("dependency"),
+                "{syn:?} should point to dependency: {err}"
+            );
+            assert!(
+                EdgeKind::parse(syn).is_err(),
+                "{syn:?} must not be accepted"
+            );
+        }
     }
 }

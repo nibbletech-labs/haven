@@ -1193,7 +1193,24 @@ impl Include {
             "edges" => Ok(Include::Edges),
             "artifacts" => Ok(Include::Artifacts),
             "lineage" => Ok(Include::Lineage),
-            other => Err(HavenError::Invalid(format!("unknown include {other:?}"))),
+            other => Err(HavenError::Invalid(format!(
+                "unknown include {other:?} — valid: edges, artifacts, lineage"
+            ))),
+        }
+    }
+}
+
+#[cfg(test)]
+mod include_tests {
+    use super::*;
+
+    /// HV-152: an unknown include names the legal set inline.
+    #[test]
+    fn include_parse_error_names_the_legal_set() {
+        let err = Include::parse("comments").unwrap_err().to_string();
+        assert!(err.contains("comments"), "names the bad value: {err}");
+        for v in ["edges", "artifacts", "lineage"] {
+            assert!(err.contains(v), "include error must name {v:?}: {err}");
         }
     }
 }
