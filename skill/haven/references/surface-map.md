@@ -150,6 +150,7 @@ haven sync [status] [--watch]
 | `haven_rm_artifact` | **`ref`**, one of `role?` \| `name?` \| `id?` — remove an artifact (row + backing file); an ambiguous `role` is refused |
 | `haven_mv_artifact` | **`ref`**, **`new_name`**, one of `role?` \| `name?` \| `id?` — rename the backing file (role/history preserved) |
 | `haven_status` | `project?` |
+| `haven_prime` | `project?` — one-shot session-context block (project state, committed queue with next-eligible flagged, in-progress/waiting incl. owner, core conventions, untriaged inbox) as a `prime` text block; read at session start instead of separate `status`/`next`/`list`/`inbox` calls |
 | `haven_list_projects` | `include_archived?` — discover backlogs (hides archived unless `include_archived:true`; a deleted project is never listed) |
 | `haven_add_project` | **`key`**, **`title`**, `prefix?, description?` |
 | `haven_archive_project` | **`key`**, `rationale?, by?` — soft-archive a project: retire it, namespace stays reserved (key/prefix/counter untouched, refs never reused). Reversible. The project-level analogue of `haven_archive`; there is no hard-delete tool |
@@ -193,6 +194,7 @@ The collapses that catch people out:
 | `item handoff` | `haven_handoff` |
 | `item complete` | `haven_complete_item` |
 | `next` / `next --explain` | `haven_next` / `haven_next_explain` |
+| `prime` | `haven_prime` |
 | `item rank` | `haven_rank` |
 | `search`, `status`, `artifact get`/`add` | `haven_search`, `haven_status`, `haven_get_artifact`/`haven_add_artifact` |
 | `artifact rm` / `mv` | `haven_rm_artifact` / `haven_mv_artifact` |

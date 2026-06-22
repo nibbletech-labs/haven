@@ -18,11 +18,20 @@ pub enum Output {
     Projects(Vec<Project>),
     Json(Value),
     Message(String),
+    /// A pre-rendered text block emitted verbatim in BOTH default and `--pretty`
+    /// modes — the block IS the payload (e.g. `haven prime`), not a JSON value.
+    Text(String),
     Unit,
 }
 
 impl Output {
     pub fn render(&self, pretty: bool) {
+        // A pre-rendered block is the payload itself — emit it verbatim in both
+        // modes (no JSON wrapping, no table), so `haven prime` is a clean block.
+        if let Output::Text(block) = self {
+            print!("{block}");
+            return;
+        }
         if pretty {
             self.render_pretty();
         } else {
@@ -44,6 +53,8 @@ impl Output {
             Output::Projects(v) => serde_json::to_value(v).unwrap_or(Value::Null),
             Output::Json(v) => v.clone(),
             Output::Message(m) => serde_json::json!({ "message": m }),
+            // Handled verbatim in `render`; this arm is only for completeness.
+            Output::Text(t) => serde_json::json!({ "text": t }),
             Output::Unit => serde_json::json!({ "ok": true }),
         }
     }
@@ -64,6 +75,8 @@ impl Output {
             Output::Project(p) => print!("{}", project_table(std::slice::from_ref(p))),
             Output::Projects(v) => print!("{}", project_table(v)),
             Output::Message(m) => println!("{m}"),
+            // Verbatim block — already intercepted in `render`; kept exhaustive.
+            Output::Text(t) => print!("{t}"),
             Output::Unit => println!("ok"),
             Output::Json(v) => println!("{}", serde_json::to_string_pretty(v).unwrap_or_default()),
         }

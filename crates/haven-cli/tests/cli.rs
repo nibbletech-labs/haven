@@ -69,6 +69,18 @@ impl Haven {
         );
     }
 
+    /// Run `haven <args>`, expect success, return raw stdout (not JSON) — for
+    /// commands that emit a plain text block, e.g. `haven prime` (HV-23).
+    fn text(&self, args: &[&str]) -> String {
+        let out = self.cmd(args).output().unwrap();
+        assert!(
+            out.status.success(),
+            "command {args:?} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    }
+
     /// Run `haven <args>` and return (stdout, stderr) regardless of exit status —
     /// used to assert the per-call telemetry line on stderr (HV-166).
     fn run_capturing(&self, args: &[&str]) -> (String, String) {
@@ -1170,6 +1182,76 @@ fn status_positional_key_acts_like_p() {
     let via_flag = h.json(&["status", "-p", "demo"]);
     assert_eq!(via_positional["project"], via_flag["project"]);
     assert_eq!(via_positional["project"], "demo");
+}
+
+#[test]
+fn prime_emits_all_sections() {
+    let h = demo();
+    // A committed-ready, AI-owned dispatch-eligible item (queue + next-flagged).
+    h.json(&[
+        "item",
+        "add",
+        "Ship the API",
+        "--status",
+        "ready",
+        "--done-looks-like",
+        "returns 200",
+        "--commit",
+        "--assign",
+        "ai",
+        "-p",
+        "demo",
+    ]); // DM-1
+        // An in-progress, human-owned item (in-progress/waiting section). Committed +
+        // with acceptance — a real in-flight item, so it is NOT an untriaged floater.
+    h.json(&[
+        "item",
+        "add",
+        "Refactor core",
+        "--status",
+        "ready",
+        "--done-looks-like",
+        "core slimmed",
+        "--commit",
+        "-p",
+        "demo",
+    ]); // DM-2
+    h.ok(&["item", "assign", "DM-2", "--to", "human", "-p", "demo"]);
+    h.ok(&[
+        "item",
+        "update",
+        "DM-2",
+        "--status",
+        "in_progress",
+        "-p",
+        "demo",
+    ]);
+    // An untriaged floater (uncommitted, no acceptance) for the inbox section.
+    h.json(&["item", "add", "Loose idea", "-p", "demo"]); // DM-3
+
+    // The positional key resolves like `-p` (mirrors `status`).
+    let block = h.text(&["prime", "demo"]);
+
+    // §1 project state.
+    assert!(block.contains("PROJECT demo (DM)"), "block:\n{block}");
+    // §2 committed queue with next-eligible flagged.
+    assert!(block.contains("QUEUE"), "block:\n{block}");
+    assert!(block.contains("> DM-1"), "next-eligible flag:\n{block}");
+    assert!(block.contains("Ship the API"), "block:\n{block}");
+    // §3 in-progress / waiting with owner.
+    assert!(block.contains("IN-PROGRESS / WAITING"), "block:\n{block}");
+    assert!(
+        block.contains("DM-2") && block.contains("human"),
+        "in-progress owner:\n{block}"
+    );
+    // §4 conventions.
+    assert!(block.contains("CONVENTIONS"), "block:\n{block}");
+    // §5 untriaged inbox (HV-82 reuse).
+    assert!(block.contains("INBOX (untriaged: 1)"), "block:\n{block}");
+    assert!(block.contains("DM-3"), "inbox floater:\n{block}");
+
+    // The positional and the -p flag resolve to the same block.
+    assert_eq!(block, h.text(&["prime", "-p", "demo"]));
 }
 
 // ───────────────── HV-53: live-only graph & item list views ─────────────────

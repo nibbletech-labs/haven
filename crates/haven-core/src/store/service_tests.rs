@@ -2672,3 +2672,102 @@ fn resolve_live_alias_still_resolves() {
     assert_eq!(live.len(), 1);
     assert_eq!(live[0].reference, "HV-2");
 }
+
+/// HV-23: `prime` assembles the one-shot session block from the reused queries —
+/// project state, the committed queue with the next-eligible items flagged, an
+/// in-progress item with its owner, the core conventions, and the untriaged-inbox
+/// count + a floater. Assert both the structured `Prime` and its rendered block.
+#[test]
+fn prime_assembles_all_sections() {
+    let s = store();
+
+    // A committed-ready, unblocked item — dispatch-eligible (in `next`), owned ai.
+    s.add_item(
+        None,
+        NewItem {
+            title: "Ship the API".into(),
+            done_looks_like: Some("returns 200".into()),
+            status: Some(Status::Ready),
+            commit: true,
+            assign: Some(OwnerKind::Ai),
+            ..Default::default()
+        },
+    )
+    .unwrap(); // HV-1
+
+    // An in-progress item with a human owner (not eligible for the queue). It
+    // carries acceptance + is committed — a real in-flight item, so it is NOT an
+    // untriaged floater (keeps the inbox section's count unambiguous).
+    let wip = s
+        .add_item(
+            None,
+            NewItem {
+                title: "Refactor core".into(),
+                done_looks_like: Some("core slimmed".into()),
+                status: Some(Status::Ready),
+                commit: true,
+                ..Default::default()
+            },
+        )
+        .unwrap(); // HV-2
+    s.assign_item(None, &wip.reference, OwnerKind::Human, None)
+        .unwrap();
+    s.update_item(
+        None,
+        &wip.reference,
+        ItemUpdate {
+            status: Some(Status::InProgress),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    // An untriaged floater (uncommitted, live, no acceptance) — inbox fodder.
+    add(&s, "Loose idea"); // HV-3
+
+    let prime = s.prime(None).unwrap();
+
+    // §1 Project state.
+    assert_eq!(prime.project, "haven");
+    assert_eq!(prime.prefix, "HV");
+
+    // §2 Committed queue with next-eligible flagged: HV-1 is dispatchable now.
+    assert_eq!(prime.next_eligible_total, 1);
+    let q = prime
+        .queue
+        .iter()
+        .find(|q| q.reference == "HV-1")
+        .expect("committed-ready HV-1 in the queue");
+    assert!(q.next_eligible, "HV-1 is dispatch-eligible");
+    assert_eq!(q.owner, Some(OwnerKind::Ai));
+
+    // §3 In-progress / waiting with owner: HV-2 in_progress, owned human.
+    let a = prime
+        .active
+        .iter()
+        .find(|a| a.reference == "HV-2")
+        .expect("the in-progress item is in the active section");
+    assert_eq!(a.status, Status::InProgress);
+    assert_eq!(a.owner, Some(OwnerKind::Human));
+
+    // §5 Untriaged-inbox view (HV-82 reuse): the floater is counted + surfaced.
+    assert_eq!(prime.inbox_untriaged, 1);
+    assert!(prime.inbox.iter().any(|f| f.reference == "HV-3"));
+
+    // The rendered block carries every section + the seeded items.
+    let block = prime.render();
+    assert!(block.contains("PROJECT haven (HV)"), "block: {block}");
+    assert!(block.contains("QUEUE"), "block: {block}");
+    assert!(
+        block.contains("> HV-1"),
+        "next-eligible flag on HV-1 missing: {block}"
+    );
+    assert!(block.contains("IN-PROGRESS / WAITING"), "block: {block}");
+    assert!(
+        block.contains("HV-2") && block.contains("human"),
+        "in-progress owner missing: {block}"
+    );
+    assert!(block.contains("CONVENTIONS"), "block: {block}");
+    assert!(block.contains("INBOX (untriaged: 1)"), "block: {block}");
+    assert!(block.contains("HV-3"), "inbox floater missing: {block}");
+}

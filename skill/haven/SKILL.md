@@ -45,8 +45,13 @@ Agent discovery is intentionally separate from agent-specific skill paths:
 
 Run every Haven interaction through these five steps:
 
-1. **Establish the project.** Every item lives in one (each mints its own `HV-1`,
-   `HV-2`… refs). Settle it once per session — see *Selecting a project* below.
+1. **Establish the project, then prime.** Every item lives in one (each mints its
+   own `HV-1`, `HV-2`… refs). Settle it once per session — see *Selecting a
+   project* below — then run **`haven prime`** (`haven_prime`) once at session
+   start: it returns ONE compact block — project state, the committed queue with
+   the next-eligible items flagged, in-progress/waiting (with owners), the core
+   conventions, and the untriaged inbox — so you orient from one read instead of
+   separate `status` + `next` + `item list` + `inbox` calls.
 2. **Classify the intent:** capture · groom · plan · dispatch · execute · handoff ·
    complete · evolve · archive. (One reply can span a few; do the smallest set.)
 3. **Use the smallest safe operation** — and prefer the *atomic* tool when one

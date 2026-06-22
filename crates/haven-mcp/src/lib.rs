@@ -7,6 +7,12 @@
 //! `tools/call` (+ the `initialized` notification and `ping`) — so we implement
 //! it directly rather than taking an SDK dependency.
 
+// The tool registry is one large `json!([...])` literal; each tool adds another
+// `serde_json::json!` expansion frame, and adding `haven_prime` (HV-23) tipped it
+// past the default 128-frame limit. Lift the ceiling rather than splitting the
+// single source-of-truth array.
+#![recursion_limit = "256"]
+
 use std::io::{self, BufRead, Write};
 use std::time::Instant;
 
@@ -941,6 +947,13 @@ fn dispatch_tool(store: &Store, name: &str, a: &Value) -> Result<Value> {
             )?)
         }
         "haven_status" => store.store_status(project),
+        // One-shot session-context block (HV-23): project state, committed queue
+        // (next flagged), in-progress/waiting, conventions, and the untriaged
+        // inbox — what a fresh agent reads at session start instead of N discovery
+        // calls. Returns the same rendered block the CLI prints, as a `prime`
+        // string field (valid JSON for the content envelope). No sticky session:
+        // `project` is a per-call arg like every other tool.
+        "haven_prime" => Ok(json!({ "prime": store.prime(project)?.render() })),
         // Discover backlogs — a remote/headless client has no local `current_project`
         // to fall back on, so it lists, then selects by passing `project` per call.
         "haven_list_projects" => {
@@ -1171,6 +1184,8 @@ fn tools_list() -> Value {
           "inputSchema": obj(json!({"ref":{"type":"string"},"new_name":{"type":"string"},"role":{"type":"string"},"name":{"type":"string"},"id":{"type":"string"},"project":{"type":"string"}}), json!(["ref","new_name"])) },
         { "name": "haven_status", "description": "Project counts and sync state.",
           "inputSchema": obj(json!({"project":{"type":"string"}}), json!([])) },
+        { "name": "haven_prime", "description": "One-shot session-context block: ONE compact, token-budgeted read for session start, instead of separate status + next + list + inbox calls. Returns a `prime` text block covering — project state (key/prefix + counts/sync), the committed-ready queue with the dispatch-eligible (next) items flagged, in-progress/waiting items with owner + what they're waiting on, the load-bearing Haven conventions, and a compact untriaged-inbox view (count + top floaters to triage) so handoff-swept captures resurface. Per-call `project` (no sticky session).",
+          "inputSchema": obj(json!({"project":{"type":"string"}}), json!([])) },
         { "name": "haven_list_projects", "description": "List all projects (backlogs). Use this to discover what's available; then target one by passing its `key` as the `project` arg on subsequent calls (selection is per-call, not a stored default). Hides archived projects unless `include_archived:true` (a deleted project is never listed).",
           "inputSchema": obj(json!({"include_archived":{"type":"boolean"}}), json!([])) },
         { "name": "haven_add_project", "description": "Create a new project (backlog / namespace). `key` is the slug used as the `project` arg; `prefix` (e.g. HV) seeds item refs and defaults to the first two letters of the key.",
@@ -1309,8 +1324,9 @@ mod tests {
         assert_eq!(out.len(), 2);
         assert_eq!(out[0]["result"]["serverInfo"]["name"], "haven");
         let tools = out[1]["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 30);
+        assert_eq!(tools.len(), 31);
         assert!(tools.iter().any(|t| t["name"] == "haven_import"));
+        assert!(tools.iter().any(|t| t["name"] == "haven_prime"));
         assert!(tools.iter().any(|t| t["name"] == "haven_inbox"));
         assert!(tools.iter().any(|t| t["name"] == "haven_xref"));
         assert!(tools.iter().any(|t| t["name"] == "haven_next"));
@@ -1454,6 +1470,44 @@ mod tests {
         let next = tool_payload(&out[1]);
         assert_eq!(next.as_array().unwrap().len(), 1);
         assert_eq!(next[0]["ref"], "HV-1");
+    }
+
+    /// HV-23: `haven_prime` returns the one-shot session block over MCP — the same
+    /// rendered block the CLI prints, carrying all five sections.
+    #[test]
+    fn prime_via_tools_returns_the_block() {
+        let s = store();
+        let out = session(
+            &s,
+            &[
+                // A committed-ready, dispatch-eligible item (queue + next-flagged).
+                json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{
+                    "name":"haven_add_item",
+                    "arguments":{"title":"Ship the API","status":"ready","commit":true,"assign":"ai","done_looks_like":"returns 200"}
+                }}),
+                // An untriaged floater for the inbox section.
+                json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{
+                    "name":"haven_add_item","arguments":{"title":"Loose idea"}
+                }}),
+                json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{
+                    "name":"haven_prime","arguments":{}
+                }}),
+            ],
+        );
+        assert_eq!(out[2]["result"]["isError"], false);
+        let payload = tool_payload(&out[2]);
+        let block = payload["prime"].as_str().expect("prime is a text block");
+        for marker in [
+            "PROJECT haven (HV)",
+            "QUEUE",
+            "> HV-1",
+            "IN-PROGRESS / WAITING",
+            "CONVENTIONS",
+            "INBOX (untriaged: 1)",
+            "HV-2",
+        ] {
+            assert!(block.contains(marker), "missing {marker:?} in:\n{block}");
+        }
     }
 
     /// HV-67: `due_at` over the MCP surface — set on add (full carries it),

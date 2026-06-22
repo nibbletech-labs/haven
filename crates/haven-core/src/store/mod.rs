@@ -9,6 +9,7 @@ mod edge;
 mod evolve;
 mod import;
 mod item;
+mod prime;
 mod query;
 #[cfg(test)]
 mod service_tests;
@@ -33,6 +34,7 @@ pub use item::{
 };
 // HV-30: the search path sanitizes raw user input through this helper before MATCH.
 pub(crate) use item::fts_user_query;
+pub use prime::{Prime, PrimeActiveItem, PrimeInboxItem, PrimeQueueItem};
 pub use query::{
     DocAnchor, GraphEdge, GroomingPressure, LineageDirection, LineageGraph, LineageLink,
     ProjectGraph, GROOMING_NUDGE_THRESHOLD,

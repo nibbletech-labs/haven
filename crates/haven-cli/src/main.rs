@@ -88,6 +88,13 @@ enum Command {
         #[arg(long = "if-absent")]
         if_absent: bool,
     },
+    /// One-shot session-context block: project state, the committed queue (next
+    /// flagged), in-progress/waiting, conventions, and the untriaged inbox — read
+    /// at session start instead of several list/next/status calls (HV-23).
+    Prime {
+        /// Optional project key — a bare positional that resolves like `-p <key>`.
+        project_key: Option<String>,
+    },
     /// The ready-to-dispatch query.
     Next(NextArgs),
     /// Untriaged floaters: uncommitted, live, no acceptance yet — the triage queue.
@@ -935,6 +942,7 @@ fn guard_kind(cmd: &Command) -> GuardKind {
         // corrective error before any project resolution (HV-158).
         | Command::Unknown(_) => GuardKind::Exempt,
         Command::Status { .. }
+        | Command::Prime { .. }
         | Command::Next(_)
         | Command::Inbox(_)
         | Command::Xref(_)
@@ -1060,6 +1068,12 @@ fn run(cli: &Cli) -> Result<Output> {
             // The bare positional resolves exactly like `-p`: explicit `-p` still
             // wins, else the positional, else the current project (HV-158).
             cmd_status(project.or(project_key.as_deref()))
+        }
+        Command::Prime { project_key } => {
+            // The bare positional resolves exactly like `-p` (mirrors `status`).
+            let s = config::open_store()?;
+            let block = s.prime(project.or(project_key.as_deref()))?.render();
+            Ok(Output::Text(block))
         }
         Command::Doctor => cmd_doctor(),
         Command::Config { cmd } => cmd_config(cmd),
