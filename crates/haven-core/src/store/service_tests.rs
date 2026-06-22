@@ -1326,6 +1326,118 @@ fn merge_forwards_edges_and_keeps_dependents_blocked() {
     );
 }
 
+/// HV-129: evolve split forwards the source's structural edges onto the
+/// designated-primary child (first --into). That child inherits the decomposition
+/// parent + the inbound dependency (so it is not orphaned); the other children stay
+/// edge-free; and a dependent of the split-away source stays blocked on the live
+/// primary child — dispatch must NOT treat the superseded source as satisfied —
+/// until that child is completed.
+#[test]
+fn split_forwards_edges_to_primary_child_and_keeps_dependents_blocked() {
+    let s = store();
+    let parent = add(&s, "Parent epic");
+    let src = ready_assigned(&s, "source", None);
+    let dep = ready_assigned(&s, "dependent", None);
+    s.decompose(None, &parent.reference, &src, false).unwrap();
+    s.depend(None, &dep, &src, false).unwrap(); // dep depends on src
+
+    let res = s
+        .evolve_split(None, &src, &["A".into(), "B".into()], None, None)
+        .unwrap();
+    assert_eq!(res.new.len(), 2);
+    let a = res.new[0].reference.clone();
+    let b = res.new[1].reference.clone();
+
+    // (1) First child A inherits BOTH the parent (decomposition) and the dependent
+    // (blocks) — it is not the orphaned zero-edge node HV-129 describes.
+    let a_edges = s
+        .get_item(None, &a, &[Include::Edges])
+        .unwrap()
+        .edges
+        .unwrap();
+    assert!(
+        a_edges.parents.contains(&parent.reference),
+        "primary child must inherit the decomposition parent (not orphaned)"
+    );
+    assert!(
+        a_edges.blocks.contains(&dep),
+        "primary child must inherit the dependent (dep now depends on A)"
+    );
+    // dep now depends on the live primary child, not the superseded source.
+    let dep_edges = s
+        .get_item(None, &dep, &[Include::Edges])
+        .unwrap()
+        .edges
+        .unwrap();
+    assert_eq!(
+        dep_edges.depends_on,
+        vec![a.clone()],
+        "dependent re-pointed onto the primary child"
+    );
+
+    // (2) Second child B has NO inherited structural edges.
+    let b_edges = s
+        .get_item(None, &b, &[Include::Edges])
+        .unwrap()
+        .edges
+        .unwrap();
+    assert!(
+        b_edges.parents.is_empty() && b_edges.blocks.is_empty(),
+        "a non-primary split child keeps no structural edges"
+    );
+
+    // (3) src keeps no structural edges (it's superseded).
+    let src_edges = s
+        .get_item(None, &src, &[Include::Edges])
+        .unwrap()
+        .edges
+        .unwrap();
+    assert!(
+        src_edges.parents.is_empty() && src_edges.blocks.is_empty(),
+        "a split-away source keeps no structural edges"
+    );
+
+    // (4) CRUCIAL silent-unblock regression: dep must NOT be dispatchable while the
+    // primary child A is incomplete. (Before HV-129, splitting src away silently made
+    // dep dispatchable — the dispatch predicate treats a superseded prerequisite as
+    // satisfied.)
+    let blocked: Vec<String> = s
+        .next(None, None, None)
+        .unwrap()
+        .into_iter()
+        .map(|i| i.reference)
+        .collect();
+    assert!(
+        !blocked.contains(&dep),
+        "dependent must stay blocked on the live primary child"
+    );
+
+    // (5) Ready + commit + complete A → dep unblocks and is dispatchable.
+    s.update_item(
+        None,
+        &a,
+        ItemUpdate {
+            status: Some(Status::Ready),
+            done_looks_like: Some("primary child done".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    s.commit_items(None, &[a.as_str()], None).unwrap();
+    s.complete_item(None, &a, CompleteInput::default()).unwrap();
+
+    let unblocked: Vec<String> = s
+        .next(None, None, None)
+        .unwrap()
+        .into_iter()
+        .map(|i| i.reference)
+        .collect();
+    assert!(
+        unblocked.contains(&dep),
+        "dependent must dispatch once the primary child completes"
+    );
+}
+
 /// HV-126: evolve supersede --with forwards the source's structural edges onto the
 /// live replacement, so the replacement inherits the source's parent + dependents
 /// and is not left orphaned.

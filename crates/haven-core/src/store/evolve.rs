@@ -276,6 +276,10 @@ impl Store {
             &serde_json::json!({ "from": source_ref }),
             &edges,
         )?;
+        // HV-129: the designated-primary child (first --into) inherits the source's
+        // structural edges, so it is not orphaned and the source's dependents stay
+        // blocked on it — same as merge/supersede (HV-126).
+        self.forward_structural_edges(&tx, &[source_id], new_ids[0])?;
         self.mark_superseded(&tx, source_id)?;
         tx.commit()?;
 

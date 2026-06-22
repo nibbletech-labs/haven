@@ -921,11 +921,17 @@ mod tests {
             Value::String(project.public_id.clone())
         );
 
-        // The decomposition edge references node public_ids.
+        // The decomposition edge references node public_ids. HV-129: split forwards
+        // the source child's structural edges to the primary split product, so the
+        // single surviving decomposition edge now points parent → split product
+        // (not the superseded `child`).
         assert_eq!(batch.decomposition_edges.len(), 1);
         let de = &batch.decomposition_edges[0];
         assert_eq!(de["parent_id"], Value::String(parent.public_id.clone()));
-        assert_eq!(de["child_id"], Value::String(child.public_id.clone()));
+        assert_eq!(
+            de["child_id"],
+            Value::String(split.new[0].public_id.clone())
+        );
 
         // The split produced a lineage event + edge, FK-translated to public_ids.
         assert_eq!(batch.lineage_events.len(), 1);
@@ -1034,14 +1040,15 @@ mod tests {
             .unwrap();
         a.decompose(None, &parent.reference, &child.reference, false)
             .unwrap();
-        a.evolve_split(
-            None,
-            &child.reference,
-            &["Split-of".into()],
-            Some("why"),
-            None,
-        )
-        .unwrap();
+        let split = a
+            .evolve_split(
+                None,
+                &child.reference,
+                &["Split-of".into()],
+                Some("why"),
+                None,
+            )
+            .unwrap();
         a.add_artifact(
             None,
             &parent.reference,
@@ -1105,8 +1112,11 @@ mod tests {
                 })
                 .unwrap()
         };
+        // HV-129: split forwarded the source child's decomposition edge onto the
+        // primary split product, so the surviving edge points parent → split product
+        // (not the superseded `child`).
         assert_eq!(de_parent, local_id(&parent.public_id));
-        assert_eq!(de_child, local_id(&child.public_id));
+        assert_eq!(de_child, local_id(&split.new[0].public_id));
 
         // Pulled rows are marked synced, so they don't bounce back on the next push.
         assert_eq!(
