@@ -864,7 +864,7 @@ fn main() {
         Ok(out) => {
             out.render(cli.pretty);
             maybe_render(&cli);
-            maybe_daily_backup(&cli);
+            maybe_daily_backup();
         }
         Err(err) => std::process::exit(output::render_error(&err)),
     }
@@ -1476,14 +1476,13 @@ fn maybe_render(cli: &Cli) {
     }
 }
 
-/// Opportunistic ≤1/day snapshot, fired after a mutating command. Best-effort:
-/// a backup failure must never fail the user's actual command. The cheap
-/// `last_backup` marker check inside makes this a no-op on all but the first
-/// mutating command of the day (no cron/launchd).
-fn maybe_daily_backup(cli: &Cli) {
-    if !mutates(&cli.command) {
-        return;
-    }
+/// Opportunistic ≤1/day snapshot, fired after any successful command — including
+/// read-only ones, since a day of direct content-file edits under
+/// `~/.haven/<project>/items/` may touch no DB-mutating command yet still wants a
+/// snapshot (HV-89). Best-effort: a backup failure must never fail the user's
+/// actual command. The cheap `last_backup` marker check inside makes this a no-op
+/// on all but the first command of the day (no cron/launchd).
+fn maybe_daily_backup() {
     let Ok(paths) = config::resolve() else {
         return;
     };

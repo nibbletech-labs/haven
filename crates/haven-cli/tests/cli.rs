@@ -1000,6 +1000,45 @@ fn backup_now_list_verify_and_restore_round_trip() {
 }
 
 #[test]
+fn read_only_command_triggers_daily_backup_once(/* HV-89 */) {
+    let h = Haven::new();
+
+    // Fresh home, no backup taken yet today.
+    assert!(h.json(&["backup", "list"])["backups"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+
+    // A single READ-ONLY command (`status` is not in `mutates`) takes exactly one
+    // opportunistic snapshot — the gap HV-89 closes: before, only DB-mutating
+    // commands fired the daily backup, so a day of pure read-only use (or direct
+    // content-file edits) took none. 0 -> 1.
+    h.json(&["status"]);
+    assert_eq!(
+        h.json(&["backup", "list"])["backups"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1,
+        "a read-only command should take one daily backup"
+    );
+
+    // A SECOND read-only command the same day adds none — the `last_backup` date
+    // marker caps it at one snapshot/day regardless of command count. Still 1.
+    // (It must be a command that *succeeds*: only the `Ok` arm reaches the backup
+    // trigger, so a no-op here proves the marker gate, not a failed command.)
+    h.json(&["status"]);
+    assert_eq!(
+        h.json(&["backup", "list"])["backups"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1,
+        "a second same-day read-only command must not take another backup"
+    );
+}
+
+#[test]
 fn repo_binding_gates_writes_and_warns_reads_on_project_mismatch() {
     let h = Haven::new();
     // Two projects; bind this repo (cwd = HAVEN_HOME) to `haven`.
