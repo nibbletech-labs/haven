@@ -696,6 +696,51 @@ fn error_envelope_and_exit_code() {
     assert_eq!(cycle["error"]["code"], "graph_rule");
 }
 
+/// HV-24: `item claim` atomically flips a ready item to in_progress + ai in one
+/// op; claiming an already-claimed item fails non-zero with a clear conflict.
+#[test]
+fn item_claim_takes_then_clashes() {
+    let h = Haven::new();
+    h.ok(&["setup"]);
+    h.ok(&[
+        "project", "add", "--key", "haven", "--title", "Haven", "--prefix", "HV",
+    ]);
+    h.ok(&["project", "use", "haven"]);
+
+    let item = h.json(&[
+        "item",
+        "add",
+        "Pick me up",
+        "--status",
+        "ready",
+        "--done-looks-like",
+        "done",
+        "--commit",
+    ]);
+    assert_eq!(item["ref"], "HV-1");
+
+    // First claim wins: one op sets owner=ai AND status=in_progress.
+    let claimed = h.json(&["item", "claim", "HV-1"]);
+    assert_eq!(claimed["status"], "in_progress");
+    assert_eq!(claimed["owner_kind"], "ai");
+
+    // Second claim is the clash: non-zero exit, conflict envelope.
+    let clash = h.fail(&["item", "claim", "HV-1"]);
+    assert_eq!(clash["error"]["code"], "conflict");
+    assert!(
+        clash["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("already claimed"),
+        "clash names the cause: {clash}"
+    );
+
+    // The held item is untouched by the losing claim.
+    let after = h.json(&["item", "get", "HV-1"]);
+    assert_eq!(after["status"], "in_progress");
+    assert_eq!(after["owner_kind"], "ai");
+}
+
 #[test]
 fn content_layer_artifact_note_render() {
     let h = Haven::new();

@@ -748,6 +748,94 @@ fn update_commit_assign_and_wait() {
     assert_eq!(assigned.assignee.as_deref(), Some("human:tom"));
 }
 
+/// HV-24: `claim` is the atomic compare-and-set take. A first claim sets
+/// owner + in_progress in one op; a second claim on the (now in_progress) item is
+/// the race/clash case — it must lose cleanly without touching the held item.
+#[test]
+fn claim_takes_a_ready_item_and_a_second_claim_clashes_cleanly() {
+    let s = store();
+    let a = add(&s, "Build the thing");
+    let r = a.reference.clone();
+
+    // First claim wins: owner→ai, status→in_progress, in one op.
+    let claimed = s.claim(None, &r, OwnerKind::Ai, Some("ai:claude")).unwrap();
+    assert_eq!(claimed.owner_kind, Some(OwnerKind::Ai));
+    assert_eq!(claimed.assignee.as_deref(), Some("ai:claude"));
+    assert_eq!(claimed.status, Status::InProgress);
+    assert!(
+        claimed.revision > a.revision,
+        "the winning claim bumps revision"
+    );
+
+    // Second claim is the concurrent clash: it must lose with a *conflict* error,
+    // not a generic one — and must not touch the item a worker already holds.
+    let clash = s
+        .claim(None, &r, OwnerKind::Human, Some("human:tom"))
+        .unwrap_err();
+    assert_eq!(
+        clash.code(),
+        "conflict",
+        "already-claimed is a conflict: {clash}"
+    );
+    assert!(
+        clash.to_string().contains("already claimed"),
+        "the clash names the cause: {clash}"
+    );
+
+    // The losing claim is a true no-op on the held item: owner, actor, and
+    // revision are exactly as the winner left them (no second revision bump).
+    let after = s.get_item(None, &r, &[]).unwrap();
+    assert_eq!(
+        after.owner_kind,
+        Some(OwnerKind::Ai),
+        "owner unchanged by the loser"
+    );
+    assert_eq!(
+        after.assignee.as_deref(),
+        Some("ai:claude"),
+        "actor unchanged"
+    );
+    assert_eq!(after.status, Status::InProgress);
+    assert_eq!(
+        after.revision, claimed.revision,
+        "the losing claim must not bump revision"
+    );
+}
+
+/// HV-24: a terminal/ineligible item is not on the dispatch queue, so claiming it
+/// errors cleanly — and with a *distinct* message from the already-claimed clash.
+#[test]
+fn claim_on_a_terminal_item_errors_cleanly() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = Store::open_in_memory_at(dir.path()).unwrap();
+    s.add_project("haven", Some("HV"), "Haven", None).unwrap();
+    s.use_project("haven").unwrap();
+    let a = s
+        .add_item(
+            None,
+            NewItem {
+                title: "Already done".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    s.complete_item(None, &a.reference, CompleteInput::default())
+        .unwrap();
+
+    let err = s
+        .claim(None, &a.reference, OwnerKind::Ai, None)
+        .unwrap_err();
+    assert_eq!(
+        err.code(),
+        "conflict",
+        "ineligible claim is a conflict: {err}"
+    );
+    assert!(
+        err.to_string().contains("cannot claim a done"),
+        "names the not-claimable state, distinct from already-claimed: {err}"
+    );
+}
+
 #[test]
 fn next_respects_ready_committed_wait_and_dependencies() {
     let s = store();

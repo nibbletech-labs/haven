@@ -461,6 +461,7 @@ fn is_mutating_tool(name: &str) -> bool {
             | "haven_reopen_project"
             | "haven_archive"
             | "haven_reopen"
+            | "haven_claim"
             | "haven_handoff"
             | "haven_complete_item"
             | "haven_import"
@@ -994,6 +995,16 @@ fn dispatch_tool(store: &Store, name: &str, a: &Value) -> Result<Value> {
             opt_str(a, "rationale"),
             opt_str(a, "by"),
         )?),
+        // Atomic claim: set owner + in_progress in one guarded compare-and-set.
+        // Owner defaults to `ai` (claim-on-pickup is the agent-dispatch case);
+        // errors with a conflict if the item is already claimed/in_progress.
+        "haven_claim" => {
+            let owner = match opt_str(a, "owner") {
+                Some(o) => OwnerKind::parse(o)?,
+                None => OwnerKind::Ai,
+            };
+            to_value(store.claim(project, req_str(a, "ref")?, owner, opt_str(a, "actor"))?)
+        }
         // Atomic baton-pass (ai↔human): record a handoff note, flip owner, set
         // wait/status in one call — the transition agents otherwise botch.
         "haven_handoff" => {
@@ -1198,6 +1209,8 @@ fn tools_list() -> Value {
           "inputSchema": obj(json!({"ref":{"type":"string"},"rationale":{"type":"string"},"by":{"type":"string"},"project":{"type":"string"}}), json!(["ref"])) },
         { "name": "haven_reopen", "description": "Revive an archived/superseded item back into the maturity flow (status→discovery), emitting a lineage event.",
           "inputSchema": obj(json!({"ref":{"type":"string"},"rationale":{"type":"string"},"by":{"type":"string"},"project":{"type":"string"}}), json!(["ref"])) },
+        { "name": "haven_claim", "description": "Atomically claim an item to work it: set the owner + status=in_progress in one guarded compare-and-set. `owner` defaults to `ai` (claim-on-pickup is the agent case); `actor` is an optional handle recorded as the assignee. Race-safe — if the item is already claimed/in_progress (or in a terminal state), it errors with a conflict and changes nothing. Per-call `project`. Frame in_progress as a soft claim: check `haven_list_items {status:\"in_progress\"}` before starting to spot a clash.",
+          "inputSchema": obj(json!({"ref":{"type":"string"},"owner":{"type":"string","enum":["human","ai"]},"actor":{"type":"string"},"project":{"type":"string"}}), json!(["ref"])) },
         { "name": "haven_handoff", "description": "Atomic baton-pass (ai↔human): records a handoff note (stamped from/to), flips the owner, and sets wait/status in one call. To a human defaults to blocked + on_human; to ai clears the wait and unblocks. Prefer this over doing assign + update + add_artifact separately.",
           "inputSchema": obj(json!({"ref":{"type":"string"},"to":{"type":"string","enum":["human","ai"]},"from":{"type":"string","enum":["human","ai"]},"note":{"type":"string"},"status":{"type":"string"},"wait":{"type":"string","enum":["on_human","on_dependency","on_external"]},"actor":{"type":"string"},"project":{"type":"string"}}), json!(["ref","to"])) },
         { "name": "haven_complete_item", "description": "Mark an item done: record `evidence` as an artifact (default role delivery), set status=done, and return the items/gates this unblocked (newly dispatchable, as compact items). Warns if no acceptance (done_looks_like) was set. The reliable 'I finished this' path — prefer over a bare status update.",
@@ -1324,7 +1337,8 @@ mod tests {
         assert_eq!(out.len(), 2);
         assert_eq!(out[0]["result"]["serverInfo"]["name"], "haven");
         let tools = out[1]["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 31);
+        assert_eq!(tools.len(), 32);
+        assert!(tools.iter().any(|t| t["name"] == "haven_claim"));
         assert!(tools.iter().any(|t| t["name"] == "haven_import"));
         assert!(tools.iter().any(|t| t["name"] == "haven_prime"));
         assert!(tools.iter().any(|t| t["name"] == "haven_inbox"));
@@ -1368,6 +1382,7 @@ mod tests {
             ("haven_list_items", "owner"),
             ("haven_add_artifact", "from"),
             ("haven_handoff", "to"),
+            ("haven_claim", "owner"),
         ] {
             for v in enum_of(&props(tool), key) {
                 assert!(

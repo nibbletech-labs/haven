@@ -229,6 +229,9 @@ haven_get_item     {"project":"haven","ref":"HV-1"}    // full item (prose + inc
 // Dispatch, and diagnose if empty.
 haven_next         {"project":"haven","owner":"ai"}
 haven_next_explain {"project":"haven","owner":"ai"}   // when next is empty
+// Claim on pickup: set owner + in_progress atomically (errors if already claimed).
+// in_progress doubles as a soft claim — list it to spot a clash before starting.
+haven_claim        {"project":"haven","ref":"HV-1"}        // owner defaults to ai
 // Atomic baton-pass and completion.
 haven_handoff      {"project":"haven","ref":"HV-1","to":"human",
                     "note":"Implemented; review the rate-limit defaults."}

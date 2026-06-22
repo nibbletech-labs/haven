@@ -738,6 +738,70 @@ impl Store {
         self.get_item(project, selector, &[])
     }
 
+    /// Atomic claim — take a ready item off the dispatch queue to work it, in
+    /// one compare-and-set: set the owner + an optional actor handle AND flip the
+    /// status to `in_progress`, all in a single guarded UPDATE. The owner
+    /// defaults to `ai` (claim-on-pickup is the agent-dispatch case); pass
+    /// `OwnerKind::Human` to claim a human's own pickup.
+    ///
+    /// **Race-safety lives in the guard, not in a lock.** The `WHERE … AND
+    /// status != 'in_progress'` clause makes the take atomic: two concurrent
+    /// claimers issue the same UPDATE, exactly one matches the row and wins
+    /// (`changed == 1`), the loser matches nothing (`changed == 0`) and gets a
+    /// clean already-claimed [`HavenError::Conflict`]. There is no read-then-write
+    /// gap to race through, so no mutex is needed. `in_progress` thus doubles as a
+    /// **soft claim** other agents can spot before starting (folds HV-52).
+    ///
+    /// **Eligibility:** a claim only makes sense on a not-yet-taken item, so the
+    /// guard rejects anything already `in_progress` (the race case) and any
+    /// terminal/ineligible state (`done`/`superseded`/`archived` — finished work
+    /// is not on the queue to take). All three are folded into the same guarded
+    /// WHERE so the check stays atomic; the `changed == 0` branch then reads the
+    /// current status to distinguish *already-claimed* from *not-claimable* in the
+    /// error message.
+    pub fn claim(
+        &self,
+        project: Option<&str>,
+        selector: &str,
+        owner: OwnerKind,
+        actor: Option<&str>,
+    ) -> Result<Item> {
+        let (project_id, _key) = self.require_project_mut(project)?;
+        let node_id = self.resolve_node_id(project_id, selector)?;
+
+        // Atomic take: claim ONLY if the item is on the queue (not already
+        // in_progress, not terminal). One statement, no read-then-write gap — the
+        // guard IS the race-safety. Two concurrent claimers both run this; exactly
+        // one matches the row, the other matches nothing (changed == 0).
+        let changed = self.conn.execute(
+            "UPDATE nodes SET owner_kind = ?1, assignee = ?2, status = 'in_progress',
+                 revision = revision + 1, updated_at = datetime('now'), sync_state = 'local'
+             WHERE id = ?3 AND status NOT IN ('in_progress', 'done', 'superseded', 'archived')",
+            params![owner, actor, node_id],
+        )?;
+        if changed == 0 {
+            // Lost the take (or the item was never claimable). Read the current
+            // status to give a specific reason: the already-in_progress race vs a
+            // terminal/ineligible state.
+            let current = self.get_item(project, selector, &[])?;
+            return match current.status {
+                Status::InProgress => Err(HavenError::Conflict(format!(
+                    "{selector} is already claimed (in_progress{}) — another worker holds it",
+                    current
+                        .assignee
+                        .as_deref()
+                        .map(|a| format!(", {a}"))
+                        .unwrap_or_default()
+                ))),
+                other => Err(HavenError::Conflict(format!(
+                    "cannot claim a {} item — only an open (not-yet-claimed) item can be taken off the queue",
+                    other.as_str()
+                ))),
+            };
+        }
+        self.get_item(project, selector, &[])
+    }
+
     /// Atomic handoff — the baton-pass when a node changes hands (ai↔human).
     /// Does in one call the three steps agents otherwise do inconsistently:
     /// records a `handoff` artifact (the note, stamped with `from`/`to`), flips

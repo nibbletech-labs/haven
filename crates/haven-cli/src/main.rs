@@ -499,6 +499,8 @@ enum ItemCmd {
         #[arg(required = true)]
         references: Vec<String>,
     },
+    /// Claim an item: set owner + in_progress atomically (errors if already claimed).
+    Claim(ItemClaimArgs),
     /// Assign execution ownership to human or ai.
     Assign(ItemAssignArgs),
     /// Hand an item over (ai↔human): record a handoff note, flip owner, set wait/status.
@@ -678,6 +680,17 @@ struct ItemAssignArgs {
     #[arg(long = "to")]
     to: String,
     /// Optional actor handle, e.g. ai:claude or human:tom.
+    #[arg(long)]
+    actor: Option<String>,
+}
+
+#[derive(Args)]
+struct ItemClaimArgs {
+    reference: String,
+    /// Who's taking it: ai (default) | human. Claim-on-pickup is the agent case.
+    #[arg(long = "as", default_value = "ai")]
+    owner: String,
+    /// Optional actor handle recorded as the assignee, e.g. ai:claude or human:tom.
     #[arg(long)]
     actor: Option<String>,
 }
@@ -962,6 +975,7 @@ fn guard_kind(cmd: &Command) -> GuardKind {
             | ItemCmd::Update(_)
             | ItemCmd::Commit { .. }
             | ItemCmd::Uncommit { .. }
+            | ItemCmd::Claim(_)
             | ItemCmd::Assign(_)
             | ItemCmd::Handoff(_)
             | ItemCmd::Complete(_)
@@ -2448,6 +2462,7 @@ fn item_op_name(cmd: &ItemCmd) -> &'static str {
         ItemCmd::Update(_) => "item.update",
         ItemCmd::Commit { .. } => "item.commit",
         ItemCmd::Uncommit { .. } => "item.uncommit",
+        ItemCmd::Claim(_) => "item.claim",
         ItemCmd::Assign(_) => "item.assign",
         ItemCmd::Handoff(_) => "item.handoff",
         ItemCmd::Complete(_) => "item.complete",
@@ -2590,6 +2605,15 @@ fn cmd_item(project: Option<&str>, cmd: &ItemCmd) -> Result<Output> {
         )?)),
         ItemCmd::Uncommit { references } => {
             Ok(Output::Items(s.uncommit_items(project, &refs(references))?))
+        }
+        ItemCmd::Claim(a) => {
+            let owner = OwnerKind::parse(&a.owner)?;
+            Ok(Output::Item(s.claim(
+                project,
+                &a.reference,
+                owner,
+                a.actor.as_deref(),
+            )?))
         }
         ItemCmd::Assign(a) => {
             let owner = OwnerKind::parse(&a.to)?;

@@ -186,9 +186,19 @@ haven next --explain --owner ai     # WHY the queue is empty (when it is)
   `ai` — `haven item assign <ref> --to ai` (or `--assign ai` on `item add`) — or it stays
   invisible to the agent queue. Never hand an agent a node assigned to a human and
   waiting on a real-world action.
-- **Advance maturity on pickup:** `--status in_progress` when work starts (and `assign`
-  to record *who's doing it*); finish with **`item complete`**
+- **Claim on pickup.** When you start an item, **`haven item claim <ref>`** (MCP
+  `haven_claim`) — it sets the owner *and* flips `in_progress` in **one atomic op**,
+  the reliable replacement for a separate `assign` + `--status in_progress`. It
+  defaults the owner to `ai` (claim-on-pickup is the agent case; `--as human` for a
+  human's own pickup) and errors cleanly if the item is **already claimed** — so two
+  workers reaching for the same ref can't both take it. Finish with **`item complete`**
   (workflow 9), not a bare `--status done` — it records evidence and tells you what unblocked.
+- **`in_progress` is a soft claim — use it for clash detection.** Before starting,
+  check **`haven item list --status in_progress`** to see what's already being worked;
+  treat an `in_progress` item as taken (someone holds it) and pick something else. The
+  atomic `claim` is the hard guard (the loser of a race gets a clean already-claimed
+  error); the `in_progress` list is the cheap pre-check that avoids the race in the
+  first place.
 
 ## 5. Multi-item delivery
 

@@ -74,6 +74,7 @@ haven item update <ref>… [--title] [--body] [--done-looks-like "…"] [--why "
                         [--due-at YYYY-MM-DD|none]   # 1+ refs, same update each; `none` clears due-at
 haven item commit <ref>… [--priority N]      # one or more refs (grooming)
 haven item uncommit <ref>…
+haven item claim <ref> [--as ai|human] [--actor <name>]   # atomic: owner + in_progress in one op
 haven item assign <ref> --to human|ai [--actor <name>]
 haven item handoff <ref> --to human|ai [--from] [--note "…"] [--status] [--wait] [--actor]
 haven item complete <ref> [--evidence "…"] [--role delivery] [--by]
@@ -157,6 +158,7 @@ haven sync [status] [--watch]
 | `haven_reopen_project` | **`key`**, `by?` — reopen an archived project (total restore; refs continue from the preserved counter) |
 | `haven_archive` | **`ref`**, `rationale?, by?` |
 | `haven_reopen` | **`ref`**, `rationale?, by?` |
+| `haven_claim` | **`ref`**, `owner?` (`human`\|`ai`, default `ai`), `actor?` — atomically set owner + `in_progress` (compare-and-set); errors with a conflict if already claimed/in_progress. Frames `in_progress` as a soft claim |
 | `haven_handoff` | **`ref`**, **`to`** (`human`\|`ai`), `from?, note?, status?, wait?, actor?` — atomic baton-pass |
 | `haven_complete_item` | **`ref`**, `evidence?, artifact_role?, by?` — mark done, record evidence, report what it unblocked (as compact items) |
 
@@ -191,6 +193,7 @@ The collapses that catch people out:
 | `evolve split`/`merge`/`supersede` | `haven_evolve {op, refs, …}` |
 | `evolve graph` / `evolve resolve` | `haven_lineage` / `haven_resolve_live` |
 | `item archive` / `reopen` | `haven_archive` / `haven_reopen` |
+| `item claim` | `haven_claim` |
 | `item handoff` | `haven_handoff` |
 | `item complete` | `haven_complete_item` |
 | `next` / `next --explain` | `haven_next` / `haven_next_explain` |
