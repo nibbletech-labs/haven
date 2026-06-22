@@ -1,0 +1,17 @@
+[
+  {"query": "ok that was a good discussion — now capture this so we don't lose it", "should_trigger": true},
+  {"query": "structure what we just discussed into proper items", "should_trigger": true},
+  {"query": "pull these thoughts together so they're tracked somewhere", "should_trigger": true},
+  {"query": "write that up as items I can come back to", "should_trigger": true},
+  {"query": "group these — they really belong together as one chunk of work", "should_trigger": true},
+  {"query": "set up tracks/streams for this so the strands don't tangle", "should_trigger": true},
+  {"query": "these all need doing — what order should these go in?", "should_trigger": true},
+  {"query": "mark these the current focus so I know what I'm on", "should_trigger": true},
+  {"query": "this item's a bit rough — firm this up before I start it", "should_trigger": true},
+  {"query": "tidy this item, the acceptance is vague", "should_trigger": true},
+  {"query": "these three are really the same thing — consolidate these into one", "should_trigger": true},
+  {"query": "HV-13 already tracks the cloud-sync work — create a task list and execute these sequentially", "should_trigger": true},
+
+  {"query": "remind me to call the dentist at 3", "should_trigger": false},
+  {"query": "make me a to-do list for tomorrow — gym, groceries, call mum", "should_trigger": false}
+]

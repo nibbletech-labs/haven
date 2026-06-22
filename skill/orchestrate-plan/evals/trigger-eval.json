@@ -9,6 +9,7 @@
   {"query": "break the servo v2 rebuild down into a stacked tree — the data model, the capture pipeline, the API, the mobile client, auth, deploy. it all needs doing and some of it depends on the rest", "should_trigger": true},
   {"query": "I'm starting a small-batch coffee roastery brand. I can roast and bag the beans but there's no name, no logo, no shop, no socials, nothing. take me from zero to taking orders online", "should_trigger": true},
   {"query": "stand up the full internal analytics platform for the team from scratch — event ingestion, the warehouse, auth, and the actual dashboards, then deploy it. greenfield, nothing exists yet", "should_trigger": true},
+  {"query": "set the servo v2 rebuild up as a work graph and I'll build the pieces myself — create the items then switch to plan mode", "should_trigger": true},
 
   {"query": "add a 'forgot password?' link under the login form on the storefront and wire it to the reset flow we already have", "should_trigger": false},
   {"query": "there's a bug in checkout.ts — the cart total doesn't recalculate when you change item quantity. can you fix it?", "should_trigger": false},

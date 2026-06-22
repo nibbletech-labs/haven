@@ -10,8 +10,17 @@ description: >-
   intent even when the user never says "Haven" or "backlog" — e.g. "add this to
   the backlog", "look at X later", "what should I work on next", "what's left for
   the launch", "break this down", "I've finished my part — who's next?", "what's
-  waiting on me?", "track that legal needs to sign off", "park this". Not for
-  ephemeral one-off reminders outside a tracked project.
+  waiting on me?", "track that legal needs to sign off", "park this"; on
+  post-discussion capture — "now capture this", "structure what we just
+  discussed", "pull these thoughts together", "write that up as items"; on
+  grouping / phasing / focus — "group these", "set up tracks/streams for this",
+  "what order should these go in", "mark these the current focus"; and on
+  grooming / consolidate — "firm this up", "tidy this item", "consolidate these
+  into one". When a Haven item already tracks the work, a "create a task list" /
+  "execute these sequentially" request resolves to child items + dependency edges
+  in that project's graph (which survive context-clears), not a parallel native
+  TaskCreate/TodoWrite list or a vault note. Not for ephemeral one-off reminders
+  outside a tracked project.
 ---
 
 # Haven — the work-graph
