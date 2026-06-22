@@ -163,6 +163,52 @@ Capturing an idea is a single bare node — floating, uncommitted, `discovery`.
 priority, and commit *only when the user actually engages*. When in doubt, capture
 the node and stop — premature structure just churns.
 
+### Handoff sweep: drain loose signal before the context dies
+
+**Capture-as-you-go is primary.** The moment a priority- or next-step-changing
+signal surfaces mid-session, fire it into **this project's inbox** — don't carry it
+in your head. The **handoff sweep is the BACKSTOP**, not the mechanism: a session
+can die before you ever reach a clean stopping point, so never rely on the sweep
+alone to flush a turn's worth of loose ends.
+
+At a session boundary / handoff / low-context moment, do the sweep: drain every
+loose signal into the existing per-project inbox using **EXISTING verbs only** — no
+new role, verb, or artifact type:
+
+- new work or a loose thread → `haven item add` / `haven_add_item` (floating,
+  uncommitted, no acceptance — a bare `discovery` node);
+- an ordering you just learned → `depend` (`haven depend --on` / `haven_add_edge`
+  kind `dependency`);
+- a priority you now know → `rank` (`haven item rank` / `haven_rank`);
+- a call a **human** must make → a `decision` artifact, or `haven item handoff` /
+  `haven_handoff` to `human` (so it's owned and waited-on, not stranded
+  `in_progress` — see the gotcha above).
+
+**Disposition bias — fire thoughts in LIBERALLY.** One line, uncommitted, no
+acceptance, no edges, no priority. This is *safe* precisely because triage is
+**two-way and cheap** (fold it up later, or archive it) and `haven prime`'s inbox
+view creates the **pull-back** — liberal capture surfaces on next resume, so it
+can't silently pile up. The cost of a stray inbox node is a one-line triage; the
+cost of a lost next-step is a derailed resume. Capture wins.
+
+**The discriminator — "could this change priorities or next steps?"**
+
+- **yes** ⇒ route it to the inbox (the verbs above);
+- **durable how-we-work knowledge** (a convention, a preference, a lesson) ⇒
+  **memory — OUT OF SCOPE here**, not the inbox;
+- **pure status** (what merely happened, changing nothing ahead) ⇒ **neither**.
+
+An **off-project** stray never lands silently in the current project — route it to
+the **HV-108 universal-capture sink** instead.
+
+**Read half (HV-23, already built — consumed, not rebuilt).** `haven prime`
+surfaces this swept inbox on resume; the sweep is the *write* half of that loop.
+The write half does **not** depend on, gate, or rebuild prime — it just feeds
+prime's already-built derived inbox view. There's **no new mechanic**: the drain
+lifecycle *is* that existing inbox view. (A typed session/continuation artifact role
+and a `haven_session_capture` verb are deliberately **not** introduced — deferred to
+a separate item.)
+
 ## Mental model (the concepts, and no more)
 
 - **Node = item.** One unified object for everything; a node with no edges, no
