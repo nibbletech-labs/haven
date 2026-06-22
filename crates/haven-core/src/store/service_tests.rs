@@ -2041,6 +2041,188 @@ fn container_flags_uncommitted_descendants() {
 }
 
 #[test]
+fn owner_rollup_derives_from_committed_subtree() {
+    // The HV-128 owner sibling of the status rollup: a container's `owner_rollup`
+    // is classified from the `owner_kind` of its LIVE, committed, owner-bearing
+    // descendants — from the SAME single live-descendants walk as `rollup_state`.
+    let s = store();
+    let phase = s
+        .add_item(
+            None,
+            NewItem {
+                title: "Phase".into(),
+                node_type: Some(NodeType::Phase),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let owner = |s: &Store| {
+        s.get_item(None, &phase.reference, &[])
+            .unwrap()
+            .owner_rollup
+    };
+
+    // No descendants yet → no classifiable owner → Unassigned (distinct from a
+    // leaf's None).
+    assert_eq!(owner(&s), Some(OwnerRollup::Unassigned));
+
+    // An owned but UNCOMMITTED descendant does not count — still Unassigned.
+    let uncommitted_ai = s
+        .add_item(
+            None,
+            NewItem {
+                title: "ai, not yet committed".into(),
+                parent: Some(phase.reference.clone()),
+                assign: Some(OwnerKind::Ai),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(owner(&s), Some(OwnerRollup::Unassigned));
+
+    // Commit it → now a live, committed, AI-owned descendant exists → Ai.
+    s.commit_items(None, &[uncommitted_ai.reference.as_str()], None)
+        .unwrap();
+    assert_eq!(owner(&s), Some(OwnerRollup::Ai));
+
+    // A second committed AI-owned descendant keeps it all-Ai.
+    s.add_item(
+        None,
+        NewItem {
+            title: "more ai".into(),
+            commit: true,
+            parent: Some(phase.reference.clone()),
+            assign: Some(OwnerKind::Ai),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(owner(&s), Some(OwnerRollup::Ai));
+
+    // Add a committed HUMAN-owned descendant → both present → Mixed.
+    let human = s
+        .add_item(
+            None,
+            NewItem {
+                title: "human work".into(),
+                commit: true,
+                parent: Some(phase.reference.clone()),
+                assign: Some(OwnerKind::Human),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(owner(&s), Some(OwnerRollup::Mixed));
+
+    // project_graph agrees with get_item for the same container — both rollups
+    // come from one walk, so they can't disagree about the descendant set.
+    let g = s.project_graph(None, false).unwrap();
+    let from_graph = g
+        .nodes
+        .iter()
+        .find(|n| n.reference == phase.reference)
+        .unwrap();
+    assert_eq!(from_graph.owner_rollup, Some(OwnerRollup::Mixed));
+    assert_eq!(
+        from_graph.owner_rollup,
+        s.get_item(None, &phase.reference, &[])
+            .unwrap()
+            .owner_rollup,
+        "get_item and project_graph must agree on owner_rollup"
+    );
+
+    // A leaf carries NO owner rollup (None, not Unassigned).
+    assert_eq!(
+        s.get_item(None, &human.reference, &[])
+            .unwrap()
+            .owner_rollup,
+        None
+    );
+}
+
+#[test]
+fn owner_rollup_all_human_and_dedups_across_edge_kinds() {
+    // All-human committed subtree → Human; and a node reachable via BOTH a
+    // grouping and a decomposition edge is counted ONCE (the union walk dedups),
+    // so it cannot tip an all-human container to Mixed by being double-counted.
+    let s = store();
+    let phase = s
+        .add_item(
+            None,
+            NewItem {
+                title: "Phase".into(),
+                node_type: Some(NodeType::Phase),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let owner = |s: &Store| {
+        s.get_item(None, &phase.reference, &[])
+            .unwrap()
+            .owner_rollup
+    };
+
+    s.add_item(
+        None,
+        NewItem {
+            title: "human a".into(),
+            commit: true,
+            parent: Some(phase.reference.clone()),
+            assign: Some(OwnerKind::Human),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(owner(&s), Some(OwnerRollup::Human));
+
+    // A single human-owned node reached via both edge kinds — counted once, the
+    // container stays Human (a double-count would be a no-op here, but the dedup
+    // is what guarantees one-walk parity with the status rollup).
+    s.add_item(
+        None,
+        NewItem {
+            title: "human b — both edges".into(),
+            commit: true,
+            parent: Some(phase.reference.clone()),
+            group: Some(phase.reference.clone()),
+            assign: Some(OwnerKind::Human),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(owner(&s), Some(OwnerRollup::Human));
+
+    // A container with descendants but NONE owner-bearing → Unassigned.
+    let bare_phase = s
+        .add_item(
+            None,
+            NewItem {
+                title: "Bare phase".into(),
+                node_type: Some(NodeType::Phase),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    s.add_item(
+        None,
+        NewItem {
+            title: "committed but unowned".into(),
+            commit: true,
+            parent: Some(bare_phase.reference.clone()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        s.get_item(None, &bare_phase.reference, &[])
+            .unwrap()
+            .owner_rollup,
+        Some(OwnerRollup::Unassigned),
+        "descendants present but none owner-bearing → Unassigned"
+    );
+}
+
+#[test]
 fn graph_walks_lineage_in_both_directions() {
     let s = store();
     let big = add(&s, "Big");

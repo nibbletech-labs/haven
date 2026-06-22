@@ -20,8 +20,8 @@ use haven_core::{
     telemetry::{self, TelemetryLine},
     Artifact, ArtifactKind, ArtifactRole, ArtifactSelector, CompleteInput, ContextPack, DueUpdate,
     EdgeKind, Edges, HandoffInput, HavenError, ImportItem, Include, Item, ItemFilter, ItemUpdate,
-    LineageDirection, LineageEvent, NewArtifact, NewItem, NodeType, OwnerKind, Result, RollupState,
-    StaleRef, Status, Store, WaitState, WaitUpdate,
+    LineageDirection, LineageEvent, NewArtifact, NewItem, NodeType, OwnerKind, OwnerRollup, Result,
+    RollupState, StaleRef, Status, Store, WaitState, WaitUpdate,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -93,6 +93,10 @@ struct McpItem<'a> {
     // Graph + full views only: the derived container rollup (containers only).
     #[serde(skip_serializing_if = "Option::is_none")]
     rollup_state: Option<RollupState>,
+    // Graph + full views only: the derived container owner rollup, the owner
+    // sibling of `rollup_state` (containers only, HV-128).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    owner_rollup: Option<OwnerRollup>,
     // Sibling of `rollup_state`: live uncommitted work exists beneath the
     // container, so a `done` rollup is never silently misleading (HV-104).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -144,6 +148,7 @@ impl<'a> McpItem<'a> {
             body: None,
             done_looks_like: None,
             rollup_state: None,
+            owner_rollup: None,
             has_uncommitted_descendants: None,
             why: None,
             due_at: None,
@@ -167,6 +172,7 @@ impl<'a> McpItem<'a> {
         McpItem {
             done_looks_like: item.done_looks_like.as_deref(),
             rollup_state: item.rollup_state,
+            owner_rollup: item.owner_rollup,
             has_uncommitted_descendants: item.has_uncommitted_descendants,
             context_pack: item.context_pack.as_ref(),
             context_pack_clash: item.context_pack_clash.as_deref(),
@@ -189,6 +195,7 @@ impl<'a> McpItem<'a> {
             body: item.body.as_deref(),
             done_looks_like: item.done_looks_like.as_deref(),
             rollup_state: item.rollup_state,
+            owner_rollup: item.owner_rollup,
             has_uncommitted_descendants: item.has_uncommitted_descendants,
             why: item.why.as_deref(),
             due_at: item.due_at.as_deref(),
@@ -2233,7 +2240,8 @@ mod tests {
             &s,
             &[
                 json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"haven_add_item","arguments":{"title":"Phase","type":"phase"}}}),
-                json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"haven_add_item","arguments":{"title":"child","parent":"HV-1","commit":true,"status":"in_progress"}}}),
+                // AI-owned committed child → the owner rollup reads `ai`.
+                json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"haven_add_item","arguments":{"title":"child","parent":"HV-1","commit":true,"status":"in_progress","assign":"ai"}}}),
                 json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"haven_graph","arguments":{}}}),
             ],
         );
@@ -2241,9 +2249,12 @@ mod tests {
         let nodes = graph["nodes"].as_array().unwrap();
         let phase = nodes.iter().find(|n| n["ref"] == "HV-1").unwrap();
         assert_eq!(phase["rollup_state"], "active");
-        // Leaves carry no rollup_state key.
+        // The owner rollup (HV-128) rides graph_node beside rollup_state.
+        assert_eq!(phase["owner_rollup"], "ai");
+        // Leaves carry neither derived container key.
         let child = nodes.iter().find(|n| n["ref"] == "HV-2").unwrap();
         assert!(child.get("rollup_state").is_none());
+        assert!(child.get("owner_rollup").is_none());
     }
 
     #[test]

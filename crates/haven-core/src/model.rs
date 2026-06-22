@@ -227,6 +227,41 @@ impl RollupState {
     }
 }
 
+/// A container's effective *owner*, derived ON READ from its committed subtree —
+/// the owner sibling of [`RollupState`] (HV-128). Like that type it is never
+/// stored and never parsed back (so no `sql_enum!`): a pure read projection,
+/// computed for container nodes only, with leaves carrying `None`. Classified
+/// from the `owner_kind` of every LIVE, committed, owner-bearing descendant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum OwnerRollup {
+    /// Every classifiable descendant is AI-owned.
+    Ai,
+    /// Every classifiable descendant is human-owned.
+    Human,
+    /// Both AI- and human-owned descendants exist beneath this container.
+    Mixed,
+    /// No classifiable descendant — zero live, committed, owner-bearing
+    /// descendants. Distinct from a leaf's `None` (which means "not a container,
+    /// or not hydrated"): this says "a container, but nothing to attribute yet".
+    Unassigned,
+}
+
+impl OwnerRollup {
+    /// Lowercase wire name (matches the `serde(rename_all = "lowercase")` form).
+    /// Like [`RollupState::as_str`], a render-only helper — `OwnerRollup` is not a
+    /// `sql_enum!` (read-only projection, never parsed back), so it has no
+    /// `Display`/`FromSql`; used e.g. for the `backlog.md` annotation.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            OwnerRollup::Ai => "ai",
+            OwnerRollup::Human => "human",
+            OwnerRollup::Mixed => "mixed",
+            OwnerRollup::Unassigned => "unassigned",
+        }
+    }
+}
+
 /// A graph-integrity problem found by [`crate::Store::context_pack_integrity`]
 /// (HV-105) — a read-only diagnostic surfaced by `haven doctor`, never stored.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -536,6 +571,14 @@ pub struct Item {
     /// hasn't been hydrated. Serializes out but is ignored on deserialize.
     #[serde(skip_serializing_if = "Option::is_none", skip_deserializing)]
     pub rollup_state: Option<RollupState>,
+
+    /// Derived container *owner* rollup, the owner sibling of `rollup_state`
+    /// (HV-128): `Some` only for container nodes, `None` for leaves and wherever
+    /// it hasn't been hydrated. Classified from the same single live-descendant
+    /// walk, so the two rollups never disagree about the descendant set.
+    /// Serializes out but is ignored on deserialize.
+    #[serde(skip_serializing_if = "Option::is_none", skip_deserializing)]
+    pub owner_rollup: Option<OwnerRollup>,
 
     /// Sibling of `rollup_state` (HV-104): `Some(true)` when this container has at
     /// least one LIVE uncommitted descendant — so a container reading `done` still

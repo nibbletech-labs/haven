@@ -97,6 +97,27 @@ pub(crate) fn rollup_from_statuses(statuses: &[Status]) -> RollupState {
     RollupState::Queued
 }
 
+/// Classify a container's owner from the `owner_kind`s of its LIVE, committed,
+/// owner-bearing descendants (HV-128). Total over the input, parallel to
+/// [`rollup_from_statuses`]: empty → `Unassigned`; all `Ai` → `Ai`; all `Human`
+/// → `Human`; both present → `Mixed`. The caller supplies only the owner kinds
+/// of live, committed descendants with a non-NULL `owner_kind`.
+pub(crate) fn owner_rollup_from(owners: &[OwnerKind]) -> OwnerRollup {
+    if owners.is_empty() {
+        return OwnerRollup::Unassigned;
+    }
+    let any_ai = owners.contains(&OwnerKind::Ai);
+    let any_human = owners.contains(&OwnerKind::Human);
+    match (any_ai, any_human) {
+        (true, true) => OwnerRollup::Mixed,
+        (true, false) => OwnerRollup::Ai,
+        (false, true) => OwnerRollup::Human,
+        // Unreachable: the input is non-empty and `OwnerKind` is closed over
+        // {Ai, Human}, so at least one branch above is set.
+        (false, false) => OwnerRollup::Unassigned,
+    }
+}
+
 /// One living-doc anchor and the artifacts attached to it.
 #[derive(Debug, Clone, Serialize)]
 pub struct DocAnchor {
@@ -450,8 +471,9 @@ impl Store {
         // can triage which ready leaves carry a pack (HV-75).
         for node in &mut nodes {
             if node.node_type.is_container() {
-                let (rollup, has_uncommitted) = self.container_rollup(node.id)?;
+                let (rollup, owner_rollup, has_uncommitted) = self.container_rollup(node.id)?;
                 node.rollup_state = Some(rollup);
+                node.owner_rollup = Some(owner_rollup);
                 node.has_uncommitted_descendants = Some(has_uncommitted);
             } else {
                 let (pack, clash) = self.context_pack_for_node(node.id)?;
@@ -469,13 +491,17 @@ impl Store {
         })
     }
 
-    /// A container's LIVE descendants as `(status, committed)` pairs, walking the
-    /// union of decomposition (parent→child) and grouping (group→member) edges.
-    /// The recursive set dedups ids, so a node reachable via both edge kinds is
-    /// counted once; dead nodes (superseded/archived) are excluded. One walk feeds
-    /// both derived signals (see [`Self::container_rollup`]) so they can never
-    /// disagree about what "live descendant" means.
-    pub(crate) fn live_descendants(&self, node_id: i64) -> Result<Vec<(Status, bool)>> {
+    /// A container's LIVE descendants as `(status, committed, owner_kind)` tuples,
+    /// walking the union of decomposition (parent→child) and grouping
+    /// (group→member) edges. The recursive set dedups ids, so a node reachable via
+    /// both edge kinds is counted once; dead nodes (superseded/archived) are
+    /// excluded. ONE walk feeds every derived container signal (see
+    /// [`Self::container_rollup`]) — the status/owner rollups and the uncommitted
+    /// flag — so they can never disagree about what "live descendant" means.
+    pub(crate) fn live_descendants(
+        &self,
+        node_id: i64,
+    ) -> Result<Vec<(Status, bool, Option<OwnerKind>)>> {
         let mut stmt = self.conn.prepare(
             "WITH RECURSIVE sub(id) AS (
                  SELECT ?1
@@ -484,27 +510,51 @@ impl Store {
                  UNION
                  SELECT e.member_id FROM grouping_edges e JOIN sub ON e.group_id = sub.id
              )
-             SELECT n.status, n.committed FROM nodes n
+             SELECT n.status, n.committed, n.owner_kind FROM nodes n
              WHERE n.id IN (SELECT id FROM sub) AND n.id <> ?1
                AND n.status NOT IN ('superseded','archived')",
         )?;
         let rows = stmt.query_map([node_id], |r| {
-            Ok((r.get::<_, Status>(0)?, r.get::<_, bool>(1)?))
+            Ok((
+                r.get::<_, Status>(0)?,
+                r.get::<_, bool>(1)?,
+                r.get::<_, Option<OwnerKind>>(2)?,
+            ))
         })?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
     /// The derived container signals for one node: its [`RollupState`] (classified
-    /// from the *committed* subtree only) plus `has_uncommitted_descendants` —
-    /// whether any live descendant is uncommitted. Because the rollup ignores
+    /// from the *committed* subtree only), its [`OwnerRollup`] (the owner of that
+    /// same committed subtree, HV-128), plus `has_uncommitted_descendants` —
+    /// whether any live descendant is uncommitted. Because the rollups ignore
     /// uncommitted floaters, a container can read `Done` while real work still sits
-    /// beneath it; the second signal keeps that honest (HV-104). Both come from a
-    /// single [`Self::live_descendants`] walk.
-    pub(crate) fn container_rollup(&self, node_id: i64) -> Result<(RollupState, bool)> {
+    /// beneath it; the uncommitted flag keeps that honest (HV-104). All three come
+    /// from a single [`Self::live_descendants`] walk, so they share one definition
+    /// of the live-descendant set.
+    pub(crate) fn container_rollup(
+        &self,
+        node_id: i64,
+    ) -> Result<(RollupState, OwnerRollup, bool)> {
         let live = self.live_descendants(node_id)?;
-        let committed: Vec<Status> = live.iter().filter(|(_, c)| *c).map(|(s, _)| *s).collect();
-        let has_uncommitted = live.iter().any(|(_, c)| !*c);
-        Ok((rollup_from_statuses(&committed), has_uncommitted))
+        let committed: Vec<Status> = live
+            .iter()
+            .filter(|(_, c, _)| *c)
+            .map(|(s, _, _)| *s)
+            .collect();
+        // Owner rollup considers only committed, owner-bearing descendants — the
+        // same committed subtree the status rollup classifies.
+        let owners: Vec<OwnerKind> = live
+            .iter()
+            .filter(|(_, c, _)| *c)
+            .filter_map(|(_, _, o)| *o)
+            .collect();
+        let has_uncommitted = live.iter().any(|(_, c, _)| !*c);
+        Ok((
+            rollup_from_statuses(&committed),
+            owner_rollup_from(&owners),
+            has_uncommitted,
+        ))
     }
 
     /// Project-level living docs: all live anchor nodes plus their artifacts.

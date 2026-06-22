@@ -445,8 +445,9 @@ impl Store {
             }
         }
         if item.node_type.is_container() {
-            let (rollup, has_uncommitted) = self.container_rollup(node_id)?;
+            let (rollup, owner_rollup, has_uncommitted) = self.container_rollup(node_id)?;
             item.rollup_state = Some(rollup);
+            item.owner_rollup = Some(owner_rollup);
             item.has_uncommitted_descendants = Some(has_uncommitted);
         } else {
             // A leaf advertises the context pack governing its build, so a

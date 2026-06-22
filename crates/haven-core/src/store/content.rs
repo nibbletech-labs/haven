@@ -1223,12 +1223,18 @@ impl Store {
         };
         // Containers carry a derived rollup; surface it plus a `+uncommitted`
         // marker so a `done` rollup is never shown bare while live floaters remain
-        // beneath the container (HV-104). Terse + deterministic — backlog.md is a
-        // diffable projection (SPEC §4).
+        // beneath the container (HV-104), and the owner rollup alongside it
+        // (HV-128). Terse + deterministic — backlog.md is a diffable projection
+        // (SPEC §4).
         let rollup = if item.node_type.is_container() {
-            let (state, has_uncommitted) = self.container_rollup(item.id)?;
+            let (state, owner, has_uncommitted) = self.container_rollup(item.id)?;
             let mark = if has_uncommitted { " +uncommitted" } else { "" };
-            format!(" [rollup: {}{}]", state.as_str(), mark)
+            format!(
+                " [rollup: {}{}] [owner: {}]",
+                state.as_str(),
+                mark,
+                owner.as_str()
+            )
         } else {
             String::new()
         };
@@ -1352,14 +1358,19 @@ mod tests {
         .unwrap();
 
         // The container line carries the rollup + uncommitted marker (the bare
-        // `done` never appears alone).
+        // `done` never appears alone) plus the owner rollup. No member carries an
+        // owner, so the owner rollup reads `unassigned` (HV-128).
         let line = s.backlog_line(&phase).unwrap();
         assert!(
             line.contains("[rollup: done +uncommitted]"),
             "container line missing annotation: {line}"
         );
+        assert!(
+            line.contains("[owner: unassigned]"),
+            "container line missing owner annotation: {line}"
+        );
 
-        // A leaf line carries no rollup annotation.
+        // A leaf line carries neither rollup nor owner annotation.
         let leaf = s
             .add_item(
                 None,
@@ -1373,6 +1384,10 @@ mod tests {
         assert!(
             !leaf_line.contains("[rollup:"),
             "leaf line should not be annotated: {leaf_line}"
+        );
+        assert!(
+            !leaf_line.contains("[owner:"),
+            "leaf line should not carry an owner annotation: {leaf_line}"
         );
     }
 
