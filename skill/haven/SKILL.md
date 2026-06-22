@@ -95,6 +95,12 @@ The mistakes that actually bite — internalise these:
 - **Handoff and complete are atomic tools, not recipes.** Use `item handoff` /
   `haven_handoff` and `item complete` / `haven_complete_item` — don't hand-assemble
   assign + update + add_artifact (you'll do it inconsistently).
+- **Don't strand an item `in_progress` across a session boundary.** If you're
+  stopping and the item is now waiting on a person (a review, a decision, a
+  real-world action), **hand it off** — `haven_handoff` to `human` (set
+  `owner=human`, `wait=on_human`) — don't leave it `in_progress` with no live
+  owner. An `in_progress` item with nobody working it reads as active and hides
+  the fact that it's actually blocked on you.
 - **Archive, never delete.** There is no hard delete. "Drop it" = `archive
   --rationale`; reversible via `reopen`. This holds for **projects** too: to
   retire a whole backlog, `haven project archive <key>` (MCP
@@ -122,9 +128,20 @@ through `haven …` / `haven_*` ops, never by editing files or the DB by hand
 
 **Content** — the work product: specs, research, notes, code — lives as **files**
 under `~/.haven/<project>/items/<ref>/`. A local agent reads/edits those files
-**directly** (Read/Edit/Grep) — no round-trips through the graph. The `body` field
-is a one-line summary, **never** the content. (A filesystem-less client uses the
-artifact `content` channel instead — see `references/surface-map.md`.)
+**directly** (Read/Edit/Grep) — no round-trips through the graph. (A
+filesystem-less client uses the artifact `content` channel instead — see
+`references/surface-map.md`.)
+
+**`body` and `why` are one-liners, not stores.** The `body` field is **one
+summary line**, **never** the content; `why` is **a one-line provenance / vision
+trace**, not a second body and not a journal. Do **NOT** paste design specs into
+either, and do **NOT** rewrite `why` as a "RESUME POINT" / progress narration
+across a session — status and progress narration belong in **completion evidence**
+(`item complete --evidence`) or an **artifact**, and real content lives as
+**files / artifacts** under the item. This bites hardest over MCP, where a
+filesystem-less client is tempted to dump a whole spec or a running progress log
+into `body`/`why` for lack of anywhere else — don't: register an artifact
+(`haven_add_artifact`) and keep the two fields to one line each.
 
 **Project-level documents belong in the store too.** Vision, architecture,
 decision, and style docs are artifacts (`--role vision|design|decision|research|source`)
@@ -265,5 +282,11 @@ list (the same shape `add_edge` takes, so your fixes round-trip).
 - **Always give a real `--rationale`** on evolve/archive/reopen — lineage exists to
   reconstruct intent ("spans two owners, splitting for independent dispatch", not
   "too big").
+- **Evolve, don't retitle-then-archive.** When two items are the same, or one
+  replaces another (grooming, dedup), use **`haven_evolve supersede`** (or `merge`)
+  with a rationale — it records a followable lineage edge from old → live. Quietly
+  retitling one and archiving the other leaves **no lineage edge**, so the old ref
+  can't resolve forward (`evolve resolve` / `haven_resolve_live`) and the intent is
+  lost. Reach for `evolve`, not retitle + archive.
 - **Sync is manual in v1.** Run `haven sync` once after a batch, not per mutation;
   `haven sync status` shows the queue.
