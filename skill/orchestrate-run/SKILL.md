@@ -94,6 +94,12 @@ human-gated knowledge promotion — is in `references/executor-discipline.md`.
    else prune the worktree and send the batch down the failure path (strike count survives
    in the container's fix-log); a worktree with no `in_progress` leaf → **stale** → prune.
    Do this **before** dispatching anything.
+   - *Large-graph fallback.* On a mature project the whole-graph read can exceed the MCP
+     response limit (`haven_graph` is all-or-nothing — no scoped read yet; HV-25/HV-195). When
+     it does, **reorient from the frontier, not the whole dump**: `haven list_items --status
+     in_progress --owner ai` for the RECOVER reconcile set, `haven next --owner ai` (step 1)
+     for the dispatch queue, then read only each **active container's** `context-pack` (steps
+     2/4). Same tick, a bounded slice instead of the whole graph — don't grep the spilled dump.
 1. **FRONTIER.** The AI dispatch queue is exactly `haven next --owner ai`
    (DISPATCHABLE_PREDICATE: committed + `ready` + ≠anchor + `wait_state` NULL + no open
    dependency). This **inherently steps around** human-owned work and AI work blocked by

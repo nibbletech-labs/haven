@@ -23,6 +23,18 @@ read drives the whole tick. Resolve the project first if unknown: CLI `haven pro
 MCP `haven_list_projects`. (RECOVER reconciles this against `git worktree list` — see
 `references/worktree-merge.md`.)
 
+**Large-graph fallback.** `haven_graph` is all-or-nothing — there is no scoped/sub-tree read
+yet (HV-25/HV-195), so on a mature project the whole-graph payload can exceed the MCP response
+limit and the call fails. Don't read or grep the spilled dump — reorient from the **frontier**
+instead, which is bounded:
+
+- RECOVER set (the `in_progress` leaves to reconcile): `haven list_items --status in_progress --owner ai -p <P>` / `haven_list_items {"project":"<P>","status":"in_progress","owner":"ai"}`
+- Dispatch queue: step 1 (`haven next --owner ai`, bounded by default — HV-194).
+- Per-batch context: read only each **active container's** context-pack (steps 2/4), not every node.
+
+This is the same tick over a bounded slice. It's what you fall back to until a scoped graph read
+(HV-195) lands.
+
 ## 1. Frontier — the AI dispatch queue
 
 - CLI: `haven next --owner ai -p <P>`
