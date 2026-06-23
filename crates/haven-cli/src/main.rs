@@ -13,7 +13,7 @@ use haven_core::{
     telemetry::{self, TelemetryLine},
     ArtifactKind, ArtifactRole, ArtifactSelector, CompleteInput, DueUpdate, HandoffInput,
     HavenError, Include, IntegrityKind, ItemFilter, ItemUpdate, LineageDirection, NewArtifact,
-    NewItem, NodeType, OwnerKind, Result, Status, Store, WaitState, WaitUpdate,
+    NewItem, NodeType, OwnerKind, Result, Status, Store, WaitState, WaitUpdate, DEFAULT_NEXT_LIMIT,
 };
 
 use output::Output;
@@ -751,7 +751,8 @@ struct NextArgs {
     /// Filter by owner kind: human | ai.
     #[arg(long)]
     owner: Option<String>,
-    /// Maximum number of dispatchable items to return.
+    /// Maximum number of dispatchable items to return (defaults to the top 50 of
+    /// the ranked frontier; pass a larger value for more).
     #[arg(long)]
     limit: Option<i64>,
 }
@@ -1100,7 +1101,12 @@ fn run(cli: &Cli) -> Result<Output> {
             if a.explain {
                 Ok(Output::Json(s.next_explain(project, owner)?))
             } else {
-                Ok(Output::Items(s.next(project, owner, a.limit)?))
+                // Bound the frontier by default (HV-194); an explicit --limit wins.
+                Ok(Output::Items(s.next(
+                    project,
+                    owner,
+                    a.limit.or(Some(DEFAULT_NEXT_LIMIT)),
+                )?))
             }
         }
         Command::Inbox(a) => {

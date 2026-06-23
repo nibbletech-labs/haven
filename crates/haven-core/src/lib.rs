@@ -25,4 +25,5 @@ pub use store::{
     ImportOutcome, Include, Integrity, ItemFilter, ItemUpdate, LineageDirection, LineageGraph,
     LineageLink, NewArtifact, NewItem, Prime, PrimeActiveItem, PrimeInboxItem, PrimeQueueItem,
     ProjectArchive, ProjectGraph, RestoreReport, SimilarItem, StaleRef, Store, WaitUpdate,
+    DEFAULT_NEXT_LIMIT,
 };

@@ -157,6 +157,16 @@ pub struct LineageGraph {
 const ORDER: &str =
     " ORDER BY n.priority IS NULL, n.priority, n.sort_key IS NULL, n.sort_key, n.created_at, n.id";
 
+/// Default dispatch-frontier size when a user-facing surface (`haven_next` over
+/// MCP or CLI) passes no explicit `limit`. Core [`Store::next`] itself stays
+/// unbounded — internal callers like `prime` need the full frontier to compute
+/// their `+N more` overflow — so the cap is applied only at the surfaces, the
+/// same split as [`crate::store`]'s list reads (`DEFAULT_LIST_LIMIT`). A wide
+/// ready frontier on a mature graph would otherwise return an unbounded list and
+/// blow an agent's context budget; the orchestrator re-polls between batches, so
+/// the top of the ranked frontier is all it needs in one read (HV-194).
+pub const DEFAULT_NEXT_LIMIT: i64 = 50;
+
 /// The `haven next` dispatch filter: committed, ready, not waiting, with no open
 /// dependency (SPEC §1). Shared verbatim by `next` (which returns the items) and
 /// `next_explain`'s `count_dispatchable` (which counts them) so the diagnostic

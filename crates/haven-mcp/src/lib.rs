@@ -21,7 +21,7 @@ use haven_core::{
     Artifact, ArtifactKind, ArtifactRole, ArtifactSelector, CompleteInput, ContextPack, DueUpdate,
     EdgeKind, Edges, HandoffInput, HavenError, ImportItem, Include, Item, ItemFilter, ItemUpdate,
     LineageDirection, LineageEvent, NewArtifact, NewItem, NodeType, OwnerKind, OwnerRollup, Result,
-    RollupState, StaleRef, Status, Store, WaitState, WaitUpdate,
+    RollupState, StaleRef, Status, Store, WaitState, WaitUpdate, DEFAULT_NEXT_LIMIT,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -651,10 +651,13 @@ fn dispatch_tool(store: &Store, name: &str, a: &Value) -> Result<Value> {
             Ok(out)
         }
         "haven_next" => {
+            // Bound the frontier by default (HV-194): a wide ready frontier on a
+            // mature graph would otherwise return an unbounded list and blow the
+            // caller's context budget. An explicit `limit` still wins.
             let items = store.next(
                 project,
                 opt_str(a, "owner").map(OwnerKind::parse).transpose()?,
-                opt_i64(a, "limit"),
+                opt_i64(a, "limit").or(Some(DEFAULT_NEXT_LIMIT)),
             )?;
             to_value(items.iter().map(McpItem::compact).collect::<Vec<_>>())
         }
@@ -1166,7 +1169,7 @@ fn tools_list() -> Value {
           "inputSchema": obj(json!({"ref":{"type":"string"},"project":{"type":"string"}}), json!(["ref"])) },
         { "name": "haven_get_item", "description": "Fetch one item in full (prose + requested edges/artifacts/lineage); internal sync fields (public_id/sync_state/revision) are omitted. The detail door for an item shown compactly by haven_list_items/haven_next. If the ref is superseded/archived the item still returns, but the response also carries `stale_ref` {ref, resolved_to:[live ref(s)]} — the work has moved; follow resolved_to. An unknown `include` key is rejected on its own (the valid keys still load) and reported under `invalid_include`.",
           "inputSchema": obj(json!({"ref":{"type":"string"},"project":{"type":"string"},"include":{"type":"array","items":{"type":"string","enum":["edges","artifacts","lineage"]}}}), json!(["ref"])) },
-        { "name": "haven_next", "description": "Items ready to dispatch (committed, ready, unblocked). Returns a compact view per item (identity + axes, no prose — fetch full via haven_get_item).",
+        { "name": "haven_next", "description": "Items ready to dispatch (committed, ready, unblocked), highest priority band first. Returns a compact view per item (identity + axes, no prose — fetch full via haven_get_item). Bounded by default: returns at most the top 50 of the ranked frontier unless `limit` is given — re-poll between batches rather than asking for the whole frontier at once.",
           "inputSchema": obj(json!({"project":{"type":"string"},"owner":{"type":"string","enum":["human","ai"]},"limit":{"type":"integer"}}), json!([])) },
         { "name": "haven_next_explain", "description": "Diagnose why the dispatch queue is empty: the dispatchable count plus a per-reason breakdown (owner-mismatch, blocked-by-dependency, waiting, committed-not-ready, ready-but-uncommitted) and a hint. Call when haven_next returns nothing — diagnose, don't invent work.",
           "inputSchema": obj(json!({"project":{"type":"string"},"owner":{"type":"string","enum":["human","ai"]}}), json!([])) },
@@ -1647,6 +1650,56 @@ mod tests {
         assert!(
             full.get("owner_eligible").is_none(),
             "owner_eligible must be absent from the full shape (HV-125 removed it)"
+        );
+    }
+
+    // HV-194: a wide ready frontier is bounded by default so it can't blow an
+    // agent's context budget; an explicit `limit` (smaller OR larger) still wins.
+    #[test]
+    fn next_frontier_is_bounded_by_default() {
+        let s = store();
+        let n = (DEFAULT_NEXT_LIMIT + 1) as usize; // one past the default cap
+        let mut reqs: Vec<Value> = (0..n)
+            .map(|i| {
+                json!({"jsonrpc":"2.0","id":i+1,"method":"tools/call","params":{
+                    "name":"haven_add_item",
+                    "arguments":{"title":format!("Ready {i}"),"status":"ready","commit":true,"done_looks_like":"done","assign":"ai"}
+                }})
+            })
+            .collect();
+        // Bare next — capped at the default; explicit larger limit — all of them;
+        // explicit smaller limit — still honoured.
+        reqs.push(
+            json!({"jsonrpc":"2.0","id":9001,"method":"tools/call","params":{
+                "name":"haven_next","arguments":{}
+            }}),
+        );
+        reqs.push(
+            json!({"jsonrpc":"2.0","id":9002,"method":"tools/call","params":{
+                "name":"haven_next","arguments":{"limit": n as i64}
+            }}),
+        );
+        reqs.push(
+            json!({"jsonrpc":"2.0","id":9003,"method":"tools/call","params":{
+                "name":"haven_next","arguments":{"limit": 5}
+            }}),
+        );
+        let out = session(&s, &reqs);
+
+        assert_eq!(
+            tool_payload(&out[n]).as_array().unwrap().len(),
+            DEFAULT_NEXT_LIMIT as usize,
+            "bare haven_next must cap at DEFAULT_NEXT_LIMIT"
+        );
+        assert_eq!(
+            tool_payload(&out[n + 1]).as_array().unwrap().len(),
+            n,
+            "an explicit larger limit overrides the default cap"
+        );
+        assert_eq!(
+            tool_payload(&out[n + 2]).as_array().unwrap().len(),
+            5,
+            "an explicit smaller limit is honoured"
         );
     }
 
