@@ -4,4 +4,4 @@
 -- redundant auto-pull gate, so `next --owner` reverts to filtering `owner_kind`.
 -- Postgres drops a CHECK-constrained column in place (no table rebuild — unlike
 -- SQLite, cf. the local 006_drop_owner_eligible.sql).
-alter table nodes drop column owner_eligible;
+alter table haven.nodes drop column owner_eligible;

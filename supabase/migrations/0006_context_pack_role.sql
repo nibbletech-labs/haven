@@ -3,11 +3,11 @@
 -- (drop + re-add) — no table rebuild, unlike SQLite. Then reclassify the existing
 -- magic-filename packs (role='spec' + the canonical context-pack.md path) to the
 -- new role, mirroring the local UPDATE.
-alter table artifacts drop constraint if exists artifacts_role_check;
-alter table artifacts add constraint artifacts_role_check
+alter table haven.artifacts drop constraint if exists artifacts_role_check;
+alter table haven.artifacts add constraint artifacts_role_check
   check (role in ('spec','research','design','handoff','decision',
                   'scratch','source','delivery','vision','context-pack'));
 
-update artifacts
+update haven.artifacts
    set role = 'context-pack'
  where role = 'spec' and path like '%/context-pack.md';

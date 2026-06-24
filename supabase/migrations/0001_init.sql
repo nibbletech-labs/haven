@@ -8,11 +8,20 @@
 -- Auth: Supabase is configured to trust Auth0 as a third-party issuer; it
 -- verifies incoming Auth0 JWTs against Auth0's JWKS and exposes the claims via
 -- auth.jwt(). We read the subject with (auth.jwt() ->> 'sub').
+--
+-- Schema: all Haven objects live in a dedicated `haven` schema (not `public`),
+-- so Haven can co-tenant a shared Supabase project alongside other apps. Every
+-- table/policy/index/FK/RPC is `haven.`-qualified; haven-sync sends PostgREST
+-- the `Accept-Profile`/`Content-Profile: haven` headers to route to it. The
+-- Storage bucket and its policies stay schema-agnostic (in the `storage`
+-- schema, keyed by bucket_id + path).
+
+create schema if not exists haven;
 
 -- ============================================================
 -- Projects
 -- ============================================================
-create table projects (
+create table haven.projects (
   public_id    uuid primary key,
   user_id      text not null default (auth.jwt() ->> 'sub'),
   key          text not null,
@@ -31,10 +40,10 @@ create table projects (
 -- ============================================================
 -- Nodes
 -- ============================================================
-create table nodes (
+create table haven.nodes (
   public_id    uuid primary key,
   user_id      text not null default (auth.jwt() ->> 'sub'),
-  project_id   uuid not null references projects(public_id) on delete cascade,
+  project_id   uuid not null references haven.projects(public_id) on delete cascade,
   ref          text not null,
   title        text not null,
   body         text,
@@ -59,16 +68,16 @@ create table nodes (
   unique (user_id, project_id, ref),
   unique (user_id, client_id)
 );
-create index nodes_project_idx on nodes(project_id);
-create index nodes_status_idx on nodes(project_id, status);
+create index nodes_project_idx on haven.nodes(project_id);
+create index nodes_status_idx on haven.nodes(project_id, status);
 
 -- ============================================================
 -- Structural edges (mutable). UUID FKs to nodes(public_id).
 -- ============================================================
-create table decomposition_edges (
+create table haven.decomposition_edges (
   user_id     text not null default (auth.jwt() ->> 'sub'),
-  parent_id   uuid not null references nodes(public_id) on delete cascade,
-  child_id    uuid not null references nodes(public_id) on delete cascade,
+  parent_id   uuid not null references haven.nodes(public_id) on delete cascade,
+  child_id    uuid not null references haven.nodes(public_id) on delete cascade,
   created_at  timestamptz not null default now(),
   client_id   text not null,
   primary key (parent_id, child_id),
@@ -76,10 +85,10 @@ create table decomposition_edges (
   unique (user_id, client_id)
 );
 
-create table dependency_edges (
+create table haven.dependency_edges (
   user_id        text not null default (auth.jwt() ->> 'sub'),
-  node_id        uuid not null references nodes(public_id) on delete cascade,
-  depends_on_id  uuid not null references nodes(public_id) on delete cascade,
+  node_id        uuid not null references haven.nodes(public_id) on delete cascade,
+  depends_on_id  uuid not null references haven.nodes(public_id) on delete cascade,
   created_at     timestamptz not null default now(),
   client_id      text not null,
   primary key (node_id, depends_on_id),
@@ -87,10 +96,10 @@ create table dependency_edges (
   unique (user_id, client_id)
 );
 
-create table grouping_edges (
+create table haven.grouping_edges (
   user_id     text not null default (auth.jwt() ->> 'sub'),
-  group_id    uuid not null references nodes(public_id) on delete cascade,
-  member_id   uuid not null references nodes(public_id) on delete cascade,
+  group_id    uuid not null references haven.nodes(public_id) on delete cascade,
+  member_id   uuid not null references haven.nodes(public_id) on delete cascade,
   created_at  timestamptz not null default now(),
   client_id   text not null,
   primary key (group_id, member_id),
@@ -101,10 +110,10 @@ create table grouping_edges (
 -- ============================================================
 -- Lineage (append-only core)
 -- ============================================================
-create table lineage_events (
+create table haven.lineage_events (
   public_id    uuid primary key,
   user_id      text not null default (auth.jwt() ->> 'sub'),
-  project_id   uuid not null references projects(public_id) on delete cascade,
+  project_id   uuid not null references haven.projects(public_id) on delete cascade,
   event_type   text not null
     check (event_type in ('split','merge','supersede','update','archive','reopen')),
   rationale    text,
@@ -115,23 +124,23 @@ create table lineage_events (
   unique (user_id, client_id)
 );
 
-create table lineage_edges (
+create table haven.lineage_edges (
   user_id      text not null default (auth.jwt() ->> 'sub'),
-  event_id     uuid not null references lineage_events(public_id) on delete cascade,
-  from_node_id uuid not null references nodes(public_id),
-  to_node_id   uuid not null references nodes(public_id),
+  event_id     uuid not null references haven.lineage_events(public_id) on delete cascade,
+  from_node_id uuid not null references haven.nodes(public_id),
+  to_node_id   uuid not null references haven.nodes(public_id),
   primary key (event_id, from_node_id, to_node_id)
 );
-create index lineage_from_idx on lineage_edges(from_node_id);
-create index lineage_to_idx on lineage_edges(to_node_id);
+create index lineage_from_idx on haven.lineage_edges(from_node_id);
+create index lineage_to_idx on haven.lineage_edges(to_node_id);
 
 -- ============================================================
 -- Artifacts (mutable; file blobs live in Storage)
 -- ============================================================
-create table artifacts (
+create table haven.artifacts (
   public_id    uuid primary key,
   user_id      text not null default (auth.jwt() ->> 'sub'),
-  node_id      uuid not null references nodes(public_id) on delete cascade,
+  node_id      uuid not null references haven.nodes(public_id) on delete cascade,
   role         text not null
     check (role in ('spec','research','design','handoff','decision','scratch','source','delivery','vision')),
   kind         text not null default 'file' check (kind in ('file','external','delivery')),
@@ -150,49 +159,49 @@ create table artifacts (
   revision     integer not null default 1,
   unique (user_id, client_id)
 );
-create index artifacts_node_idx on artifacts(node_id);
+create index artifacts_node_idx on haven.artifacts(node_id);
 
 -- ============================================================
 -- Row-Level Security — every table scoped to the Auth0 subject.
 -- ============================================================
-alter table projects            enable row level security;
-alter table nodes               enable row level security;
-alter table decomposition_edges enable row level security;
-alter table dependency_edges    enable row level security;
-alter table grouping_edges      enable row level security;
-alter table lineage_events      enable row level security;
-alter table lineage_edges       enable row level security;
-alter table artifacts           enable row level security;
+alter table haven.projects            enable row level security;
+alter table haven.nodes               enable row level security;
+alter table haven.decomposition_edges enable row level security;
+alter table haven.dependency_edges    enable row level security;
+alter table haven.grouping_edges      enable row level security;
+alter table haven.lineage_events      enable row level security;
+alter table haven.lineage_edges       enable row level security;
+alter table haven.artifacts           enable row level security;
 
 -- Mutable tables: full owner access (select/insert/update/delete).
-create policy projects_owner on projects
+create policy projects_owner on haven.projects
   using ((auth.jwt() ->> 'sub') = user_id)
   with check ((auth.jwt() ->> 'sub') = user_id);
-create policy nodes_owner on nodes
+create policy nodes_owner on haven.nodes
   using ((auth.jwt() ->> 'sub') = user_id)
   with check ((auth.jwt() ->> 'sub') = user_id);
-create policy decomposition_owner on decomposition_edges
+create policy decomposition_owner on haven.decomposition_edges
   using ((auth.jwt() ->> 'sub') = user_id)
   with check ((auth.jwt() ->> 'sub') = user_id);
-create policy dependency_owner on dependency_edges
+create policy dependency_owner on haven.dependency_edges
   using ((auth.jwt() ->> 'sub') = user_id)
   with check ((auth.jwt() ->> 'sub') = user_id);
-create policy grouping_owner on grouping_edges
+create policy grouping_owner on haven.grouping_edges
   using ((auth.jwt() ->> 'sub') = user_id)
   with check ((auth.jwt() ->> 'sub') = user_id);
-create policy artifacts_owner on artifacts
+create policy artifacts_owner on haven.artifacts
   using ((auth.jwt() ->> 'sub') = user_id)
   with check ((auth.jwt() ->> 'sub') = user_id);
 
 -- Append-only core: SELECT + INSERT only. No UPDATE/DELETE policies exist, so
 -- those operations are denied to clients (the immutable log, SPEC §5).
-create policy lineage_events_select on lineage_events
+create policy lineage_events_select on haven.lineage_events
   for select using ((auth.jwt() ->> 'sub') = user_id);
-create policy lineage_events_insert on lineage_events
+create policy lineage_events_insert on haven.lineage_events
   for insert with check ((auth.jwt() ->> 'sub') = user_id);
-create policy lineage_edges_select on lineage_edges
+create policy lineage_edges_select on haven.lineage_edges
   for select using ((auth.jwt() ->> 'sub') = user_id);
-create policy lineage_edges_insert on lineage_edges
+create policy lineage_edges_insert on haven.lineage_edges
   for insert with check ((auth.jwt() ->> 'sub') = user_id);
 
 -- ============================================================
@@ -229,11 +238,15 @@ create policy haven_content_delete on storage.objects
 -- Account deletion: append-only rows can't be client-deleted, so a
 -- SECURITY DEFINER RPC cascades everything owned by the caller.
 -- ============================================================
-create or replace function delete_my_account()
+-- The function lives in the `haven` schema; its DELETEs are schema-qualified so
+-- they resolve correctly regardless of the SECURITY DEFINER search_path. We pin
+-- `search_path = haven, public` anyway (haven for the qualified targets, public
+-- left available; the storage call is fully qualified too).
+create or replace function haven.delete_my_account()
 returns void
 language plpgsql
 security definer
-set search_path = public
+set search_path = haven, public
 as $$
 declare
   uid text := auth.jwt() ->> 'sub';
@@ -242,15 +255,29 @@ begin
     raise exception 'no authenticated user';
   end if;
   -- Children first where FKs aren't ON DELETE CASCADE from the owner row.
-  delete from lineage_edges where user_id = uid;
-  delete from lineage_events where user_id = uid;
-  delete from artifacts where user_id = uid;
-  delete from decomposition_edges where user_id = uid;
-  delete from dependency_edges where user_id = uid;
-  delete from grouping_edges where user_id = uid;
-  delete from nodes where user_id = uid;
-  delete from projects where user_id = uid;
+  delete from haven.lineage_edges where user_id = uid;
+  delete from haven.lineage_events where user_id = uid;
+  delete from haven.artifacts where user_id = uid;
+  delete from haven.decomposition_edges where user_id = uid;
+  delete from haven.dependency_edges where user_id = uid;
+  delete from haven.grouping_edges where user_id = uid;
+  delete from haven.nodes where user_id = uid;
+  delete from haven.projects where user_id = uid;
   delete from storage.objects
     where bucket_id = 'haven-content' and (storage.foldername(name))[1] = uid;
 end;
 $$;
+
+-- ============================================================
+-- GRANTs — make the `haven` schema reachable by the Data API roles. RLS still
+-- gates which rows each user sees; these GRANTs only let the role reach the
+-- tables/routines/sequences at all. USAGE on the schema is the easily-forgotten
+-- one. ALTER DEFAULT PRIVILEGES covers objects added by later migrations.
+-- ============================================================
+grant usage on schema haven to anon, authenticated, service_role;
+grant all on all tables in schema haven to anon, authenticated, service_role;
+grant all on all routines in schema haven to anon, authenticated, service_role;
+grant all on all sequences in schema haven to anon, authenticated, service_role;
+alter default privileges for role postgres in schema haven grant all on tables to anon, authenticated, service_role;
+alter default privileges for role postgres in schema haven grant all on routines to anon, authenticated, service_role;
+alter default privileges for role postgres in schema haven grant all on sequences to anon, authenticated, service_role;

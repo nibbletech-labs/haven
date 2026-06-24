@@ -24,6 +24,11 @@ pub struct SyncConfig {
     pub anon_key: String,
     /// Storage bucket for content blobs.
     pub bucket: String,
+    /// Postgres schema PostgREST should target. `None` = the default `public`
+    /// schema; `Some("haven")` routes via the `Accept-Profile`/`Content-Profile`
+    /// headers so Haven's objects can live in a dedicated schema on a shared
+    /// project. The Storage path is schema-agnostic and ignores this.
+    pub schema: Option<String>,
 }
 
 impl SyncConfig {
@@ -32,7 +37,14 @@ impl SyncConfig {
             api_url: api_url.into(),
             anon_key: anon_key.into(),
             bucket: "haven-content".into(),
+            schema: None,
         }
+    }
+
+    /// Target a non-default Postgres schema (e.g. `haven`) for PostgREST calls.
+    pub fn with_schema(mut self, schema: impl Into<String>) -> Self {
+        self.schema = Some(schema.into());
+        self
     }
 }
 
@@ -62,6 +74,15 @@ impl SyncEngine {
         }
         if let Ok(v) = HeaderValue::from_str(&format!("Bearer {}", self.access_token)) {
             h.insert(AUTHORIZATION, v);
+        }
+        // Route to a non-default Postgres schema when configured. PostgREST reads
+        // Accept-Profile on GET/HEAD and Content-Profile on write verbs; sending
+        // both on every request is correct and simplest.
+        if let Some(schema) = &self.config.schema {
+            if let Ok(v) = HeaderValue::from_str(schema) {
+                h.insert("Accept-Profile", v.clone());
+                h.insert("Content-Profile", v);
+            }
         }
         h
     }
@@ -380,4 +401,38 @@ fn mark_event_rows(conn: &Connection, events: &[Value]) -> Result<(), SyncError>
         .filter_map(|e| e["client_id"].as_str().map(String::from))
         .collect();
     local::mark_synced(conn, "lineage_events", &client_ids)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `schema = Some("haven")` emits BOTH PostgREST profile headers so reads
+    /// (Accept-Profile) and writes (Content-Profile) route to that schema.
+    #[test]
+    fn schema_set_emits_both_profile_headers() {
+        let cfg = SyncConfig::new("https://x.supabase.co", "anon").with_schema("haven");
+        let engine = SyncEngine::new(cfg, "token");
+        let h = engine.headers();
+        assert_eq!(
+            h.get("Accept-Profile").map(|v| v.to_str().unwrap()),
+            Some("haven"),
+        );
+        assert_eq!(
+            h.get("Content-Profile").map(|v| v.to_str().unwrap()),
+            Some("haven"),
+        );
+    }
+
+    /// `schema = None` (the default) emits neither header — PostgREST falls back
+    /// to the `public` schema, preserving today's behaviour.
+    #[test]
+    fn schema_none_emits_no_profile_headers() {
+        let cfg = SyncConfig::new("https://x.supabase.co", "anon");
+        assert!(cfg.schema.is_none());
+        let engine = SyncEngine::new(cfg, "token");
+        let h = engine.headers();
+        assert!(h.get("Accept-Profile").is_none());
+        assert!(h.get("Content-Profile").is_none());
+    }
 }

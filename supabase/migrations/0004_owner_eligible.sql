@@ -4,5 +4,5 @@
 -- additive axis DISTINCT from `owner_kind`; NULL = untriaged, no backfill. The
 -- wire JSON carries it as a string; a Postgres `text` column with the CHECK
 -- accepts it. Validation otherwise lives at the local Store boundary.
-alter table nodes add column owner_eligible text
+alter table haven.nodes add column owner_eligible text
   check (owner_eligible in ('human','ai','any'));
