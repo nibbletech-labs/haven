@@ -3,19 +3,18 @@ name: create-context-pack
 description: >-
   Create a build-ready spec (a "context pack") for an already-planned group of
   Haven items: enrich them into one integrated brief — shared foundation,
-  cross-cutting requirements, sharpened acceptance, and a verify-first preamble —
-  written as a `context-pack` artifact onto the group's top node, ready to hand to plan
-  mode. The headline case is a greenfield build: one large spec for the whole of
-  a phase-1 build, establishing the contracts the leaves conform to. Use when you
-  have a set of planned leaves you're about to build together and want one brief —
-  e.g. "spec out phase 1 of the build", "write the build spec for this phase",
-  "create a context pack for HV-3 and HV-4", "ready these items for dev", "prepare
-  HV-3 and HV-4 for development". Run on a single item it degenerates to grooming
-  that one leaf (firm its acceptance + write a spec); run on several it grooms each
-  member, then synthesises the cross-cutting brief over them. Sits on the GROUPING
-  axis, above the `haven` skill and after `orchestrate-plan`: it does NOT decompose
-  a goal (use `orchestrate-plan`) and it does NOT execute or write code (that's
-  plan mode). Not for coarse items that still need decomposition.
+  cross-cutting requirements, sharpened acceptance, a verify-first preamble —
+  written as a `context-pack` artifact onto the group's top node, ready for
+  plan mode. Headline case: a greenfield build — one large spec for a phase-1
+  build, setting the contracts the leaves conform to. Use when you have
+  planned leaves you're about to build together and want one brief — e.g.
+  "spec out phase 1 of the build", "create a context pack for HV-3 and HV-4",
+  "ready these items for dev". Run on one item it degenerates to grooming that
+  leaf; run on several it grooms each, then synthesises the cross-cutting
+  brief. Sits on the GROUPING axis, above `haven` and after
+  `orchestrate-plan`: it does NOT decompose a goal (use `orchestrate-plan`)
+  and does NOT execute or write code (that's plan mode). Not for coarse items
+  that still need decomposition.
 ---
 
 # create-context-pack — the build-prep (spec) half of orchestrate

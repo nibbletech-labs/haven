@@ -218,6 +218,26 @@ fn skill_install_and_setup_write_the_snapshot() {
         .exists());
     assert!(h.home.join(".agents/skills/verify/SKILL.md").exists());
 
+    // HV-204: Codex / Open Agent Skills reject a SKILL.md `description` over
+    // 1024 bytes (Claude Code is lenient, Codex is not). Keep every installed
+    // skill under the cap so it stays loadable everywhere.
+    for name in [
+        "haven",
+        "orchestrate-plan",
+        "create-context-pack",
+        "orchestrate-run",
+        "verify",
+    ] {
+        let md = std::fs::read_to_string(h.home.join(format!(".agents/skills/{name}/SKILL.md")))
+            .unwrap();
+        let desc = skill_description(&md);
+        assert!(
+            desc.len() <= 1024,
+            "skill `{name}` description is {} bytes (> 1024 Codex/Open Agent Skills limit)",
+            desc.len()
+        );
+    }
+
     // `setup` installs both default agent skills (alongside MCP wiring) — unless --no-skill.
     let fresh = Haven::new();
     let setup = fresh.json(&["setup"]);
@@ -235,6 +255,45 @@ fn skill_install_and_setup_write_the_snapshot() {
     assert_eq!(out["skill"], "skipped (--no-skill)");
     assert!(!skipped.home.join(".claude/skills/haven/SKILL.md").exists());
     assert!(!skipped.home.join(".agents/skills/haven/SKILL.md").exists());
+}
+
+/// Fold a SKILL.md YAML frontmatter `description` (a `>-` block scalar) into the
+/// single string that Codex / Open Agent Skills measure against the 1024-byte
+/// cap: trimmed, non-empty continuation lines joined with single spaces.
+fn skill_description(skill_md: &str) -> String {
+    let mut lines = skill_md.lines();
+    assert_eq!(
+        lines.next(),
+        Some("---"),
+        "SKILL.md must open with frontmatter"
+    );
+    let mut parts: Vec<String> = Vec::new();
+    let mut in_desc = false;
+    for line in lines {
+        if line == "---" {
+            break;
+        }
+        if in_desc {
+            if line.is_empty() || line.starts_with(' ') {
+                parts.push(line.trim().to_string());
+                continue;
+            }
+            in_desc = false;
+        }
+        if let Some(rest) = line.strip_prefix("description:") {
+            let rest = rest.trim();
+            if matches!(rest, "" | ">-" | ">" | "|" | "|-") {
+                in_desc = true;
+            } else {
+                parts.push(rest.trim_matches(|c| c == '"' || c == '\'').to_string());
+            }
+        }
+    }
+    parts
+        .into_iter()
+        .filter(|p| !p.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 #[test]

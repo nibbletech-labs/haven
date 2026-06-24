@@ -1,21 +1,20 @@
 ---
 name: verify
 description: >-
-  Verify that a Haven item actually meets its acceptance — give it a target ref
-  (a leaf, or a container as a rollup) and it returns a PASS / NEEDS-HUMAN / FAIL
-  verdict with evidence, judged against the item's LIVE `done_looks_like`. It runs
-  the deterministic suite (build + lint + test) and makes an independent acceptance
-  judgment from a fresh perspective — never the build agent's. Use when you want to
-  confirm work is done without doing it yourself — e.g. "verify HV-41", "is this
-  leaf actually done?", "acceptance-verify this", "check done_looks_like is met",
-  "give me a pass/fail verdict on this work", "did the build meet its acceptance?".
-  This is the executor's step-7 gate lifted out to stand alone: orchestrate-run
-  COMPOSES this same skill as its verifier, so there is one judgment, not two. It
-  does NOT decompose a goal (use `orchestrate-plan`), does NOT write a build spec
-  (use `create-context-pack`), does NOT build the code or own the human go (that's
-  native plan mode), and does NOT dispatch/merge/loop the whole graph (that's
-  `orchestrate-run`). It is the single judgment those skills lean on, callable on
-  its own.
+  Verify that a Haven item actually meets its acceptance — give it a target
+  ref (a leaf, or a container as a rollup) and it returns a PASS / NEEDS-HUMAN
+  / FAIL verdict with evidence, judged against the item's LIVE
+  `done_looks_like`. It runs the deterministic suite (build + lint + test) and
+  makes an independent acceptance judgment from a fresh perspective — never
+  the build agent's. Use when you want to confirm work is done without doing
+  it yourself — e.g. "verify HV-41", "is this leaf actually done?", "check
+  done_looks_like is met", "give me a pass/fail verdict on this work". It is
+  the executor's step-7 gate lifted out to stand alone: orchestrate-run
+  COMPOSES this same skill as its verifier, so there is one judgment, not two.
+  It does NOT decompose a goal (use `orchestrate-plan`), does NOT write a
+  build spec (use `create-context-pack`), does NOT build the code or own the
+  human go (native plan mode), and does NOT dispatch/merge/loop the whole
+  graph (`orchestrate-run`).
 ---
 
 # verify — the standalone acceptance-verifier (the executor's step-7 gate, lifted out)

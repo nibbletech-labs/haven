@@ -1,24 +1,20 @@
 ---
 name: orchestrate-plan
 description: >-
-  The starting point for any large, multi-part effort that has no plan yet —
-  building or launching a product, app, site, platform, brand, or business
-  end-to-end, especially greenfield ("from scratch", "nothing exists yet", "the
-  lot"). Break it into a structured Haven work-graph: a multi-level tree of
-  ownable tasks with dependencies (one output feeds another) and acceptance
-  criteria. Planning, not doing — fire it even when phrased as doing the work
-  ("build it", "create the site", "get the whole thing moving", "have a go at
-  X"); you map the whole effort before any is built. Also fires on explicit
-  "decompose this into a dependency / work graph / backlog", and on
-  decompose-before-plan-mode — "create the item(s) then switch to plan mode",
-  "set these up as a work graph and I'll build them". But a bare "make a plan" /
-  "plan this" / "plan mode" for one feature or change is native plan mode, not
-  this — every leaf here is plan-mode-grain. When a Haven item already tracks the
-  work, a sequential-execution / "create a task list" request resolves to graph
-  child-items + dependency edges, not a parallel native list. If a plan already
-  exists and they just want it built, that's `orchestrate-run`; for one task,
-  status, or grooming one item, use `haven`. Not for a one-off or
-  single-component task, or already-decomposed work.
+  The starting point for a large, multi-part effort with no plan yet —
+  building or launching a product, app, site, or business end-to-end,
+  especially greenfield ("from scratch", "the lot"). Break it into a
+  structured Haven work-graph: a tree of ownable tasks with dependencies and
+  acceptance criteria. Planning, not doing — fire it even when phrased as
+  doing the work ("build it", "create the site"); you map it all first. Also
+  fires on "decompose this into a dependency / work graph / backlog" and on
+  "create the items then switch to plan mode". But a bare "make a plan" /
+  "plan this" for one feature is native plan mode, not this — every leaf here
+  is plan-mode-grain. When a Haven item already tracks the work, a "create a
+  task list" request resolves to graph child-items + dependency edges, not a
+  parallel native list. If a plan exists and they just want it built, that's
+  `orchestrate-run`; for one task or grooming one item, use `haven`. Not for a
+  one-off, single-component, or already-decomposed task.
 ---
 
 # orchestrate-plan — the planner half of orchestrate
