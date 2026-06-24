@@ -217,26 +217,9 @@ fn skill_install_and_setup_write_the_snapshot() {
         .join(".agents/skills/orchestrate-run/SKILL.md")
         .exists());
     assert!(h.home.join(".agents/skills/verify/SKILL.md").exists());
-
-    // HV-204: Codex / Open Agent Skills reject a SKILL.md `description` over
-    // 1024 bytes (Claude Code is lenient, Codex is not). Keep every installed
-    // skill under the cap so it stays loadable everywhere.
-    for name in [
-        "haven",
-        "orchestrate-plan",
-        "create-context-pack",
-        "orchestrate-run",
-        "verify",
-    ] {
-        let md = std::fs::read_to_string(h.home.join(format!(".agents/skills/{name}/SKILL.md")))
-            .unwrap();
-        let desc = skill_description(&md);
-        assert!(
-            desc.len() <= 1024,
-            "skill `{name}` description is {} bytes (> 1024 Codex/Open Agent Skills limit)",
-            desc.len()
-        );
-    }
+    // Skill *content* validity (description cap, frontmatter, name/composition)
+    // and exhaustive coverage are checked by `every_shipped_skill_is_valid_and_covered`
+    // (HV-204); this test only asserts the install mechanics land files correctly.
 
     // `setup` installs both default agent skills (alongside MCP wiring) — unless --no-skill.
     let fresh = Haven::new();
@@ -294,6 +277,168 @@ fn skill_description(skill_md: &str) -> String {
         .filter(|p| !p.is_empty())
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+/// Frontmatter keys the Open Agent Skills spec permits (per skill-creator's
+/// `quick_validate.py`); anything else fails validation.
+const ALLOWED_SKILL_FRONTMATTER_KEYS: &[&str] = &[
+    "name",
+    "description",
+    "license",
+    "allowed-tools",
+    "metadata",
+    "compatibility",
+];
+
+/// Validate one shipped skill against the Open Agent Skills rule set (a faithful
+/// port of skill-creator's `quick_validate.py`) plus a composition check that the
+/// skill's identity is consistent across SKILL.md, the directory name, and
+/// `agents/openai.yaml`. Returns `Err(reason)` on the first violation. HV-204.
+fn validate_skill_dir(dir: &std::path::Path) -> Result<(), String> {
+    let id = dir.file_name().unwrap().to_string_lossy().to_string();
+    let content = std::fs::read_to_string(dir.join("SKILL.md"))
+        .map_err(|_| format!("{id}: SKILL.md not found"))?;
+    if !content.starts_with("---") {
+        return Err(format!("{id}: no YAML frontmatter (must start with `---`)"));
+    }
+    // Frontmatter is the text between the first two `---` lines.
+    let fm = content
+        .strip_prefix("---\n")
+        .and_then(|rest| rest.split("\n---").next())
+        .ok_or_else(|| format!("{id}: invalid frontmatter format"))?;
+
+    // Top-level keys are the column-0 `key:` lines; nested/indented keys (e.g.
+    // under `metadata`) and block-scalar body lines are indented, so excluded.
+    let keys: Vec<String> = fm
+        .lines()
+        .filter(|l| !l.is_empty() && !l.starts_with(char::is_whitespace))
+        .filter_map(|l| l.split_once(':').map(|(k, _)| k.trim().to_string()))
+        .collect();
+    if let Some(bad) = keys
+        .iter()
+        .find(|k| !ALLOWED_SKILL_FRONTMATTER_KEYS.contains(&k.as_str()))
+    {
+        return Err(format!(
+            "{id}: unexpected frontmatter key `{bad}` (allowed: {})",
+            ALLOWED_SKILL_FRONTMATTER_KEYS.join(", ")
+        ));
+    }
+    for required in ["name", "description"] {
+        if !keys.iter().any(|k| k == required) {
+            return Err(format!(
+                "{id}: missing required `{required}` in frontmatter"
+            ));
+        }
+    }
+
+    // name: kebab-case, no edge/doubled hyphens, <= 64 chars, == directory name.
+    let name = fm
+        .lines()
+        .find_map(|l| l.strip_prefix("name:"))
+        .map(|v| v.trim().trim_matches(|c| c == '"' || c == '\'').to_string())
+        .unwrap_or_default();
+    if name.is_empty()
+        || !name
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+    {
+        return Err(format!(
+            "{id}: name `{name}` must be kebab-case ([a-z0-9-])"
+        ));
+    }
+    if name.starts_with('-') || name.ends_with('-') || name.contains("--") {
+        return Err(format!(
+            "{id}: name `{name}` cannot start/end with `-` or contain `--`"
+        ));
+    }
+    if name.chars().count() > 64 {
+        return Err(format!(
+            "{id}: name is {} chars (> 64 max)",
+            name.chars().count()
+        ));
+    }
+    if name != id {
+        return Err(format!(
+            "{id}: SKILL.md name `{name}` != directory name `{id}`"
+        ));
+    }
+
+    // description: the folded value carries no angle brackets and stays <= 1024.
+    let desc = skill_description(&content);
+    if desc.contains('<') || desc.contains('>') {
+        return Err(format!(
+            "{id}: description must not contain angle brackets (< or >)"
+        ));
+    }
+    if desc.len() > 1024 {
+        return Err(format!(
+            "{id}: description is {} bytes (> 1024 Open Agent Skills / Codex limit)",
+            desc.len()
+        ));
+    }
+
+    // Composition: the Codex manifest's identity must match the skill it adapts.
+    let manifest = std::fs::read_to_string(dir.join("agents/openai.yaml"))
+        .map_err(|_| format!("{id}: agents/openai.yaml not found"))?;
+    for field in ["name", "skill"] {
+        let val = manifest
+            .lines()
+            .find_map(|l| l.strip_prefix(&format!("{field}:")))
+            .map(|v| v.trim().to_string())
+            .unwrap_or_default();
+        if val != id {
+            return Err(format!("{id}: openai.yaml {field} `{val}` != `{id}`"));
+        }
+    }
+    Ok(())
+}
+
+/// Every skill must satisfy the Open Agent Skills rules so it loads in Codex as
+/// well as Claude Code — and the coverage must be exhaustive: no skill folder
+/// goes unvalidated, and the folder set exactly matches what the binary actually
+/// ships (the embedded `SKILL_REGISTRY`). HV-204.
+#[test]
+fn every_shipped_skill_is_valid_and_covered() {
+    use std::collections::BTreeSet;
+
+    // Source of truth #1 — the skill/ folder. EVERY directory under it must be a
+    // real skill (a missing SKILL.md fails loudly; nothing is silently skipped)
+    // and must pass validation.
+    let skill_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../skill");
+    let mut folder = BTreeSet::new();
+    for entry in std::fs::read_dir(&skill_root).expect("skill/ dir is readable") {
+        let path = entry.unwrap().path();
+        if !path.is_dir() {
+            continue; // stray files (e.g. .DS_Store) are not skills
+        }
+        let id = path.file_name().unwrap().to_string_lossy().to_string();
+        assert!(
+            path.join("SKILL.md").exists(),
+            "skill/{id}/ has no SKILL.md — every directory under skill/ must be a skill"
+        );
+        validate_skill_dir(&path).unwrap_or_else(|e| panic!("skill validation failed — {e}"));
+        folder.insert(id);
+    }
+    assert!(
+        folder.len() >= 5,
+        "expected at least the five shipped skills, only found {folder:?}"
+    );
+
+    // Source of truth #2 — what the binary actually installs (the embedded
+    // SKILL_REGISTRY). The two sets must agree exactly, so a skill can never be
+    // added to the folder without shipping, nor ship without a validated folder.
+    let h = Haven::new();
+    h.json(&["skill", "install"]);
+    let installed: BTreeSet<String> = std::fs::read_dir(h.home.join(".claude/skills"))
+        .expect("installed skills dir is readable")
+        .map(|e| e.unwrap().path())
+        .filter(|p| p.is_dir())
+        .map(|p| p.file_name().unwrap().to_string_lossy().to_string())
+        .collect();
+    assert_eq!(
+        folder, installed,
+        "skill/ folder and the embedded SKILL_REGISTRY disagree — a skill is in one but not the other"
+    );
 }
 
 #[test]
