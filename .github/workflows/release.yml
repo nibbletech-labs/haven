@@ -1,6 +1,6 @@
 name: release
 
-# Tag a version (`git tag v0.1.1 && git push origin v0.1.1`) to build prebuilt
+# Tag a version (`git tag v0.1.2 && git push origin v0.1.2`) to build prebuilt
 # `haven` binaries for macOS (arm64/x64) and Linux (arm64/x64, static musl),
 # package each as a tarball + sha256 sidecar, render a ready-to-paste Homebrew
 # formula, and attach everything to the GitHub Release for the tag. Tags with a
@@ -139,9 +139,10 @@ jobs:
 
             def caveats
               <<~CAVEAT
-                Wire the MCP server + Claude skill (idempotent):
+                Wire the MCP server + skills and create/select the default first project:
                   haven setup
                 Then check the install:
+                  haven item add "First item"
                   haven doctor
               CAVEAT
             end
