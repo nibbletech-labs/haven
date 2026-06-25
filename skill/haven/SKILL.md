@@ -328,5 +328,6 @@ list (the same shape `add_edge` takes, so your fixes round-trip).
   retitling one and archiving the other leaves **no lineage edge**, so the old ref
   can't resolve forward (`evolve resolve` / `haven_resolve_live`) and the intent is
   lost. Reach for `evolve`, not retitle + archive.
-- **Sync is manual in v1.** Run `haven sync` once after a batch, not per mutation;
-  `haven sync status` shows the queue.
+- **Cloud Sync is preview-gated.** Public/local installs are local-first only;
+  don't run `haven auth` or `haven sync` unless `HAVEN_CLOUD_SYNC_PREVIEW=1` is
+  explicitly set for preview work.

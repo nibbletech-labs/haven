@@ -116,10 +116,11 @@ haven note <ref> "<text>"
 haven render
 haven skill install [--agent all|claude|codex]
 
-# Server / cloud
+# Server / preview cloud
 haven mcp
-haven auth login [--token <jwt>] | logout | status
-haven sync [status] [--watch]
+# Cloud Sync is hidden/preview-gated in public installs:
+# HAVEN_CLOUD_SYNC_PREVIEW=1 haven auth login [--token <jwt>] | logout | status
+# HAVEN_CLOUD_SYNC_PREVIEW=1 haven sync [status] [--watch]
 ```
 
 ## MCP tool catalogue
@@ -273,8 +274,8 @@ must rely on a local CLI or a pre-arranged state:
   selects per-call, so it never needs `use`.)
 - **`note`**, **`render`** — scratch lines and forced re-render (render happens
   automatically anyway).
-- **Lifecycle/admin** — `setup`, `init`, `doctor`, `config`, `link`, `skill`,
-  `auth`, `sync`.
+- **Lifecycle/admin** — `setup`, `init`, `doctor`, `config`, `link`, `skill`;
+  `auth` and `sync` are preview-gated behind `HAVEN_CLOUD_SYNC_PREVIEW=1`.
 
 ## Agent discovery and setup
 
@@ -313,9 +314,9 @@ the pointer (`path`, `content_hash`, `remote_path`).
 
 - **Read:** `haven_get_artifact {ref, role}` → `{path, role, content}`; `content`
   is the file's bytes. If the file isn't on this machine but the row carries a
-  synced cloud copy (`remote_path`), the read **lazy-downloads it from Storage**
-  (hash-verified, then cached locally) — transparent when sync is configured;
-  otherwise it errors `content_not_local` with the remote location.
+  synced cloud copy (`remote_path`), cloud hydration is available only with
+  `HAVEN_CLOUD_SYNC_PREVIEW=1`; otherwise it errors `content_not_local` with the
+  remote location.
 - **Write:** `haven_add_artifact {ref, role, content, name}` — the **server**
   writes the bytes into `items/<ref>/<file>`, hashes them, and records the pointer.
   The content never lands in the DB. Filenames must be a single plain component

@@ -582,7 +582,8 @@ nothing was deleted; `next` stayed honest; the two axes were managed independent
   (workflow 12).
 - **Don't commit speculative work** to make the backlog look active. Keep maybes
   floating.
-- **Don't sync after every mutation.** It's manual and offline-first; one
-  `haven sync` after a batch is enough.
+- **Don't run Cloud Sync in public/local installs.** It is preview-gated; only
+  use `haven auth` / `haven sync` when `HAVEN_CLOUD_SYNC_PREVIEW=1` is explicitly
+  set for preview work.
 - **Don't conflate the two axes,** and **don't treat empty `next` as "nothing to
   do"** — diagnose why and surface the fix.
