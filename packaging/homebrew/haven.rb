@@ -7,7 +7,7 @@
 # nibbletech-labs/tap/haven`, copy that generated file into the tap repo
 # (nibbletech-labs/homebrew-tap) as `Formula/haven.rb` on each release.
 class Haven < Formula
-  desc "Local-first, cloud-synced store for a long-lived work-graph"
+  desc "Local-first work-graph store for humans and AI agents"
   homepage "https://github.com/nibbletech-labs/haven"
   version "0.1.1"
   license "MIT"

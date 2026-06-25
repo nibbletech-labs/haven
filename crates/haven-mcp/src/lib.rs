@@ -27,6 +27,24 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 const PROTOCOL_VERSION: &str = "2024-11-05";
+const CLOUD_SYNC_PREVIEW_ENV: &str = "HAVEN_CLOUD_SYNC_PREVIEW";
+
+fn cloud_sync_preview_enabled() -> bool {
+    std::env::var(CLOUD_SYNC_PREVIEW_ENV)
+        .ok()
+        .map(|v| matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+        .unwrap_or(false)
+}
+
+fn public_status(store: &Store, project: Option<&str>) -> Result<Value> {
+    let mut status = store.store_status(project)?;
+    if !cloud_sync_preview_enabled() {
+        if let Some(obj) = status.as_object_mut() {
+            obj.remove("sync_pending");
+        }
+    }
+    Ok(status)
+}
 
 #[derive(Debug, Deserialize)]
 struct Request {
@@ -957,14 +975,16 @@ fn dispatch_tool(store: &Store, name: &str, a: &Value) -> Result<Value> {
                 req_str(a, "new_name")?,
             )?)
         }
-        "haven_status" => store.store_status(project),
+        "haven_status" => public_status(store, project),
         // One-shot session-context block (HV-23): project state, committed queue
         // (next flagged), in-progress/waiting, conventions, and the untriaged
         // inbox — what a fresh agent reads at session start instead of N discovery
         // calls. Returns the same rendered block the CLI prints, as a `prime`
         // string field (valid JSON for the content envelope). No sticky session:
         // `project` is a per-call arg like every other tool.
-        "haven_prime" => Ok(json!({ "prime": store.prime(project)?.render() })),
+        "haven_prime" => Ok(json!({
+            "prime": store.prime(project)?.render_with_sync(cloud_sync_preview_enabled())
+        })),
         // Discover backlogs — a remote/headless client has no local `current_project`
         // to fall back on, so it lists, then selects by passing `project` per call.
         "haven_list_projects" => {
@@ -1078,6 +1098,11 @@ fn hydrate_content(
     remote_path: &str,
     content_hash: Option<&str>,
 ) -> Result<()> {
+    if !cloud_sync_preview_enabled() {
+        return Err(HavenError::Invalid(format!(
+            "Cloud Sync is in private preview. Set {CLOUD_SYNC_PREVIEW_ENV}=1 to enable cloud artifact hydration."
+        )));
+    }
     let sync_cfg = haven_sync::SyncConfig::new(
         remote_setting(store, "supabase_url", "HAVEN_SUPABASE_URL").map_err(|e| {
             HavenError::Invalid(format!(
@@ -1203,9 +1228,9 @@ fn tools_list() -> Value {
           "inputSchema": obj(json!({"ref":{"type":"string"},"role":{"type":"string"},"name":{"type":"string"},"id":{"type":"string"},"project":{"type":"string"}}), json!(["ref"])) },
         { "name": "haven_mv_artifact", "description": "Rename an artifact's backing file (role / history / created_at preserved). Select by exactly one of `role`/`name`/`id` (same ambiguity rule as haven_rm_artifact); `new_name` is a plain filename, rejected if it collides with another artifact's path on the item.",
           "inputSchema": obj(json!({"ref":{"type":"string"},"new_name":{"type":"string"},"role":{"type":"string"},"name":{"type":"string"},"id":{"type":"string"},"project":{"type":"string"}}), json!(["ref","new_name"])) },
-        { "name": "haven_status", "description": "Project counts and sync state.",
+        { "name": "haven_status", "description": "Project counts and local store state.",
           "inputSchema": obj(json!({"project":{"type":"string"}}), json!([])) },
-        { "name": "haven_prime", "description": "One-shot session-context block: ONE compact, token-budgeted read for session start, instead of separate status + next + list + inbox calls. Returns a `prime` text block covering — project state (key/prefix + counts/sync), the committed-ready queue with the dispatch-eligible (next) items flagged, in-progress/waiting items with owner + what they're waiting on, the load-bearing Haven conventions, and a compact untriaged-inbox view (count + top floaters to triage) so handoff-swept captures resurface. Per-call `project` (no sticky session).",
+        { "name": "haven_prime", "description": "One-shot session-context block: ONE compact, token-budgeted read for session start, instead of separate status + next + list + inbox calls. Returns a `prime` text block covering — project state (key/prefix + counts), the committed-ready queue with the dispatch-eligible (next) items flagged, in-progress/waiting items with owner + what they're waiting on, the load-bearing Haven conventions, and a compact untriaged-inbox view (count + top floaters to triage) so handoff-swept captures resurface. Per-call `project` (no sticky session).",
           "inputSchema": obj(json!({"project":{"type":"string"}}), json!([])) },
         { "name": "haven_list_projects", "description": "List all projects (backlogs). Use this to discover what's available; then target one by passing its `key` as the `project` arg on subsequent calls (selection is per-call, not a stored default). Hides archived projects unless `include_archived:true` (a deleted project is never listed).",
           "inputSchema": obj(json!({"include_archived":{"type":"boolean"}}), json!([])) },

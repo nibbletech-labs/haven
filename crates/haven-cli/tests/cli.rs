@@ -98,6 +98,7 @@ impl Haven {
         c.env("HAVEN_CLAUDE_DIR", self.home.join(".claude"));
         c.env("HAVEN_CODEX_DIR", self.home.join(".codex"));
         c.env("HAVEN_AGENTS_DIR", self.home.join(".agents"));
+        c.env("HAVEN_CLOUD_SYNC_PREVIEW", "0");
         c.current_dir(&self.home);
         c.args(args);
         c
@@ -238,6 +239,99 @@ fn skill_install_and_setup_write_the_snapshot() {
     assert_eq!(out["skill"], "skipped (--no-skill)");
     assert!(!skipped.home.join(".claude/skills/haven/SKILL.md").exists());
     assert!(!skipped.home.join(".agents/skills/haven/SKILL.md").exists());
+}
+
+#[test]
+fn cloud_sync_preview_is_hidden_by_default() {
+    let h = Haven::new();
+    let setup = h.json(&[
+        "setup",
+        "--no-skill",
+        "--project-key",
+        "haven",
+        "--project-title",
+        "Haven",
+        "--prefix",
+        "HV",
+    ]);
+    assert!(setup.get("note").is_none());
+
+    h.json(&["item", "add", "First local item"]);
+
+    let status = h.json(&["status"]);
+    assert!(status.get("sync_pending").is_none());
+    assert!(status.get("auth").is_none());
+
+    let prime = h.text(&["prime"]);
+    let first_line = prime.lines().next().unwrap_or_default();
+    assert!(
+        !first_line.contains("sync"),
+        "prime should not surface Cloud Sync by default: {first_line}"
+    );
+
+    let doctor = h.json(&["doctor"]);
+    let checks = doctor["checks"].as_array().unwrap();
+    assert!(!checks.iter().any(|c| c["name"] == "auth"));
+    assert!(!checks.iter().any(|c| c["name"] == "sync"));
+
+    let help = h.text(&["--help"]);
+    assert!(!help.contains("Auth0 sign-in"));
+    assert!(!help.contains("Sync with the cloud"));
+
+    let sync_err = h.fail(&["sync", "status"]);
+    assert!(sync_err["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("HAVEN_CLOUD_SYNC_PREVIEW=1"));
+    let auth_err = h.fail(&["auth", "status"]);
+    assert!(auth_err["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("HAVEN_CLOUD_SYNC_PREVIEW=1"));
+}
+
+#[test]
+fn cloud_sync_preview_flag_restores_sync_status() {
+    let h = Haven::new();
+    h.json(&[
+        "setup",
+        "--no-skill",
+        "--project-key",
+        "haven",
+        "--project-title",
+        "Haven",
+        "--prefix",
+        "HV",
+    ]);
+    h.json(&["item", "add", "First local item"]);
+
+    let out = h
+        .cmd(&["status"])
+        .env("HAVEN_CLOUD_SYNC_PREVIEW", "1")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "status failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let status: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(status["sync_pending"].as_i64().unwrap() > 0);
+    assert_eq!(status["auth"], "not configured (Cloud Sync preview)");
+
+    let out = h
+        .cmd(&["sync", "status"])
+        .env("HAVEN_CLOUD_SYNC_PREVIEW", "1")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "sync status failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let sync: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(sync["sync_pending"].as_i64().unwrap() > 0);
+    assert_eq!(sync["watch_supported"], false);
 }
 
 /// Fold a SKILL.md YAML frontmatter `description` (a `>-` block scalar) into the

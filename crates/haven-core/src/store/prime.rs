@@ -233,21 +233,29 @@ impl Prime {
     /// a fresh agent reads instead of N discovery calls — terse, one line per item,
     /// every list capped with an explicit truncation note.
     pub fn render(&self) -> String {
+        self.render_with_sync(false)
+    }
+
+    /// Render with the internal sync queue exposed. This is deliberately opt-in:
+    /// public local installs should not see "sync pending" for ordinary local rows
+    /// while Cloud Sync remains preview-only.
+    pub fn render_with_sync(&self, include_sync: bool) -> String {
         let mut out = String::new();
 
         // §1 Project + one-line state.
-        out.push_str(&format!(
-            "PROJECT {} ({}) — {} items, {} committed, {} icebox, sync {}\n",
-            self.project,
-            self.prefix,
-            self.total,
-            self.committed,
-            self.icebox,
-            if self.sync_pending == 0 {
+        let sync = if include_sync {
+            let state = if self.sync_pending == 0 {
                 "clean".to_string()
             } else {
                 format!("{} pending", self.sync_pending)
-            },
+            };
+            format!(", sync {state}")
+        } else {
+            String::new()
+        };
+        out.push_str(&format!(
+            "PROJECT {} ({}) — {} items, {} committed, {} icebox{}\n",
+            self.project, self.prefix, self.total, self.committed, self.icebox, sync,
         ));
 
         // §2 Committed queue with next-eligible flagged ('>' = dispatchable now).

@@ -17,7 +17,8 @@ Haven is useful when a normal TODO list is too flat:
 - Finished work can include proof, so handoffs do not rely on memory.
 
 Under the hood, Haven is one `haven` binary with a local SQLite store, a CLI, and
-a stdio MCP server. Sync through Supabase/Auth0 is optional.
+a stdio MCP server. Cloud Sync through Supabase/Auth0 is private preview and
+disabled in public installs by default.
 
 ```sh
 haven setup --project-key haven --project-title "Haven" --prefix HV
@@ -176,9 +177,11 @@ The local workflow runs end to end on one machine: items, dependency layers,
 handoffs, lineage, `haven next`, full-text search, artifacts, the generated
 `backlog.md` view, and the MCP server.
 
-The sync path is partly built. The Supabase schema, RLS, and push flow are
-validated against a local Supabase stack. Two-way pull and live Auth0 wiring are
-still in progress.
+Cloud Sync is partly built but not part of the public local-first release yet.
+The Supabase schema, RLS, and push flow are validated against a local Supabase
+stack; the remaining hosted service/Auth0 wiring and product surface are still
+in progress. The unfinished `auth`/`sync` commands are hidden and require
+`HAVEN_CLOUD_SYNC_PREVIEW=1`.
 
 ## Running the Work — and How to Ask for It
 

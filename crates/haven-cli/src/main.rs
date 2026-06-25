@@ -18,6 +18,33 @@ use haven_core::{
 
 use output::Output;
 
+const CLOUD_SYNC_PREVIEW_ENV: &str = "HAVEN_CLOUD_SYNC_PREVIEW";
+
+fn cloud_sync_preview_enabled() -> bool {
+    std::env::var(CLOUD_SYNC_PREVIEW_ENV)
+        .ok()
+        .map(|v| matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+        .unwrap_or(false)
+}
+
+fn require_cloud_sync_preview() -> Result<()> {
+    if cloud_sync_preview_enabled() {
+        Ok(())
+    } else {
+        Err(HavenError::Invalid(format!(
+            "Cloud Sync is in private preview. Set {CLOUD_SYNC_PREVIEW_ENV}=1 to enable the unfinished auth/sync commands."
+        )))
+    }
+}
+
+fn hide_cloud_sync_status(v: &mut serde_json::Value) {
+    if !cloud_sync_preview_enabled() {
+        if let Some(obj) = v.as_object_mut() {
+            obj.remove("sync_pending");
+        }
+    }
+}
+
 #[derive(Parser)]
 #[command(name = "haven", version, about = "Local-first work-graph store")]
 struct Cli {
@@ -147,11 +174,13 @@ enum Command {
     /// Run the MCP server over stdio (the surface builder/app consume).
     Mcp,
     /// Auth0 sign-in / sign-out / status.
+    #[command(hide = true)]
     Auth {
         #[command(subcommand)]
         cmd: AuthCmd,
     },
     /// Sync with the cloud (push now, or report queue status).
+    #[command(hide = true)]
     Sync {
         #[command(subcommand)]
         cmd: Option<SyncCmd>,
@@ -1087,7 +1116,9 @@ fn run(cli: &Cli) -> Result<Output> {
         Command::Prime { project_key } => {
             // The bare positional resolves exactly like `-p` (mirrors `status`).
             let s = config::open_store()?;
-            let block = s.prime(project.or(project_key.as_deref()))?.render();
+            let block = s
+                .prime(project.or(project_key.as_deref()))?
+                .render_with_sync(cloud_sync_preview_enabled());
             Ok(Output::Text(block))
         }
         Command::Doctor => cmd_doctor(),
@@ -1213,6 +1244,7 @@ fn block_on<F: std::future::Future>(f: F) -> Result<F::Output> {
 }
 
 fn cmd_auth(cmd: &AuthCmd) -> Result<Output> {
+    require_cloud_sync_preview()?;
     let store = config::open_store()?;
     let token_store = haven_auth::TokenStore::new();
     match cmd {
@@ -1269,6 +1301,7 @@ fn cmd_auth(cmd: &AuthCmd) -> Result<Output> {
 }
 
 fn cmd_sync(project: Option<&str>, cmd: &Option<SyncCmd>, watch: bool) -> Result<Output> {
+    require_cloud_sync_preview()?;
     let store = config::open_store()?;
     if let Some(SyncCmd::Status) = cmd {
         let status = store.store_status(project)?;
@@ -1458,6 +1491,7 @@ fn hydrate_content(
     remote_path: &str,
     content_hash: Option<&str>,
 ) -> Result<()> {
+    require_cloud_sync_preview()?;
     let sync_cfg = config::sync_config(store).map_err(|e| {
         HavenError::Invalid(format!(
             "content file {rel_path} is in cloud Storage but sync isn't configured here: {e}"
@@ -1653,7 +1687,7 @@ fn cmd_setup(
         s.current_project()?
     };
     let paths = config::resolve()?;
-    Ok(Output::Json(serde_json::json!({
+    let mut out = serde_json::json!({
         "message": "haven local setup complete",
         "root": paths.root.display().to_string(),
         "db": paths.db.display().to_string(),
@@ -1672,8 +1706,12 @@ fn cmd_setup(
         } else {
             "create a project with `haven project add --key <key> --title <title>` then `haven project use <key>`"
         },
-        "note": "cloud auth/sync is configured separately",
-    })))
+    });
+    if cloud_sync_preview_enabled() {
+        out["note"] =
+            serde_json::json!("Cloud Sync preview enabled; configure auth/sync separately");
+    }
+    Ok(Output::Json(out))
 }
 
 fn cmd_skill(cmd: &SkillCmd) -> Result<Output> {
@@ -1943,7 +1981,12 @@ fn cmd_status(project: Option<&str>) -> Result<Output> {
             "projects".into(),
             serde_json::json!(s.list_projects(false)?.len()),
         );
-        obj.insert("auth".into(), serde_json::json!("not configured (Layer 6)"));
+        if cloud_sync_preview_enabled() {
+            obj.insert(
+                "auth".into(),
+                serde_json::json!("not configured (Cloud Sync preview)"),
+            );
+        }
         let backups = paths.root.join("backups");
         let entries = Store::list_backups(&backups).unwrap_or_default();
         let frozen = Store::backups_frozen(&backups).unwrap_or_default();
@@ -1956,6 +1999,7 @@ fn cmd_status(project: Option<&str>) -> Result<Output> {
             }),
         );
     }
+    hide_cloud_sync_status(&mut status);
     Ok(Output::Json(status))
 }
 
@@ -1981,8 +2025,8 @@ fn cmd_doctor() -> Result<Output> {
 /// `StoreTooNew`), the open error becomes the `database` check's error detail,
 /// the store-dependent checks (`schema`, `context_pack_integrity`,
 /// `xref_integrity`) are skipped, and the non-store checks (install wiring,
-/// backups, auth/sync skips) still run. `ok` is then false and the
-/// store-derived report fields are null.
+/// backups) still run. `ok` is then false and the store-derived report fields
+/// are null.
 fn doctor_report(store: Result<Store>, paths: &config::Paths) -> Result<serde_json::Value> {
     let mut checks = Vec::new();
 
@@ -2155,7 +2199,6 @@ fn doctor_report(store: Result<Store>, paths: &config::Paths) -> Result<serde_js
         Err(e) => checks.push(check("install", "warn", format!("could not inspect: {e}"))),
     }
 
-    // 5. Auth/sync — not part of the local (no-accounts) install.
     // 7. Backups: report count + freeze state. A quarantined snapshot is a warn.
     let backups = paths.root.join("backups");
     let entries = Store::list_backups(&backups).unwrap_or_default();
@@ -2186,8 +2229,18 @@ fn doctor_report(store: Result<Store>, paths: &config::Paths) -> Result<serde_js
         ));
     }
 
-    checks.push(check("auth", "skip", "not configured (cloud half)".into()));
-    checks.push(check("sync", "skip", "not configured (cloud half)".into()));
+    if cloud_sync_preview_enabled() {
+        checks.push(check(
+            "auth",
+            "skip",
+            "Cloud Sync preview enabled; auth not configured".into(),
+        ));
+        checks.push(check(
+            "sync",
+            "skip",
+            "Cloud Sync preview enabled; sync not configured".into(),
+        ));
+    }
 
     // Graph integrity (HV-105): context-pack tombstones, pointers into them, and
     // duplicate (node, path) artifact rows. A data-integrity warn, not store-fatal.
