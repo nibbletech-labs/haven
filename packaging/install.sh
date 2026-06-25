@@ -165,10 +165,10 @@ install -m 0755 "$BIN" "$DEST/haven"
 
 # Wire MCP + skill (idempotent; never fatal).
 log "Running haven setup"
-"$DEST/haven" setup >/dev/null 2>&1 || log "setup skipped (run \`haven setup\` manually)."
+"$DEST/haven" setup || log "setup skipped (run \`haven setup\` manually)."
 
 case ":$PATH:" in
     *":$DEST:"*) ;;
     *) log "Note: $DEST is not on your \$PATH — add it to use \`haven\` directly." ;;
 esac
-log "Done. Try: haven doctor"
+log "Done. Try: haven item add \"First item\" && haven doctor"

@@ -257,6 +257,8 @@ fn skill_install_and_setup_write_the_snapshot() {
     assert!(fresh.home.join(".agents/skills/haven/SKILL.md").exists());
     assert!(!fresh.home.join("AGENTS.md").exists());
     assert_eq!(setup["agents_md"], "skipped (--agents-md not requested)");
+    assert_eq!(setup["current_project"], "haven");
+    assert_eq!(setup["project_created"], true);
     let codex_config = std::fs::read_to_string(fresh.home.join(".codex/config.toml")).unwrap();
     assert!(codex_config.contains("[mcp_servers.haven]"));
     assert!(codex_config.contains("command = \"haven\""));
@@ -834,20 +836,48 @@ fn doctor_flags_context_pack_tombstone() {
 #[test]
 fn setup_can_bootstrap_first_project() {
     let h = Haven::new();
-    let out = h.json(&[
-        "setup",
-        "--project-key",
-        "haven",
-        "--project-title",
-        "Haven",
-        "--prefix",
-        "HV",
-    ]);
+    let out = h.json(&["setup"]);
     assert_eq!(out["current_project"], "haven");
     assert_eq!(out["project_created"], true);
 
-    let item = h.json(&["item", "add", "Draft the spec"]);
+    let projects = h.json(&["project", "list"]);
+    assert!(projects
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|p| { p["key"] == "haven" && p["title"] == "Haven" && p["ref_prefix"] == "HV" }));
+
+    let item = h.json(&["item", "add", "First item"]);
     assert_eq!(item["ref"], "HV-1");
+
+    let bin = assert_cmd::cargo::cargo_bin("haven");
+    let bindir = bin.parent().unwrap();
+    let out = h.cmd(&["doctor"]).env("PATH", bindir).output().unwrap();
+    assert!(
+        out.status.success(),
+        "doctor failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let doctor: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(
+        doctor["ok"], true,
+        "fresh setup + first item should leave doctor green: {doctor}"
+    );
+
+    let custom = Haven::new();
+    let out = custom.json(&[
+        "setup",
+        "--project-key",
+        "demo",
+        "--project-title",
+        "Demo",
+        "--prefix",
+        "DM",
+    ]);
+    assert_eq!(out["current_project"], "demo");
+    assert_eq!(out["project_created"], true);
+    let item = custom.json(&["item", "add", "First item"]);
+    assert_eq!(item["ref"], "DM-1");
 }
 
 #[test]
@@ -940,10 +970,6 @@ fn link_creates_visible_workspace_projection_and_local_git_exclude() {
 fn batch_commit_and_archive_take_multiple_refs() {
     let h = Haven::new();
     h.ok(&["setup"]);
-    h.ok(&[
-        "project", "add", "--key", "haven", "--title", "Haven", "--prefix", "HV",
-    ]);
-    h.ok(&["project", "use", "haven"]);
     h.json(&["item", "add", "A"]);
     h.json(&["item", "add", "B"]);
     h.json(&["item", "add", "C"]);
@@ -972,10 +998,6 @@ fn batch_commit_and_archive_take_multiple_refs() {
 fn item_list_limit_and_offset_slice() {
     let h = Haven::new();
     h.ok(&["setup"]);
-    h.ok(&[
-        "project", "add", "--key", "haven", "--title", "Haven", "--prefix", "HV",
-    ]);
-    h.ok(&["project", "use", "haven"]);
     h.json(&["item", "add", "A"]);
     h.json(&["item", "add", "B"]);
     h.json(&["item", "add", "C"]);
@@ -1006,10 +1028,6 @@ fn item_list_limit_and_offset_slice() {
 fn full_lifecycle() {
     let h = Haven::new();
     h.ok(&["setup"]);
-    h.ok(&[
-        "project", "add", "--key", "haven", "--title", "Haven", "--prefix", "HV",
-    ]);
-    h.ok(&["project", "use", "haven"]);
 
     // Add a committed, ready, AI-owned item and an uncommitted prereq.
     let item = h.json(&[
@@ -1124,10 +1142,6 @@ fn full_lifecycle() {
 fn error_envelope_and_exit_code() {
     let h = Haven::new();
     h.ok(&["setup"]);
-    h.ok(&[
-        "project", "add", "--key", "haven", "--title", "Haven", "--prefix", "HV",
-    ]);
-    h.ok(&["project", "use", "haven"]);
 
     let err = h.fail(&["item", "get", "HV-999"]);
     assert_eq!(err["error"]["code"], "not_found");
@@ -1145,10 +1159,6 @@ fn error_envelope_and_exit_code() {
 fn item_claim_takes_then_clashes() {
     let h = Haven::new();
     h.ok(&["setup"]);
-    h.ok(&[
-        "project", "add", "--key", "haven", "--title", "Haven", "--prefix", "HV",
-    ]);
-    h.ok(&["project", "use", "haven"]);
 
     let item = h.json(&[
         "item",
@@ -1188,10 +1198,6 @@ fn item_claim_takes_then_clashes() {
 fn content_layer_artifact_note_render() {
     let h = Haven::new();
     h.ok(&["setup"]);
-    h.ok(&[
-        "project", "add", "--key", "haven", "--title", "Haven", "--prefix", "HV",
-    ]);
-    h.ok(&["project", "use", "haven"]);
     h.json(&[
         "item",
         "add",
@@ -1240,7 +1246,7 @@ fn content_layer_artifact_note_render() {
 #[test]
 fn no_project_selected_is_a_clean_error() {
     let h = Haven::new();
-    h.ok(&["setup"]);
+    h.ok(&["init"]);
     let err = h.fail(&["item", "add", "orphan"]);
     assert_eq!(err["error"]["code"], "invalid");
 }
@@ -1485,10 +1491,6 @@ fn self_update_check_detects_symlinked_haven_bin_dir_as_install_sh() {
 fn backup_now_list_verify_and_restore_round_trip() {
     let h = Haven::new();
     h.ok(&["setup", "--no-skill"]);
-    h.ok(&[
-        "project", "add", "--key", "haven", "--title", "Haven", "--prefix", "HV",
-    ]);
-    h.ok(&["project", "use", "haven"]);
     h.json(&["item", "add", "First item"]);
 
     // Take a snapshot now.

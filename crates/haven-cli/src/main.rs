@@ -20,6 +20,9 @@ use haven_core::{
 use output::Output;
 
 const CLOUD_SYNC_PREVIEW_ENV: &str = "HAVEN_CLOUD_SYNC_PREVIEW";
+const DEFAULT_PROJECT_KEY: &str = "haven";
+const DEFAULT_PROJECT_TITLE: &str = "Haven";
+const DEFAULT_PROJECT_PREFIX: &str = "HV";
 
 fn cloud_sync_preview_enabled() -> bool {
     std::env::var(CLOUD_SYNC_PREVIEW_ENV)
@@ -1713,19 +1716,25 @@ fn cmd_setup(
 
     let mut project_created = false;
     let current_project = if let Some(key) = project_key {
-        match s.get_project(key) {
-            Ok(_) => {}
-            Err(HavenError::NotFound(_)) => {
-                let title = project_title.unwrap_or(key);
-                s.add_project(key, prefix, title, None)?;
-                project_created = true;
-            }
-            Err(e) => return Err(e),
-        }
-        s.use_project(key)?;
+        ensure_setup_project(
+            &s,
+            key,
+            project_title.unwrap_or(key),
+            prefix,
+            &mut project_created,
+        )?;
         Some(key.to_string())
+    } else if let Some(key) = s.current_project()? {
+        Some(key)
     } else {
-        s.current_project()?
+        ensure_setup_project(
+            &s,
+            DEFAULT_PROJECT_KEY,
+            DEFAULT_PROJECT_TITLE,
+            Some(DEFAULT_PROJECT_PREFIX),
+            &mut project_created,
+        )?;
+        Some(DEFAULT_PROJECT_KEY.to_string())
     };
     let paths = config::resolve()?;
     let mut out = serde_json::json!({
@@ -1742,17 +1751,31 @@ fn cmd_setup(
         "current_project": current_project,
         "project_created": project_created,
         "warnings": warnings,
-        "next": if current_project.is_some() {
-            "add items with `haven item add ...`"
-        } else {
-            "create a project with `haven project add --key <key> --title <title>` then `haven project use <key>`"
-        },
+        "next": "add items with `haven item add ...`",
     });
     if cloud_sync_preview_enabled() {
         out["note"] =
             serde_json::json!("Cloud Sync preview enabled; configure auth/sync separately");
     }
     Ok(Output::Json(out))
+}
+
+fn ensure_setup_project(
+    s: &Store,
+    key: &str,
+    title: &str,
+    prefix: Option<&str>,
+    project_created: &mut bool,
+) -> Result<()> {
+    match s.get_project(key) {
+        Ok(_) => {}
+        Err(HavenError::NotFound(_)) => {
+            s.add_project(key, prefix, title, None)?;
+            *project_created = true;
+        }
+        Err(e) => return Err(e),
+    }
+    s.use_project(key)
 }
 
 fn cmd_skill(cmd: &SkillCmd) -> Result<Output> {

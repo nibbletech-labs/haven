@@ -40,9 +40,10 @@ class Haven < Formula
 
   def caveats
     <<~EOS
-      Wire the MCP server + Claude skill (idempotent):
+      Wire the MCP server + skills and create/select the default first project:
         haven setup
       Then check the install:
+        haven item add "First item"
         haven doctor
     EOS
   end

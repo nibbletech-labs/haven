@@ -22,7 +22,7 @@ private preview and its commands stay hidden unless
 `HAVEN_CLOUD_SYNC_PREVIEW=1` is explicitly set.
 
 ```sh
-haven setup --project-key haven --project-title "Haven" --prefix HV
+haven setup
 haven item add "Draft the spec" --status ready --commit --assign ai \
   --done-looks-like "approved by review"
 haven next                          # show ready, unblocked work
@@ -52,7 +52,8 @@ depend on any one of them.
 
 ```sh
 brew install nibbletech-labs/tap/haven
-haven setup --project-key haven --project-title "Haven"
+haven setup
+haven item add "First item"
 haven doctor       # verify the install
 ```
 
@@ -74,7 +75,7 @@ falls back to building from source (needs cargo); force that with
 ```sh
 git clone https://github.com/nibbletech-labs/haven && cd haven
 cargo build --release
-./target/release/haven setup --project-key haven --project-title "Haven"
+./target/release/haven setup
 ```
 
 > **macOS Gatekeeper:** binaries from `brew` or `curl` run from a terminal are
@@ -84,10 +85,12 @@ cargo build --release
 
 `haven setup` is safe to run more than once. It creates `~/.haven`, runs
 migrations, registers the `haven` MCP server for Claude and Codex, installs the
-bundled skill into agent-readable skill paths, and can create or select your
-first project with `--project-key`. It does not write files into the current
-directory unless you opt in with `--agents-md`, which writes or refreshes the
-Haven stanza in the current repo's `AGENTS.md`.
+bundled skill into agent-readable skill paths, and creates/selects a default
+first project (`haven`, titled `Haven`, refs prefixed `HV`) when no current
+project exists. Pass `--project-key`, `--project-title`, and `--prefix` to choose
+your own first project. It does not write files into the current directory unless
+you opt in with `--agents-md`, which writes or refreshes the Haven stanza in the
+current repo's `AGENTS.md`.
 
 Use `haven doctor` to check whether the local pieces are wired correctly.
 
