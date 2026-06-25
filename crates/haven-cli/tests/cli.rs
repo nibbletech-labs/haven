@@ -40,6 +40,21 @@ impl Haven {
         })
     }
 
+    fn json_in_dir(&self, args: &[&str], dir: &std::path::Path) -> Value {
+        let out = self.cmd(args).current_dir(dir).output().unwrap();
+        assert!(
+            out.status.success(),
+            "command {args:?} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        serde_json::from_slice(&out.stdout).unwrap_or_else(|e| {
+            panic!(
+                "bad json from {args:?}: {e}\n{}",
+                String::from_utf8_lossy(&out.stdout)
+            )
+        })
+    }
+
     /// Run `haven <args>`, expect failure, parse the error envelope from stderr.
     /// The per-call telemetry line (HV-166) also rides stderr, so strip it before
     /// parsing the pretty-printed envelope — exactly what a real stderr consumer
@@ -103,6 +118,18 @@ impl Haven {
         c.args(args);
         c
     }
+}
+
+fn status_of(report: &Value, name: &str) -> String {
+    report["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["name"] == name)
+        .unwrap_or_else(|| panic!("no `{name}` check in {report}"))["status"]
+        .as_str()
+        .unwrap()
+        .to_string()
 }
 
 #[test]
@@ -228,7 +255,8 @@ fn skill_install_and_setup_write_the_snapshot() {
     assert!(setup["skill"].as_str().unwrap().ends_with("skills/haven"));
     assert!(fresh.home.join(".claude/skills/haven/SKILL.md").exists());
     assert!(fresh.home.join(".agents/skills/haven/SKILL.md").exists());
-    assert!(fresh.home.join("AGENTS.md").exists());
+    assert!(!fresh.home.join("AGENTS.md").exists());
+    assert_eq!(setup["agents_md"], "skipped (--agents-md not requested)");
     let codex_config = std::fs::read_to_string(fresh.home.join(".codex/config.toml")).unwrap();
     assert!(codex_config.contains("[mcp_servers.haven]"));
     assert!(codex_config.contains("command = \"haven\""));
@@ -239,6 +267,88 @@ fn skill_install_and_setup_write_the_snapshot() {
     assert_eq!(out["skill"], "skipped (--no-skill)");
     assert!(!skipped.home.join(".claude/skills/haven/SKILL.md").exists());
     assert!(!skipped.home.join(".agents/skills/haven/SKILL.md").exists());
+}
+
+#[test]
+fn setup_and_doctor_are_stable_across_current_directories() {
+    let h = Haven::new();
+    let dir_a = h.home.join("dir-a");
+    let dir_b = h.home.join("dir-b");
+    std::fs::create_dir_all(&dir_a).unwrap();
+    std::fs::create_dir_all(&dir_b).unwrap();
+
+    h.json_in_dir(&["setup"], &dir_a);
+    assert!(
+        !dir_a.join("AGENTS.md").exists(),
+        "plain setup must not write cwd-local AGENTS.md"
+    );
+    assert!(!dir_b.join("AGENTS.md").exists());
+
+    let bin = assert_cmd::cargo::cargo_bin("haven");
+    let bindir = bin.parent().unwrap();
+    let out = h
+        .cmd(&["doctor"])
+        .current_dir(&dir_b)
+        .env("PATH", bindir)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "doctor failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let doctor: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(status_of(&doctor, "agents_md"), "skip");
+    assert_eq!(
+        doctor["ok"], true,
+        "doctor should stay green from an unrelated cwd: {doctor}"
+    );
+}
+
+#[test]
+fn setup_agents_md_flag_writes_and_updates_repo_stanza() {
+    let h = Haven::new();
+    let repo = h.home.join("repo");
+    let subdir = repo.join("nested");
+    std::fs::create_dir_all(repo.join(".git/info")).unwrap();
+    std::fs::create_dir_all(&subdir).unwrap();
+    std::fs::write(
+        repo.join("AGENTS.md"),
+        "# Existing instructions\n\n<!-- HAVEN:BEGIN -->\nstale\n<!-- HAVEN:END -->\n\nKeep this line.\n",
+    )
+    .unwrap();
+
+    let out = h.json_in_dir(&["setup", "--agents-md"], &subdir);
+    let actual_agents_md = std::path::PathBuf::from(out["agents_md"].as_str().unwrap());
+    assert_eq!(
+        std::fs::canonicalize(actual_agents_md).unwrap(),
+        std::fs::canonicalize(repo.join("AGENTS.md")).unwrap()
+    );
+    let raw = std::fs::read_to_string(repo.join("AGENTS.md")).unwrap();
+    assert!(raw.contains("# Existing instructions"));
+    assert!(raw.contains("Core local verbs:"));
+    assert!(raw.contains("Keep this line."));
+    assert!(!raw.contains("\nstale\n"));
+
+    let bin = assert_cmd::cargo::cargo_bin("haven");
+    let bindir = bin.parent().unwrap();
+    let out = h
+        .cmd(&["doctor"])
+        .current_dir(&subdir)
+        .env("PATH", bindir)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "doctor failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let doctor: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(status_of(&doctor, "agents_md"), "ok");
+    assert_eq!(
+        doctor["ok"], true,
+        "doctor should pass in the linked repo: {doctor}"
+    );
 }
 
 #[test]
@@ -590,17 +700,6 @@ fn mcp_startup_refreshes_stale_skill_snapshot() {
 #[test]
 fn doctor_reports_install_health() {
     let h = Haven::new();
-    let status_of = |report: &Value, name: &str| -> String {
-        report["checks"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|c| c["name"] == name)
-            .unwrap_or_else(|| panic!("no `{name}` check in {report}"))["status"]
-            .as_str()
-            .unwrap()
-            .to_string()
-    };
 
     // Before setup the store still opens (migrations run, schema stamped), but the
     // MCP stanza and skill snapshot aren't wired — doctor flags exactly that.
@@ -643,7 +742,7 @@ fn doctor_reports_install_health() {
     );
     assert_eq!(status_of(&before, "codex_skill_orchestrate-run"), "warn");
     assert_eq!(status_of(&before, "codex_skill_verify"), "warn");
-    assert_eq!(status_of(&before, "agents_md"), "warn");
+    assert_eq!(status_of(&before, "agents_md"), "skip");
 
     // After setup, MCP + skill are green. Put the built binary on $PATH so the
     // `path` check can resolve `haven` (it isn't there by default in the test env).
@@ -674,7 +773,7 @@ fn doctor_reports_install_health() {
     assert_eq!(status_of(&after, "codex_skill_create-context-pack"), "ok");
     assert_eq!(status_of(&after, "codex_skill_orchestrate-run"), "ok");
     assert_eq!(status_of(&after, "codex_skill_verify"), "ok");
-    assert_eq!(status_of(&after, "agents_md"), "ok");
+    assert_eq!(status_of(&after, "agents_md"), "skip");
     assert_eq!(status_of(&after, "path"), "ok");
     assert_eq!(
         after["ok"], true,

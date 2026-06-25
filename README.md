@@ -83,9 +83,10 @@ cargo build --release
 
 `haven setup` is safe to run more than once. It creates `~/.haven`, runs
 migrations, registers the `haven` MCP server for Claude and Codex, installs the
-bundled skill into agent-readable skill paths, writes or refreshes the Haven
-stanza in `AGENTS.md`, and can create or select your first project with
-`--project-key`.
+bundled skill into agent-readable skill paths, and can create or select your
+first project with `--project-key`. It does not write files into the current
+directory unless you opt in with `--agents-md`, which writes or refreshes the
+Haven stanza in the current repo's `AGENTS.md`.
 
 Use `haven doctor` to check whether the local pieces are wired correctly.
 
@@ -112,6 +113,7 @@ when that is all you need:
 haven setup --agent codex
 haven setup --agent claude
 haven skill install --agent codex
+haven setup --agents-md   # opt in to repo-local AGENTS.md discovery
 ```
 
 Codex reads MCP servers from `~/.codex/config.toml` or trusted project

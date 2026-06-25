@@ -372,7 +372,7 @@ pub struct InstallCheck {
     pub codex_mcp_registered: bool,
     /// Per-skill snapshot status under `<agents>/skills/<name>/`, keyed by name.
     pub codex_skills: BTreeMap<String, SkillInstallStatus>,
-    pub agents_md_path: PathBuf,
+    pub agents_md_path: Option<PathBuf>,
     pub agents_md_present: bool,
     pub agents_md_current: bool,
     /// `haven` resolved on `$PATH` — what the MCP `command: "haven"` stanza needs
@@ -439,8 +439,10 @@ pub fn install_check() -> Result<InstallCheck> {
             },
         );
     }
-    let agents_md_path = std::env::current_dir()?.join("AGENTS.md");
-    let agents_md = std::fs::read_to_string(&agents_md_path).ok();
+    let agents_md_path = discover_agents_md()?;
+    let agents_md = agents_md_path
+        .as_ref()
+        .and_then(|path| std::fs::read_to_string(path).ok());
     let agents_md_current = agents_md
         .as_deref()
         .map(agents_md_has_current_stanza)
@@ -643,11 +645,27 @@ Core local verbs:
 "#;
 
 pub fn ensure_agents_md() -> Result<PathBuf> {
-    let path = std::env::current_dir()?.join("AGENTS.md");
+    let path = agents_md_write_path()?;
     let raw = std::fs::read_to_string(&path).unwrap_or_default();
     let updated = upsert_marked_block(&raw, AGENTS_BEGIN, AGENTS_END, AGENTS_STANZA);
     std::fs::write(&path, updated)?;
     Ok(path)
+}
+
+fn agents_md_write_path() -> Result<PathBuf> {
+    let cwd = std::env::current_dir()?;
+    let root = find_git_dir(cwd.clone())
+        .and_then(|git| git.parent().map(Path::to_path_buf))
+        .unwrap_or(cwd);
+    Ok(root.join("AGENTS.md"))
+}
+
+fn discover_agents_md() -> Result<Option<PathBuf>> {
+    let cwd = std::env::current_dir()?;
+    let path = find_git_dir(cwd.clone())
+        .and_then(|git| git.parent().map(|root| root.join("AGENTS.md")))
+        .unwrap_or_else(|| cwd.join("AGENTS.md"));
+    Ok(path.is_file().then_some(path))
 }
 
 fn agents_md_has_current_stanza(raw: &str) -> bool {

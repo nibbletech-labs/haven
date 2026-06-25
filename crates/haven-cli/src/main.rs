@@ -71,6 +71,9 @@ enum Command {
         /// Skip installing the Claude skill (headless / non-Claude installs).
         #[arg(long)]
         no_skill: bool,
+        /// Write or refresh the repo-local AGENTS.md Haven discovery stanza.
+        #[arg(long = "agents-md")]
+        agents_md: bool,
         /// Optional first project key to create/select during setup.
         #[arg(long = "project-key")]
         project_key: Option<String>,
@@ -1114,12 +1117,14 @@ fn run(cli: &Cli) -> Result<Output> {
         Command::Setup {
             agent,
             no_skill,
+            agents_md,
             project_key,
             project_title,
             prefix,
         } => cmd_setup(
             *agent,
             *no_skill,
+            *agents_md,
             project_key.as_deref(),
             project_title.as_deref(),
             prefix.as_deref(),
@@ -1615,6 +1620,7 @@ fn warn_if_quarantined() {
 fn cmd_setup(
     agent: AgentTarget,
     no_skill: bool,
+    write_agents_md: bool,
     project_key: Option<&str>,
     project_title: Option<&str>,
     prefix: Option<&str>,
@@ -1693,12 +1699,16 @@ fn cmd_setup(
         "skipped (--agent codex)".to_string()
     };
 
-    let agents_md = match config::ensure_agents_md() {
-        Ok(p) => p.display().to_string(),
-        Err(e) => {
-            warnings.push(format!("AGENTS.md discovery skipped: {e}"));
-            format!("skipped: {e}")
+    let agents_md = if write_agents_md {
+        match config::ensure_agents_md() {
+            Ok(p) => p.display().to_string(),
+            Err(e) => {
+                warnings.push(format!("AGENTS.md discovery skipped: {e}"));
+                format!("skipped: {e}")
+            }
         }
+    } else {
+        "skipped (--agents-md not requested)".to_string()
     };
 
     let mut project_created = false;
@@ -2191,30 +2201,31 @@ fn doctor_report(store: Result<Store>, paths: &config::Paths) -> Result<serde_js
                 checks.push(skill_check("codex", name, st));
             }
 
-            checks.push(if w.agents_md_current {
-                check(
+            checks.push(match &w.agents_md_path {
+                Some(path) if w.agents_md_current => check(
                     "agents_md",
                     "ok",
-                    format!(
-                        "Haven discovery stanza present in {}",
-                        w.agents_md_path.display()
-                    ),
-                )
-            } else if w.agents_md_present {
-                check(
+                    format!("Haven discovery stanza present in {}", path.display()),
+                ),
+                Some(path) if w.agents_md_present => check(
                     "agents_md",
                     "warn",
                     format!(
-                        "Haven discovery stanza stale in {} — run `haven setup`",
-                        w.agents_md_path.display()
+                        "Haven discovery stanza stale in {} — run `haven setup --agents-md`",
+                        path.display()
                     ),
-                )
-            } else {
-                check(
+                ),
+                Some(path) => check(
                     "agents_md",
                     "warn",
-                    format!("missing {} — run `haven setup`", w.agents_md_path.display()),
-                )
+                    format!("missing {} — run `haven setup --agents-md`", path.display()),
+                ),
+                None => check(
+                    "agents_md",
+                    "skip",
+                    "no repo-local AGENTS.md discovered; run `haven setup --agents-md` in a repo to add one"
+                        .into(),
+                ),
             });
 
             checks.push(match w.haven_on_path {
