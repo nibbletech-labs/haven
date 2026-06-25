@@ -985,17 +985,27 @@ fn brew_prefix_containing(exe: &Path) -> Option<PathBuf> {
 }
 
 fn under_known_copy_dir(exe: &Path) -> bool {
-    if exe.starts_with("/usr/local/bin") {
+    let haven_bin_dir = std::env::var_os("HAVEN_BIN_DIR").map(PathBuf::from);
+    under_known_copy_dir_with_env(exe, haven_bin_dir.as_deref())
+}
+
+fn under_known_copy_dir_with_env(exe: &Path, haven_bin_dir: Option<&Path>) -> bool {
+    if under_install_dir(exe, Path::new("/usr/local/bin")) {
         return true;
     }
     if let Some(b) = directories::BaseDirs::new() {
-        if exe.starts_with(b.home_dir().join(".local/bin")) {
+        if under_install_dir(exe, &b.home_dir().join(".local/bin")) {
             return true;
         }
     }
-    std::env::var_os("HAVEN_BIN_DIR")
-        .map(|d| exe.starts_with(PathBuf::from(d)))
+    haven_bin_dir
+        .map(|d| under_install_dir(exe, d))
         .unwrap_or(false)
+}
+
+fn under_install_dir(exe: &Path, dir: &Path) -> bool {
+    let dir = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
+    exe.starts_with(dir)
 }
 
 /// Per-method guidance string for `self update`.
@@ -1297,5 +1307,28 @@ mod update_tests {
         assert_eq!(std::fs::read(&dest).unwrap(), b"new-binary");
         let mode = std::fs::metadata(&dest).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o755);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn under_known_copy_dir_accepts_symlinked_haven_bin_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let real_bin = tmp.path().join("real/bin");
+        std::fs::create_dir_all(&real_bin).unwrap();
+        let exe = real_bin.join("haven");
+        std::fs::write(&exe, b"binary").unwrap();
+
+        let linked_bin = tmp.path().join("linked-bin");
+        std::os::unix::fs::symlink(&real_bin, &linked_bin).unwrap();
+
+        let canonical_exe = std::fs::canonicalize(&exe).unwrap();
+        assert!(under_known_copy_dir_with_env(
+            &canonical_exe,
+            Some(&linked_bin)
+        ));
+        assert!(!under_known_copy_dir_with_env(
+            &canonical_exe,
+            Some(&tmp.path().join("missing-bin"))
+        ));
     }
 }

@@ -1345,6 +1345,43 @@ fn self_update_check_is_offline_safe() {
     assert!(out["method"].is_string());
 }
 
+#[cfg(unix)]
+#[test]
+fn self_update_check_detects_symlinked_haven_bin_dir_as_install_sh() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let h = Haven::new();
+    let dir = TempDir::new().unwrap();
+    let real_bin = dir.path().join("real/bin");
+    std::fs::create_dir_all(&real_bin).unwrap();
+
+    let copied = real_bin.join("haven");
+    std::fs::copy(assert_cmd::cargo::cargo_bin("haven"), &copied).unwrap();
+    std::fs::set_permissions(&copied, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let linked_bin = dir.path().join("linked-bin");
+    std::os::unix::fs::symlink(&real_bin, &linked_bin).unwrap();
+
+    let out = Command::new(&copied)
+        .env("HAVEN_HOME", &h.home)
+        .env("HAVEN_CLAUDE_DIR", h.home.join(".claude"))
+        .env("HAVEN_CODEX_DIR", h.home.join(".codex"))
+        .env("HAVEN_AGENTS_DIR", h.home.join(".agents"))
+        .env("HAVEN_BIN_DIR", &linked_bin)
+        .env("HAVEN_CLOUD_SYNC_PREVIEW", "0")
+        .current_dir(&h.home)
+        .args(["self", "update", "--check"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "self update --check failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let out: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(out["method"], "install.sh");
+}
+
 #[test]
 fn backup_now_list_verify_and_restore_round_trip() {
     let h = Haven::new();
