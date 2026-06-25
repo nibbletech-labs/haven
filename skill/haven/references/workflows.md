@@ -6,10 +6,13 @@ remote/headless client, the MCP equivalent and the CLI↔MCP differences are in
 `surface-map.md`. JSON is the default output — read it to confirm refs and state.
 
 **Before any project-scoped op:** make sure you know which project you're in
-(every item lives in one). **CLI:** `haven project list` → `haven project use <key>`
-(sticky) or `haven project add …`. **MCP/remote:** `haven_list_projects` →
-pass `project: "<key>"` per call (no `use`); `haven_add_project` to create. Settle
-this once per session, not per command (see `surface-map.md` for the selection model).
+(every item lives in one). If the current CLI project is already known from repo
+instructions, prior session context, or `haven prime`, do **not** call
+`project list` again. If it is unknown, **CLI:** `haven project list` →
+`haven project use <key>` (sticky) or `haven project add …`. **MCP/remote:**
+`haven_list_projects` → pass `project: "<key>"` per call (no `use`);
+`haven_add_project` to create. Settle this once per session, not per command (see
+`surface-map.md` for the selection model).
 
 ## Contents
 - [Status routing (per-status action)](#status-routing)
@@ -159,6 +162,23 @@ ordered plan.
 
 **Trigger:** the user (or an orchestrator) asks what to work on.
 
+**Lean read path:** Dispatch is a queue decision, not a whole-graph read. Prefer
+the purpose-built briefing when available, and widen only when the visible
+candidates don't explain the choice:
+
+```bash
+haven prime                         # once at session start, or skip if already read
+haven dispatch --owner ai --limit 5 # bounded next + targeted candidate context
+haven dispatch --owner ai --scope HV-30 --limit 5  # restrict to a subtree
+haven next --owner ai --limit 5      # fallback compact candidate list
+haven item get HV-12 --include edges,artifacts  # fallback detail for plausible candidates
+haven next --explain --owner ai      # only when next/dispatch is empty or surprising
+```
+
+Avoid `haven graph` for ordinary "what should I work on?" dispatch. Use it when
+you are reorganising dependencies, debugging dependency shape, rendering a graph,
+or reasoning over the whole backlog by design.
+
 **Preflight — groom before you build (never build an ungroomed item).** Before
 handing any item to a builder — a named ref *or* one pulled from `haven next` —
 confirm it is **`ready` with a non-empty `done_looks_like`**. If it's still
@@ -169,6 +189,7 @@ it as deliberate intent, not something to discover by tripping the guard.
 
 ```bash
 haven next --pretty                 # top of the dispatch queue
+haven dispatch --owner ai --limit 5 # richer briefing, still bounded
 haven next --owner human --limit 3  # work assigned to a human
 haven next --owner ai               # work assigned to an AI (owner_kind = ai)
 haven next --explain --owner ai     # WHY the queue is empty (when it is)

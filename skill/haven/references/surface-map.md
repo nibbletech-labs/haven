@@ -2,14 +2,14 @@
 
 The two front-ends drive the **same** store but are **not 1:1**. The CLI has many
 friendly verbs (for a human typing); the MCP is a deliberately smaller, more
-general set of 30 tools (for an agent). When a workflow runs over MCP, translate
+general set of 33 tools (for an agent). When a workflow runs over MCP, translate
 using the mapping below — and see the **[verb-divergence map](#verb-divergence-top-level-vs-item-nested-vs-mcp-only)**
 for the cases where the same verb lives at a different level on each surface.
 
 ## Contents
 - [Enums (valid values)](#enums)
 - [CLI command surface](#cli-command-surface)
-- [MCP tool catalogue (30 tools)](#mcp-tool-catalogue)
+- [MCP tool catalogue (33 tools)](#mcp-tool-catalogue)
 - [CLI → MCP mapping](#cli--mcp-mapping)
 - [Verb-divergence map (top-level vs item-nested vs MCP-only)](#verb-divergence-top-level-vs-item-nested-vs-mcp-only)
 - [CLI-only operations](#cli-only-operations)
@@ -84,6 +84,9 @@ haven item reopen  <ref> [--rationale "…"]
 
 # Dispatch
 haven next [--owner human|ai] [--limit N]   # --owner = ASSIGNMENT filter (owner_kind = owner); unassigned (NULL) excluded
+haven dispatch [--owner human|ai] [--limit N] [--scope <ref>] [--explain]
+                                             # bounded next + targeted candidate detail;
+                                             # --scope restricts to a parent/release/phase subtree
 haven graph [--lineage] [--all]  # whole project: all nodes + edges in one read.
                                  # live-only by default (drops archived/superseded
                                  # + dangling edges), matching haven_graph; --all includes them
@@ -125,7 +128,7 @@ haven mcp
 
 ## MCP tool catalogue
 
-30 tools, each taking an optional `project` and naming items by `ref` or
+33 tools, each taking an optional `project` and naming items by `ref` or
 `public_id`. Required args in **bold**.
 
 | Tool | Args |
@@ -135,6 +138,7 @@ haven mcp
 | `haven_xref` | **`ref`** — cross-store links on the node's artifacts: a sorted `{node, outbound[], inbound[]}` report (outbound xrefs + inbound backlinks); read-only |
 | `haven_get_item` | **`ref`**, `include?: ["edges","artifacts","lineage"]` — the full item (prose + includes); the detail door. A superseded/archived ref still returns the item but rides a `stale_ref` `{ref, resolved_to:[…]}` hint (the work moved — follow `resolved_to`) |
 | `haven_next` | `owner?, limit?` — compact items; `owner` filters ASSIGNMENT (`owner_kind = owner`), unassigned (NULL) excluded |
+| `haven_dispatch` | `owner?, limit?, scope?, explain?` — lean "what should I work on?" briefing: bounded `next` plus targeted candidate detail (`done_looks_like`, parent/group context, blocked dependents, artifact pointers); `scope` restricts candidates to live descendants of a parent/release/phase ref |
 | `haven_next_explain` | `owner?` — diagnose an empty queue (counts by reason + hint) |
 | `haven_rank` | **`ref`**, `before?` \| `after?` (exactly one) — reorder within a priority band (fine ordering) |
 | `haven_add_item` | **`title`**, `type?, body?, done_looks_like?, why?, status?, priority?, commit?, assign?, due_at?, parent?, depends_on?, group?, if_absent?` — with `if_absent` a normalized-title match returns the existing item (`existing: true`); responses may carry advisory `similar` |
@@ -197,7 +201,7 @@ The collapses that catch people out:
 | `item claim` | `haven_claim` |
 | `item handoff` | `haven_handoff` |
 | `item complete` | `haven_complete_item` |
-| `next` / `next --explain` | `haven_next` / `haven_next_explain` |
+| `next` / `dispatch` / `next --explain` | `haven_next` / `haven_dispatch` / `haven_next_explain` |
 | `prime` | `haven_prime` |
 | `item rank` | `haven_rank` |
 | `search`, `status`, `artifact get`/`add` | `haven_search`, `haven_status`, `haven_get_artifact`/`haven_add_artifact` |
@@ -250,7 +254,7 @@ corrective command (HV-158) — you don't have to memorise the table, but here i
 
 **Three buckets:**
 
-- **Top-level CLI verbs** (no `item` prefix): `next`, `inbox`, `graph`, `docs`,
+- **Top-level CLI verbs** (no `item` prefix): `next`, `dispatch`, `inbox`, `graph`, `docs`,
   `search`, `xref`, `import`, `decompose`/`depend`/`group`, `evolve`, `note`,
   `render`, plus lifecycle/admin (`setup`, `status`, …). These are *not* under
   `item`.

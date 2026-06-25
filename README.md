@@ -25,6 +25,7 @@ haven setup --project-key haven --project-title "Haven" --prefix HV
 haven item add "Draft the spec" --status ready --commit --assign ai \
   --done-looks-like "approved by review"
 haven next                          # show ready, unblocked work
+haven dispatch --owner ai --limit 5 # next candidates + targeted context
 haven item get HV-1 --include edges,artifacts,lineage
 haven item assign HV-1 --to human
 haven docs                          # project vision, architecture, and spec anchors
@@ -174,7 +175,7 @@ local wiring.
 ## Status
 
 The local workflow runs end to end on one machine: items, dependency layers,
-handoffs, lineage, `haven next`, full-text search, artifacts, the generated
+handoffs, lineage, `haven next`/`haven dispatch`, full-text search, artifacts, the generated
 `backlog.md` view, and the MCP server.
 
 Cloud Sync is partly built but not part of the public local-first release yet.

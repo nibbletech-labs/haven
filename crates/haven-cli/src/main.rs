@@ -13,7 +13,8 @@ use haven_core::{
     telemetry::{self, TelemetryLine},
     ArtifactKind, ArtifactRole, ArtifactSelector, CompleteInput, DueUpdate, HandoffInput,
     HavenError, Include, IntegrityKind, ItemFilter, ItemUpdate, LineageDirection, NewArtifact,
-    NewItem, NodeType, OwnerKind, Result, Status, Store, WaitState, WaitUpdate, DEFAULT_NEXT_LIMIT,
+    NewItem, NodeType, OwnerKind, Result, Status, Store, WaitState, WaitUpdate,
+    DEFAULT_DISPATCH_LIMIT, DEFAULT_NEXT_LIMIT,
 };
 
 use output::Output;
@@ -124,6 +125,8 @@ enum Command {
     },
     /// The ready-to-dispatch query.
     Next(NextArgs),
+    /// Lean "what should I work on?" briefing: bounded next + targeted context.
+    Dispatch(DispatchArgs),
     /// Untriaged floaters: uncommitted, live, no acceptance yet — the triage queue.
     Inbox(InboxArgs),
     /// Cross-store links on a node's artifacts: outbound xrefs + inbound backlinks.
@@ -787,6 +790,22 @@ struct NextArgs {
 }
 
 #[derive(Args)]
+struct DispatchArgs {
+    /// Filter by owner kind: human | ai.
+    #[arg(long)]
+    owner: Option<String>,
+    /// Maximum number of candidates to return (defaults to 5).
+    #[arg(long)]
+    limit: Option<i64>,
+    /// Restrict candidates to live descendants of this parent/release/phase ref.
+    #[arg(long)]
+    scope: Option<String>,
+    /// Include diagnostic counts even when candidates exist.
+    #[arg(long)]
+    explain: bool,
+}
+
+#[derive(Args)]
 struct InboxArgs {
     /// Filter by owner kind: human | ai.
     #[arg(long)]
@@ -987,6 +1006,7 @@ fn guard_kind(cmd: &Command) -> GuardKind {
         Command::Status { .. }
         | Command::Prime { .. }
         | Command::Next(_)
+        | Command::Dispatch(_)
         | Command::Inbox(_)
         | Command::Xref(_)
         | Command::Search(_)
@@ -1139,6 +1159,17 @@ fn run(cli: &Cli) -> Result<Output> {
                     a.limit.or(Some(DEFAULT_NEXT_LIMIT)),
                 )?))
             }
+        }
+        Command::Dispatch(a) => {
+            let s = config::open_store()?;
+            let owner = a.owner.as_deref().map(OwnerKind::parse).transpose()?;
+            Ok(Output::Json(serde_json::to_value(s.dispatch(
+                project,
+                owner,
+                a.limit.or(Some(DEFAULT_DISPATCH_LIMIT)),
+                a.scope.as_deref(),
+                a.explain,
+            )?)?))
         }
         Command::Inbox(a) => {
             let s = config::open_store()?;

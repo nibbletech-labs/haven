@@ -8,7 +8,9 @@ use serde::Serialize;
 use crate::error::Result;
 use crate::model::*;
 
-use super::{fts_user_query, item_from_row, EdgeKind, ItemFilter, Store, ITEM_FROM, ITEM_SELECT};
+use super::{
+    fts_user_query, item_from_row, EdgeKind, Include, ItemFilter, Store, ITEM_FROM, ITEM_SELECT,
+};
 
 /// One structural edge in a [`ProjectGraph`], as a `{kind, from, to}` ref triple
 /// — the same shape `add_edge` accepts, so a graph export round-trips.
@@ -41,6 +43,90 @@ pub struct ProjectGraph {
     /// `haven graph` is then prompted to groom before planning.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub grooming_nudge: Option<String>,
+}
+
+/// Compact context for a parent/group/blocker shown in a dispatch summary.
+#[derive(Debug, Clone, Serialize)]
+pub struct DispatchContextItem {
+    #[serde(rename = "ref")]
+    pub reference: String,
+    pub title: String,
+    #[serde(rename = "type")]
+    pub node_type: NodeType,
+}
+
+/// Artifact metadata shown in a dispatch summary. This intentionally omits
+/// internal ids, hashes, revisions, and metadata so dispatch stays lean.
+#[derive(Debug, Clone, Serialize)]
+pub struct DispatchArtifact {
+    pub role: ArtifactRole,
+    pub kind: ArtifactKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub uri: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub excerpt: Option<String>,
+}
+
+/// One candidate in a [`DispatchSummary`]: the ranked `next` row plus the
+/// targeted context a human/agent otherwise tends to fetch with several reads.
+#[derive(Debug, Clone, Serialize)]
+pub struct DispatchCandidate {
+    pub rank: usize,
+    #[serde(rename = "ref")]
+    pub reference: String,
+    pub title: String,
+    #[serde(rename = "type")]
+    pub node_type: NodeType,
+    pub status: Status,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner_kind: Option<OwnerKind>,
+    pub committed: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub priority: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub done_looks_like: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub why: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
+    pub parents: Vec<DispatchContextItem>,
+    pub groups: Vec<DispatchContextItem>,
+    pub blocks: Vec<DispatchContextItem>,
+    pub artifacts: Vec<DispatchArtifact>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_pack: Option<ContextPack>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_pack_clash: Option<Vec<String>>,
+    pub eligibility: String,
+}
+
+/// The top-ranked dispatch candidate and why it is the recommendation.
+#[derive(Debug, Clone, Serialize)]
+pub struct DispatchRecommendation {
+    #[serde(rename = "ref")]
+    pub reference: String,
+    pub reason: String,
+}
+
+/// Purpose-built "what should I work on?" payload: bounded `next` plus targeted
+/// details for just those candidates, optionally scoped to a subtree.
+#[derive(Debug, Clone, Serialize)]
+pub struct DispatchSummary {
+    pub project: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner: Option<OwnerKind>,
+    pub limit: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scope: Option<DispatchContextItem>,
+    pub candidates: Vec<DispatchCandidate>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recommendation: Option<DispatchRecommendation>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub explain: Option<serde_json::Value>,
 }
 
 impl ProjectGraph {
@@ -166,6 +252,9 @@ const ORDER: &str =
 /// blow an agent's context budget; the orchestrator re-polls between batches, so
 /// the top of the ranked frontier is all it needs in one read (HV-194).
 pub const DEFAULT_NEXT_LIMIT: i64 = 50;
+/// Default candidate count for the richer dispatch summary. This is lower than
+/// `next` because each candidate carries targeted detail.
+pub const DEFAULT_DISPATCH_LIMIT: i64 = 5;
 
 /// The `haven next` dispatch filter: committed, ready, not waiting, with no open
 /// dependency (SPEC §1). Shared verbatim by `next` (which returns the items) and
@@ -180,6 +269,81 @@ const DISPATCHABLE_PREDICATE: &str = "n.committed = 1 AND n.status = 'ready'
                WHERE d.node_id = n.id AND p.status NOT IN ('done','superseded','archived')
              )";
 
+impl From<Item> for DispatchContextItem {
+    fn from(item: Item) -> Self {
+        DispatchContextItem {
+            reference: item.reference,
+            title: item.title,
+            node_type: item.node_type,
+        }
+    }
+}
+
+impl From<Artifact> for DispatchArtifact {
+    fn from(artifact: Artifact) -> Self {
+        DispatchArtifact {
+            role: artifact.role,
+            kind: artifact.kind,
+            path: artifact.path,
+            uri: artifact.uri,
+            title: artifact.title,
+            excerpt: artifact.excerpt,
+        }
+    }
+}
+
+fn push_scope_filter(
+    sql: &mut String,
+    args: &mut Vec<Box<dyn rusqlite::ToSql>>,
+    scope_id: Option<i64>,
+) {
+    if let Some(scope_id) = scope_id {
+        let idx = args.len() + 1;
+        sql.push_str(&format!(
+            " AND n.id IN (
+                WITH RECURSIVE sub(id) AS (
+                    SELECT ?{idx}
+                    UNION
+                    SELECT e.child_id FROM decomposition_edges e JOIN sub ON e.parent_id = sub.id
+                    UNION
+                    SELECT e.member_id FROM grouping_edges e JOIN sub ON e.group_id = sub.id
+                )
+                SELECT id FROM sub WHERE id <> ?{idx}
+            )"
+        ));
+        args.push(Box::new(scope_id));
+    }
+}
+
+fn dispatch_eligibility(owner: Option<OwnerKind>, scope: Option<&DispatchContextItem>) -> String {
+    let mut parts = vec!["committed", "ready", "unblocked", "not waiting"];
+    if owner.is_some() {
+        parts.push("owner matched");
+    }
+    if scope.is_some() {
+        parts.push("inside scope");
+    }
+    parts.join(", ")
+}
+
+fn recommendation_reason(owner: Option<OwnerKind>, scope: Option<&DispatchContextItem>) -> String {
+    match (owner, scope) {
+        (Some(owner), Some(scope)) => format!(
+            "highest-ranked dispatchable item for owner {} under {}",
+            owner.as_str(),
+            scope.reference
+        ),
+        (Some(owner), None) => format!(
+            "highest-ranked dispatchable item for owner {}",
+            owner.as_str()
+        ),
+        (None, Some(scope)) => {
+            format!("highest-ranked dispatchable item under {}", scope.reference)
+        }
+        (None, None) => "highest-ranked dispatchable item".into(),
+    }
+}
+
 impl Store {
     /// `haven next`: committed, ready, not waiting, with no open dependency.
     /// Highest priority band first, then `sort_key` (SPEC §1).
@@ -190,6 +354,16 @@ impl Store {
         limit: Option<i64>,
     ) -> Result<Vec<Item>> {
         let (project_id, _) = self.require_project(project)?;
+        self.next_for_project(project_id, owner, limit, None)
+    }
+
+    fn next_for_project(
+        &self,
+        project_id: i64,
+        owner: Option<OwnerKind>,
+        limit: Option<i64>,
+        scope_id: Option<i64>,
+    ) -> Result<Vec<Item>> {
         let mut sql = format!(
             "SELECT {ITEM_SELECT} FROM {ITEM_FROM}
              WHERE n.project_id = ?1 AND {DISPATCHABLE_PREDICATE}"
@@ -202,6 +376,7 @@ impl Store {
             sql.push_str(&format!(" AND n.owner_kind = ?{}", args.len() + 1));
             args.push(Box::new(owner.as_str()));
         }
+        push_scope_filter(&mut sql, &mut args, scope_id);
         sql.push_str(ORDER);
         if let Some(limit) = limit {
             sql.push_str(&format!(" LIMIT ?{}", args.len() + 1));
@@ -215,6 +390,92 @@ impl Store {
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
+    /// A lean dispatch briefing: bounded `next` plus targeted context for only
+    /// the visible candidates. This is the cheap path for "what should I work on?"
+    /// when `next` alone is too sparse but `graph` would be excessive.
+    pub fn dispatch(
+        &self,
+        project: Option<&str>,
+        owner: Option<OwnerKind>,
+        limit: Option<i64>,
+        scope: Option<&str>,
+        include_explain: bool,
+    ) -> Result<DispatchSummary> {
+        let (project_id, key) = self.require_project(project)?;
+        let limit = limit.unwrap_or(DEFAULT_DISPATCH_LIMIT).max(0);
+        let scope_id = scope
+            .map(|s| self.resolve_node_id(project_id, s))
+            .transpose()?;
+        let scope_item = scope_id
+            .map(|id| self.dispatch_context_for_id(id))
+            .transpose()?;
+
+        let items = self.next_for_project(project_id, owner, Some(limit), scope_id)?;
+        let mut candidates = Vec::with_capacity(items.len());
+        for (idx, item) in items.into_iter().enumerate() {
+            let mut full = self.get_item(
+                Some(&key),
+                &item.reference,
+                &[Include::Edges, Include::Artifacts],
+            )?;
+            let edges = full.edges.take().unwrap_or_default();
+            let artifacts = full
+                .artifacts
+                .take()
+                .unwrap_or_default()
+                .into_iter()
+                .map(DispatchArtifact::from)
+                .collect();
+            let eligibility = dispatch_eligibility(owner, scope_item.as_ref());
+            candidates.push(DispatchCandidate {
+                rank: idx + 1,
+                reference: full.reference,
+                title: full.title,
+                node_type: full.node_type,
+                status: full.status,
+                owner_kind: full.owner_kind,
+                committed: full.committed,
+                priority: full.priority,
+                done_looks_like: full.done_looks_like,
+                why: full.why,
+                body: full.body,
+                parents: self.dispatch_contexts_for_refs(&key, &edges.parents)?,
+                groups: self.dispatch_contexts_for_refs(&key, &edges.groups)?,
+                blocks: self.dispatch_contexts_for_refs(&key, &edges.blocks)?,
+                artifacts,
+                context_pack: full.context_pack,
+                context_pack_clash: full.context_pack_clash,
+                eligibility,
+            });
+        }
+
+        let recommendation = candidates.first().map(|c| DispatchRecommendation {
+            reference: c.reference.clone(),
+            reason: recommendation_reason(owner, scope_item.as_ref()),
+        });
+        let explain = (include_explain || candidates.is_empty())
+            .then(|| {
+                self.next_explain_for_project(
+                    project_id,
+                    key.clone(),
+                    owner,
+                    scope_id,
+                    scope_item.as_ref(),
+                )
+            })
+            .transpose()?;
+
+        Ok(DispatchSummary {
+            project: key,
+            owner,
+            limit,
+            scope: scope_item,
+            candidates,
+            recommendation,
+            explain,
+        })
+    }
+
     /// Explain the local dispatch queue: useful when `next` is empty.
     pub fn next_explain(
         &self,
@@ -222,19 +483,32 @@ impl Store {
         owner: Option<OwnerKind>,
     ) -> Result<serde_json::Value> {
         let (project_id, key) = self.require_project(project)?;
-        let dispatchable = self.count_dispatchable(project_id, owner)?;
-        let dispatchable_any_owner = self.count_dispatchable(project_id, None)?;
+        self.next_explain_for_project(project_id, key, owner, None, None)
+    }
+
+    fn next_explain_for_project(
+        &self,
+        project_id: i64,
+        key: String,
+        owner: Option<OwnerKind>,
+        scope_id: Option<i64>,
+        scope: Option<&DispatchContextItem>,
+    ) -> Result<serde_json::Value> {
+        let dispatchable = self.count_dispatchable(project_id, owner, scope_id)?;
+        let dispatchable_any_owner = self.count_dispatchable(project_id, None, scope_id)?;
         let owner_mismatch = owner
             .map(|_| dispatchable_any_owner.saturating_sub(dispatchable))
             .unwrap_or(0);
         let waiting = self.count_next_where(
             project_id,
             owner,
+            scope_id,
             "n.type <> 'anchor' AND n.committed = 1 AND n.status = 'ready' AND n.wait_state IS NOT NULL",
         )?;
         let blocked_by_dependency = self.count_next_where(
             project_id,
             owner,
+            scope_id,
             "n.type <> 'anchor' AND n.committed = 1 AND n.status = 'ready' AND n.wait_state IS NULL
              AND EXISTS (
                SELECT 1 FROM dependency_edges d
@@ -245,11 +519,13 @@ impl Store {
         let committed_not_ready = self.count_next_where(
             project_id,
             owner,
+            scope_id,
             "n.type <> 'anchor' AND n.committed = 1 AND n.status NOT IN ('ready','done','superseded','archived')",
         )?;
         let ready_but_uncommitted = self.count_next_where(
             project_id,
             owner,
+            scope_id,
             "n.type <> 'anchor' AND n.committed = 0 AND n.status = 'ready'",
         )?;
 
@@ -269,7 +545,7 @@ impl Store {
             "no ready committed work found"
         };
 
-        Ok(serde_json::json!({
+        let mut out = serde_json::json!({
             "project": key,
             "owner": owner.map(|o| o.as_str()),
             "dispatchable": dispatchable,
@@ -281,17 +557,29 @@ impl Store {
                 "committed_not_ready": committed_not_ready,
                 "ready_but_uncommitted": ready_but_uncommitted,
             }
-        }))
+        });
+        if let Some(scope) = scope {
+            if let serde_json::Value::Object(map) = &mut out {
+                map.insert("scope".into(), serde_json::to_value(scope)?);
+            }
+        }
+        Ok(out)
     }
 
-    fn count_dispatchable(&self, project_id: i64, owner: Option<OwnerKind>) -> Result<i64> {
-        self.count_next_where(project_id, owner, DISPATCHABLE_PREDICATE)
+    fn count_dispatchable(
+        &self,
+        project_id: i64,
+        owner: Option<OwnerKind>,
+        scope_id: Option<i64>,
+    ) -> Result<i64> {
+        self.count_next_where(project_id, owner, scope_id, DISPATCHABLE_PREDICATE)
     }
 
     fn count_next_where(
         &self,
         project_id: i64,
         owner: Option<OwnerKind>,
+        scope_id: Option<i64>,
         predicate: &str,
     ) -> Result<i64> {
         let mut sql =
@@ -305,11 +593,34 @@ impl Store {
             sql.push_str(&format!(" AND n.owner_kind = ?{}", args.len() + 1));
             args.push(Box::new(owner.as_str()));
         }
+        push_scope_filter(&mut sql, &mut args, scope_id);
         Ok(self.conn.query_row(
             &sql,
             rusqlite::params_from_iter(args.iter().map(|b| b.as_ref())),
             |r| r.get(0),
         )?)
+    }
+
+    fn dispatch_context_for_id(&self, node_id: i64) -> Result<DispatchContextItem> {
+        let item = self.conn.query_row(
+            &format!("SELECT {ITEM_SELECT} FROM {ITEM_FROM} WHERE n.id = ?1"),
+            [node_id],
+            item_from_row,
+        )?;
+        Ok(DispatchContextItem::from(item))
+    }
+
+    fn dispatch_contexts_for_refs(
+        &self,
+        project: &str,
+        refs: &[String],
+    ) -> Result<Vec<DispatchContextItem>> {
+        refs.iter()
+            .map(|r| {
+                self.get_item(Some(project), r, &[])
+                    .map(DispatchContextItem::from)
+            })
+            .collect()
     }
 
     /// FTS5 search over node title/body, ranked by relevance.

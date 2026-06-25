@@ -1074,6 +1074,64 @@ fn next_owner_ai_dispatches_planner_sealed_leaf() {
 }
 
 #[test]
+fn dispatch_summarizes_bounded_scoped_candidates_with_context() {
+    let s = store();
+    let phase = container(&s, "App 2.0", NodeType::Phase);
+    let scoped = ready_assigned(&s, "Implement quick-log", Some(OwnerKind::Ai));
+    let outside = ready_assigned(&s, "Unrelated ready work", Some(OwnerKind::Ai));
+    let downstream = ready_assigned(&s, "Verify quick-log", Some(OwnerKind::Ai));
+    s.decompose(None, &phase.reference, &scoped, false).unwrap();
+    s.depend(None, &downstream, &scoped, false).unwrap();
+    s.add_artifact(
+        None,
+        &scoped,
+        NewArtifact {
+            role: ArtifactRole::Spec,
+            kind: ArtifactKind::File,
+            content: Some("Quick-log spec".into()),
+            title: Some("Quick-log spec".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    let summary = s
+        .dispatch(
+            None,
+            Some(OwnerKind::Ai),
+            Some(5),
+            Some(&phase.reference),
+            true,
+        )
+        .unwrap();
+    assert_eq!(summary.project, "haven");
+    assert_eq!(summary.owner, Some(OwnerKind::Ai));
+    assert_eq!(summary.scope.as_ref().unwrap().reference, phase.reference);
+    assert_eq!(summary.candidates.len(), 1);
+    let candidate = &summary.candidates[0];
+    assert_eq!(candidate.reference, scoped);
+    assert_eq!(candidate.parents[0].reference, phase.reference);
+    assert_eq!(candidate.blocks[0].reference, downstream);
+    assert_eq!(candidate.artifacts[0].role, ArtifactRole::Spec);
+    assert_eq!(summary.recommendation.as_ref().unwrap().reference, scoped);
+    assert_eq!(
+        summary.explain.as_ref().unwrap()["scope"]["ref"],
+        phase.reference
+    );
+
+    let unscoped = s
+        .dispatch(None, Some(OwnerKind::Ai), Some(5), None, false)
+        .unwrap();
+    let refs: Vec<&str> = unscoped
+        .candidates
+        .iter()
+        .map(|c| c.reference.as_str())
+        .collect();
+    assert!(refs.contains(&scoped.as_str()));
+    assert!(refs.contains(&outside.as_str()));
+}
+
+#[test]
 fn decomposition_cycle_is_rejected() {
     let s = store();
     let a = add(&s, "A");

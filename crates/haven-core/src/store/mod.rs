@@ -36,8 +36,10 @@ pub use item::{
 pub(crate) use item::fts_user_query;
 pub use prime::{Prime, PrimeActiveItem, PrimeInboxItem, PrimeQueueItem};
 pub use query::{
-    DocAnchor, GraphEdge, GroomingPressure, LineageDirection, LineageGraph, LineageLink,
-    ProjectGraph, DEFAULT_NEXT_LIMIT, GROOMING_NUDGE_THRESHOLD,
+    DispatchArtifact, DispatchCandidate, DispatchContextItem, DispatchRecommendation,
+    DispatchSummary, DocAnchor, GraphEdge, GroomingPressure, LineageDirection, LineageGraph,
+    LineageLink, ProjectGraph, DEFAULT_DISPATCH_LIMIT, DEFAULT_NEXT_LIMIT,
+    GROOMING_NUDGE_THRESHOLD,
 };
 
 /// Columns selected for an `Item`, in the order `item_from_row` expects. Joined

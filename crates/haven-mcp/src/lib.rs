@@ -21,7 +21,8 @@ use haven_core::{
     Artifact, ArtifactKind, ArtifactRole, ArtifactSelector, CompleteInput, ContextPack, DueUpdate,
     EdgeKind, Edges, HandoffInput, HavenError, ImportItem, Include, Item, ItemFilter, ItemUpdate,
     LineageDirection, LineageEvent, NewArtifact, NewItem, NodeType, OwnerKind, OwnerRollup, Result,
-    RollupState, StaleRef, Status, Store, WaitState, WaitUpdate, DEFAULT_NEXT_LIMIT,
+    RollupState, StaleRef, Status, Store, WaitState, WaitUpdate, DEFAULT_DISPATCH_LIMIT,
+    DEFAULT_NEXT_LIMIT,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -679,6 +680,13 @@ fn dispatch_tool(store: &Store, name: &str, a: &Value) -> Result<Value> {
             )?;
             to_value(items.iter().map(McpItem::compact).collect::<Vec<_>>())
         }
+        "haven_dispatch" => to_value(store.dispatch(
+            project,
+            opt_str(a, "owner").map(OwnerKind::parse).transpose()?,
+            opt_i64(a, "limit").or(Some(DEFAULT_DISPATCH_LIMIT)),
+            opt_str(a, "scope"),
+            opt_bool(a, "explain").unwrap_or(false),
+        )?),
         // Diagnose an empty queue. Returns the same dispatchable count `haven_next`
         // would, plus a per-reason breakdown — for the "next is empty" branch in
         // autonomous loops, so the agent diagnoses instead of inventing work.
@@ -1196,6 +1204,8 @@ fn tools_list() -> Value {
           "inputSchema": obj(json!({"ref":{"type":"string"},"project":{"type":"string"},"include":{"type":"array","items":{"type":"string","enum":["edges","artifacts","lineage"]}}}), json!(["ref"])) },
         { "name": "haven_next", "description": "Items ready to dispatch (committed, ready, unblocked), highest priority band first. Returns a compact view per item (identity + axes, no prose — fetch full via haven_get_item). Bounded by default: returns at most the top 50 of the ranked frontier unless `limit` is given — re-poll between batches rather than asking for the whole frontier at once.",
           "inputSchema": obj(json!({"project":{"type":"string"},"owner":{"type":"string","enum":["human","ai"]},"limit":{"type":"integer"}}), json!([])) },
+        { "name": "haven_dispatch", "description": "Lean 'what should I work on?' briefing: bounded haven_next plus targeted per-candidate details (acceptance, parent/group context, blockers, artifact pointers) without pulling the whole graph. Use `scope` with a parent/release/phase ref to restrict candidates to that live subtree. Includes next-explain diagnostics when empty, or when `explain:true` is passed.",
+          "inputSchema": obj(json!({"project":{"type":"string"},"owner":{"type":"string","enum":["human","ai"]},"limit":{"type":"integer"},"scope":{"type":"string"},"explain":{"type":"boolean"}}), json!([])) },
         { "name": "haven_next_explain", "description": "Diagnose why the dispatch queue is empty: the dispatchable count plus a per-reason breakdown (owner-mismatch, blocked-by-dependency, waiting, committed-not-ready, ready-but-uncommitted) and a hint. Call when haven_next returns nothing — diagnose, don't invent work.",
           "inputSchema": obj(json!({"project":{"type":"string"},"owner":{"type":"string","enum":["human","ai"]}}), json!([])) },
         { "name": "haven_rank", "description": "Reorder an item within its priority band: place it immediately before or after another item (exactly one of `before`/`after`). Fine ordering for 'do X before Y' — use `haven_update_item {priority}` for coarse band moves.",
@@ -1372,13 +1382,14 @@ mod tests {
         assert_eq!(out.len(), 2);
         assert_eq!(out[0]["result"]["serverInfo"]["name"], "haven");
         let tools = out[1]["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 32);
+        assert_eq!(tools.len(), 33);
         assert!(tools.iter().any(|t| t["name"] == "haven_claim"));
         assert!(tools.iter().any(|t| t["name"] == "haven_import"));
         assert!(tools.iter().any(|t| t["name"] == "haven_prime"));
         assert!(tools.iter().any(|t| t["name"] == "haven_inbox"));
         assert!(tools.iter().any(|t| t["name"] == "haven_xref"));
         assert!(tools.iter().any(|t| t["name"] == "haven_next"));
+        assert!(tools.iter().any(|t| t["name"] == "haven_dispatch"));
         assert!(tools.iter().any(|t| t["name"] == "haven_next_explain"));
         assert!(tools.iter().any(|t| t["name"] == "haven_resolve_live"));
         assert!(tools.iter().any(|t| t["name"] == "haven_handoff"));
@@ -1414,6 +1425,7 @@ mod tests {
             ("haven_add_item", "assign"),
             ("haven_update_item", "assign"),
             ("haven_next", "owner"),
+            ("haven_dispatch", "owner"),
             ("haven_list_items", "owner"),
             ("haven_add_artifact", "from"),
             ("haven_handoff", "to"),
@@ -1511,6 +1523,9 @@ mod tests {
                 json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{
                     "name":"haven_next","arguments":{}
                 }}),
+                json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{
+                    "name":"haven_dispatch","arguments":{"owner":"ai","limit":1}
+                }}),
             ],
         );
         let added = tool_payload(&out[0]);
@@ -1520,6 +1535,13 @@ mod tests {
         let next = tool_payload(&out[1]);
         assert_eq!(next.as_array().unwrap().len(), 1);
         assert_eq!(next[0]["ref"], "HV-1");
+
+        let dispatch = tool_payload(&out[2]);
+        assert_eq!(dispatch["project"], "haven");
+        assert_eq!(dispatch["candidates"].as_array().unwrap().len(), 1);
+        assert_eq!(dispatch["candidates"][0]["ref"], "HV-1");
+        assert_eq!(dispatch["candidates"][0]["done_looks_like"], "it works");
+        assert_eq!(dispatch["recommendation"]["ref"], "HV-1");
     }
 
     /// HV-23: `haven_prime` returns the one-shot session block over MCP — the same

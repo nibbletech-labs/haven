@@ -942,12 +942,58 @@ fn full_lifecycle() {
     assert_eq!(explain["dispatchable"], 0);
     assert_eq!(explain["counts"]["owner_mismatch"], 1);
 
+    // dispatch is the richer, still-bounded "what should I work on?" read.
+    h.json(&["item", "add", "App 2.0", "--type", "phase"]); // HV-3
+    h.json(&[
+        "item",
+        "add",
+        "Quick-log",
+        "--status",
+        "ready",
+        "--done-looks-like",
+        "quick-log works",
+        "--commit",
+        "--assign",
+        "ai",
+    ]); // HV-4
+    h.json(&[
+        "item",
+        "add",
+        "Outside scope",
+        "--status",
+        "ready",
+        "--done-looks-like",
+        "outside works",
+        "--commit",
+        "--assign",
+        "ai",
+    ]); // HV-5
+    h.ok(&["decompose", "HV-3", "--into", "HV-4"]);
+    h.json(&[
+        "artifact",
+        "add",
+        "HV-4",
+        "--role",
+        "spec",
+        "--content",
+        "Quick-log spec",
+    ]);
+    let dispatch = h.json(&["dispatch", "--owner", "ai", "--scope", "HV-3", "--explain"]);
+    assert_eq!(dispatch["project"], "haven");
+    assert_eq!(dispatch["scope"]["ref"], "HV-3");
+    assert_eq!(dispatch["candidates"].as_array().unwrap().len(), 1);
+    assert_eq!(dispatch["candidates"][0]["ref"], "HV-4");
+    assert_eq!(dispatch["candidates"][0]["parents"][0]["ref"], "HV-3");
+    assert_eq!(dispatch["candidates"][0]["artifacts"][0]["role"], "spec");
+    assert_eq!(dispatch["recommendation"]["ref"], "HV-4");
+    assert_eq!(dispatch["explain"]["scope"]["ref"], "HV-3");
+
     // Decomposition + dependency edges, read back via include.
-    h.ok(&["item", "add", "Frontend"]); // HV-3
-    h.ok(&["decompose", "HV-1", "--into", "HV-3"]);
-    h.ok(&["depend", "HV-3", "--on", "HV-2"]);
+    h.ok(&["item", "add", "Frontend"]); // HV-6
+    h.ok(&["decompose", "HV-1", "--into", "HV-6"]);
+    h.ok(&["depend", "HV-6", "--on", "HV-2"]);
     let full = h.json(&["item", "get", "HV-1", "--include", "edges"]);
-    assert_eq!(full["edges"]["children"][0], "HV-3");
+    assert_eq!(full["edges"]["children"][0], "HV-6");
 
     // Evolve split supersedes the source and resolves forward.
     let split = h.json(&[
