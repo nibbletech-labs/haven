@@ -9,7 +9,6 @@
 class Haven < Formula
   desc "Local-first work-graph store for humans and AI agents"
   homepage "https://github.com/nibbletech-labs/haven"
-  version "0.1.2"
   license "MIT"
 
   on_macos do

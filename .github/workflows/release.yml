@@ -108,7 +108,6 @@ jobs:
           class Haven < Formula
             desc "Local-first work-graph store for humans and AI agents"
             homepage "https://github.com/nibbletech-labs/haven"
-            version "${VERSION}"
             license "MIT"
 
             on_macos do
