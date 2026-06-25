@@ -17,8 +17,9 @@ Haven is useful when a normal TODO list is too flat:
 - Finished work can include proof, so handoffs do not rely on memory.
 
 Under the hood, Haven is one `haven` binary with a local SQLite store, a CLI, and
-a stdio MCP server. Cloud Sync through Supabase/Auth0 is private preview and
-disabled in public installs by default.
+a stdio MCP server. Public installs are local-first; Cloud Sync is unfinished
+private preview and its commands stay hidden unless
+`HAVEN_CLOUD_SYNC_PREVIEW=1` is explicitly set.
 
 ```sh
 haven setup --project-key haven --project-title "Haven" --prefix HV
@@ -152,9 +153,9 @@ Haven is a Rust workspace with one shipped binary:
 - `crates/haven-core` - the shared store, data model, and ordering logic
 - `crates/haven-cli` - the `haven` command
 - `crates/haven-mcp` - the stdio JSON-RPC MCP server
-- `crates/haven-sync` and `crates/haven-auth` - optional sync and auth support
+- `crates/haven-sync` and `crates/haven-auth` - preview-gated sync and auth internals
 - `migrations/` - local SQLite schema
-- `supabase/` - remote mirror schema and policies
+- `supabase/` - preview-gated remote mirror schema and policies
 
 ```sh
 cargo test --workspace
@@ -180,10 +181,8 @@ The local workflow runs end to end on one machine: items, dependency layers,
 handoffs, lineage, `haven next`/`haven dispatch`, full-text search, artifacts, the generated
 `backlog.md` view, and the MCP server.
 
-Cloud Sync is partly built but not part of the public local-first release yet.
-The Supabase schema, RLS, and push flow are validated against a local Supabase
-stack; the remaining hosted service/Auth0 wiring and product surface are still
-in progress. The unfinished `auth`/`sync` commands are hidden and require
+Cloud Sync is not part of the public local-first release yet. It remains an
+unfinished private preview; the `auth`/`sync` commands are hidden and require
 `HAVEN_CLOUD_SYNC_PREVIEW=1`.
 
 ## Running the Work — and How to Ask for It
