@@ -87,9 +87,9 @@ haven next [--owner human|ai] [--limit N]   # --owner = ASSIGNMENT filter (owner
 haven dispatch [--owner human|ai] [--limit N] [--scope <ref>] [--explain]
                                              # bounded next + targeted candidate detail;
                                              # --scope restricts to a parent/release/phase subtree
-haven graph [--lineage] [--all]  # whole project: all nodes + edges in one read.
+haven graph [--lineage] [--all]  # whole project: all nodes + edges in one CLI read.
                                  # live-only by default (drops archived/superseded
-                                 # + dangling edges), matching haven_graph; --all includes them
+                                 # + dangling edges), matching haven_graph visibility
 haven docs                     # live project-doc anchors + their artifacts
 
 # Edges
@@ -149,7 +149,7 @@ haven mcp
 | `haven_lineage` | **`ref`**, `direction?, depth?` |
 | `haven_resolve_live` | **`ref`** — _deprecated (kept one release):_ follow a stale (superseded/archived) ref to its live descendant(s); compact items. The read path now runs this automatically — `haven_get_item`/`haven_update_item`/`haven_add_edge` ride a `stale_ref` hint — so you rarely call this directly |
 | `haven_search` | **`query`**, `limit?` |
-| `haven_graph` | `lineage?, all?` — the whole project graph (compact nodes + `{kind,from,to}` edges) in one read; live nodes only unless `all` |
+| `haven_graph` | `lineage?, all?, node_limit?, edge_limit?, lineage_limit?` — bounded MCP graph read (compact nodes + `{kind,from,to}` edges); live nodes only unless `all`; defaults/hard caps are 100 nodes, 250 edges, 250 lineage links, and the response carries `totals`, `omitted`, `limits`, and `truncated` |
 | `haven_docs` | `project?` — live project-doc anchors and their artifacts |
 | `haven_get_artifact` | **`ref`**, `role?, path?` |
 | `haven_add_artifact` | **`ref`**, **`role`**, `kind?, content?, name?, replace?, path?, uri?, title?, from?, to?, by?` — `name` sets the destination filename (also for `path`); `replace?` overwrites a same-path artifact in place (default: collision is rejected) |
@@ -182,7 +182,8 @@ To keep context lean, item reads come in two shapes, and internal sync fields
 
 So a list/next tells you *what* exists; reach for `haven_get_item` when you need the
 prose or relationships of a specific item. `haven_graph` nodes are compact too
-(live-only unless `all`); only `haven_docs` returns full anchor nodes (with artifacts).
+(live-only unless `all`) and MCP responses are capped with explicit omission
+metadata; only `haven_docs` returns full anchor nodes (with artifacts).
 
 ## CLI → MCP mapping
 

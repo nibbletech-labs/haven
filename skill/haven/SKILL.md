@@ -303,14 +303,15 @@ haven_complete_item{"project":"haven","ref":"HV-1","evidence":"cargo test: ok"}
 haven_add_edge     {"project":"haven","kind":"dependency","from":"HV-2","to":"HV-1"}
 haven_resolve_live {"project":"haven","ref":"HV-9"}   // old ref → live descendant
 haven_docs         {"project":"haven"}                // anchor docs + artifacts
-// Whole graph in one read — to render it, or reason over all dependencies at once.
-haven_graph        {"project":"haven"}                // compact, live-only nodes + edges[{kind,from,to}]; all:true for dead nodes
+// Graph read — bounded over MCP, full over CLI; use totals/omitted to detect truncation.
+haven_graph        {"project":"haven"}                // compact live nodes + edges; MCP caps 100 nodes/250 edges/250 lineage; all:true for dead nodes
 ```
 
 **Reasoning over the whole backlog** (reorganising, fixing dependencies, rendering
-a graph view) — pull it all in one call with `haven graph` / `haven_graph` rather
-than N per-node fetches. It returns every node plus a flat `{kind, from, to}` edge
-list (the same shape `add_edge` takes, so your fixes round-trip). This is not the
+a graph view) — prefer `haven graph` when you have a local CLI and need the full
+export. `haven_graph` over MCP is transport-safe by default: it returns a bounded
+slice with `totals`, `omitted`, `limits`, and `truncated` for nodes, edges, and
+lineage, so a mature graph degrades instead of failing whole. This is not the
 dispatch path: for "what should I work on?", use `dispatch` or
 `prime`/`next`/targeted `item get` reads.
 

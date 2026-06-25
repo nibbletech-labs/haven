@@ -77,6 +77,14 @@ struct RpcError {
 /// Default page size for `haven_list_items` when the caller passes no `limit`.
 /// `total` is always returned, so a truncated page is never silent.
 const DEFAULT_LIST_LIMIT: i64 = 100;
+/// Default/hard node cap for `haven_graph` over MCP. The CLI graph export stays
+/// full-fidelity; MCP is bounded so a mature graph degrades with omission
+/// metadata instead of blowing the transport response.
+const DEFAULT_GRAPH_NODE_LIMIT: i64 = DEFAULT_LIST_LIMIT;
+/// Default/hard structural edge cap for `haven_graph` over MCP.
+const DEFAULT_GRAPH_EDGE_LIMIT: i64 = 250;
+/// Default/hard lineage link cap for `haven_graph` over MCP.
+const DEFAULT_GRAPH_LINEAGE_LIMIT: i64 = 250;
 
 /// The MCP projection of an [`Item`] (SPEC §3). Deliberately leaner than the
 /// `Item` the CLI serializes: the machine-only fields (`public_id`, `sync_state`,
@@ -428,6 +436,9 @@ fn req_str<'a>(v: &'a Value, k: &str) -> Result<&'a str> {
 }
 fn opt_i64(v: &Value, k: &str) -> Option<i64> {
     v.get(k).and_then(|x| x.as_i64())
+}
+fn opt_capped_usize(v: &Value, k: &str, cap: i64) -> usize {
+    opt_i64(v, k).unwrap_or(cap).max(0).min(cap) as usize
 }
 fn opt_bool(v: &Value, k: &str) -> Option<bool> {
     v.get(k).and_then(|x| x.as_bool())
@@ -876,36 +887,101 @@ fn dispatch_tool(store: &Store, name: &str, a: &Value) -> Result<Value> {
         "haven_search" => {
             to_value(store.search(project, req_str(a, "query")?, opt_i64(a, "limit"))?)
         }
-        // The whole project graph (all nodes + edges) in one read — for rendering
-        // the graph or reasoning over the entire dependency structure at once.
+        // The project graph in one bounded MCP read — for rendering the graph or
+        // reasoning over the dependency structure without exceeding transport
+        // limits on mature projects.
         // Nodes ride as compact-plus-acceptance items (`graph_node`: axes +
         // done_looks_like, the bulk of the payload); live-only by default (drop
         // superseded/archived nodes + any edge that would dangle onto one), with
         // `all:true` to include the dead nodes.
         "haven_graph" => {
-            let g = store.project_graph(project, opt_bool(a, "lineage").unwrap_or(false))?;
+            let lineage_requested = opt_bool(a, "lineage").unwrap_or(false);
+            let g = store.project_graph(project, lineage_requested)?;
             let all = opt_bool(a, "all").unwrap_or(false);
-            let keep: std::collections::HashSet<&str> = g
+            let node_limit = opt_capped_usize(a, "node_limit", DEFAULT_GRAPH_NODE_LIMIT);
+            let edge_limit = opt_capped_usize(a, "edge_limit", DEFAULT_GRAPH_EDGE_LIMIT);
+            let lineage_limit = opt_capped_usize(a, "lineage_limit", DEFAULT_GRAPH_LINEAGE_LIMIT);
+            let visible_nodes: Vec<&Item> = g
                 .nodes
                 .iter()
                 .filter(|n| all || !matches!(n.status, Status::Superseded | Status::Archived))
-                .map(|n| n.reference.as_str())
                 .collect();
-            let nodes: Vec<McpItem> = g
-                .nodes
+            let visible_refs: std::collections::HashSet<&str> =
+                visible_nodes.iter().map(|n| n.reference.as_str()).collect();
+            let payload_nodes: Vec<&Item> =
+                visible_nodes.iter().copied().take(node_limit).collect();
+            let payload_refs: std::collections::HashSet<&str> =
+                payload_nodes.iter().map(|n| n.reference.as_str()).collect();
+            let nodes: Vec<McpItem> = payload_nodes
                 .iter()
-                .filter(|n| keep.contains(n.reference.as_str()))
-                .map(McpItem::graph_node)
+                .map(|item| McpItem::graph_node(item))
                 .collect();
-            let edges: Vec<_> = g
+            let visible_edges: Vec<_> = g
                 .edges
                 .iter()
-                .filter(|e| keep.contains(e.from.as_str()) && keep.contains(e.to.as_str()))
+                .filter(|e| {
+                    visible_refs.contains(e.from.as_str()) && visible_refs.contains(e.to.as_str())
+                })
                 .collect();
-            let mut out = json!({ "project": g.project, "nodes": nodes, "edges": edges });
-            // Preserve the original contract: lineage only when non-empty.
-            if !g.lineage.is_empty() {
-                out["lineage"] = to_value(&g.lineage)?;
+            let edges: Vec<_> = visible_edges
+                .iter()
+                .copied()
+                .filter(|e| {
+                    payload_refs.contains(e.from.as_str()) && payload_refs.contains(e.to.as_str())
+                })
+                .take(edge_limit)
+                .collect();
+            let visible_lineage: Vec<_> = g
+                .lineage
+                .iter()
+                .filter(|l| {
+                    visible_refs.contains(l.from.as_str()) && visible_refs.contains(l.to.as_str())
+                })
+                .collect();
+            let lineage: Vec<_> = visible_lineage
+                .iter()
+                .copied()
+                .filter(|l| {
+                    payload_refs.contains(l.from.as_str()) && payload_refs.contains(l.to.as_str())
+                })
+                .take(lineage_limit)
+                .collect();
+
+            let node_total = visible_nodes.len();
+            let edge_total = visible_edges.len();
+            let lineage_total = visible_lineage.len();
+            let node_count = nodes.len();
+            let edge_count = edges.len();
+            let lineage_count = lineage.len();
+            let node_omitted = node_total.saturating_sub(node_count);
+            let edge_omitted = edge_total.saturating_sub(edge_count);
+            let lineage_omitted = lineage_total.saturating_sub(lineage_count);
+            let mut out = json!({
+                "project": &g.project,
+                "nodes": nodes,
+                "edges": edges,
+                "totals": {
+                    "nodes": node_total,
+                    "edges": edge_total,
+                    "lineage": lineage_total,
+                },
+                "omitted": {
+                    "nodes": node_omitted,
+                    "edges": edge_omitted,
+                    "lineage": lineage_omitted,
+                },
+                "limits": {
+                    "nodes": node_limit,
+                    "edges": edge_limit,
+                    "lineage": lineage_limit,
+                },
+                "truncated": node_omitted > 0 || edge_omitted > 0 || lineage_omitted > 0,
+            });
+            // Preserve the original default contract: lineage is absent unless it
+            // was requested. When requested, include even an empty array if links
+            // existed but were omitted so the cap is visible beside metadata.
+            if lineage_requested && (!lineage.is_empty() || lineage_total > 0) {
+                out["lineage"] = to_value(&lineage)?;
             }
             // Grooming nudge (HV-82) rides along only when work has piled up, so
             // a planner reorienting via the graph is prompted to groom first.
@@ -1226,8 +1302,8 @@ fn tools_list() -> Value {
           "inputSchema": obj(json!({"ref":{"type":"string"},"project":{"type":"string"}}), json!(["ref"])) },
         { "name": "haven_search", "description": "Full-text search over item title/body.",
           "inputSchema": obj(json!({"query":{"type":"string"},"project":{"type":"string"},"limit":{"type":"integer"}}), json!(["query"])) },
-        { "name": "haven_graph", "description": "The whole project work-graph in one read: every node plus a flat edge list ({kind, from, to}, same shape as haven_add_edge), and optionally lineage links. Use to render the graph or reason over the entire dependency structure at once, instead of N+1 per-node fetches. Nodes are compact (identity + axes + done_looks_like; fetch other prose for one via haven_get_item) and live-only by default — pass `all:true` to include superseded/archived nodes (edges onto dropped nodes are omitted).",
-          "inputSchema": obj(json!({"project":{"type":"string"},"lineage":{"type":"boolean"},"all":{"type":"boolean"}}), json!([])) },
+        { "name": "haven_graph", "description": "The project work-graph in one bounded MCP read: compact nodes plus a flat edge list ({kind, from, to}, same shape as haven_add_edge), and optionally lineage links. The default/hard caps are 100 nodes, 250 edges, and 250 lineage links; responses include totals, omitted counts, limits, and truncated so large graphs degrade instead of failing whole. Use smaller node_limit/edge_limit/lineage_limit values for tighter slices. Nodes are compact (identity + axes + done_looks_like; fetch other prose for one via haven_get_item) and live-only by default — pass all:true to include superseded/archived nodes.",
+          "inputSchema": obj(json!({"project":{"type":"string"},"lineage":{"type":"boolean"},"all":{"type":"boolean"},"node_limit":{"type":"integer","minimum":0,"maximum":100,"description":"Max nodes returned; defaults to and is clamped at 100."},"edge_limit":{"type":"integer","minimum":0,"maximum":250,"description":"Max structural edges returned; defaults to and is clamped at 250."},"lineage_limit":{"type":"integer","minimum":0,"maximum":250,"description":"Max lineage links returned when lineage:true; defaults to and is clamped at 250."}}), json!([])) },
         { "name": "haven_docs", "description": "List live project living-doc anchors and their artifacts. Use this instead of hard-coding a docs ref.",
           "inputSchema": obj(json!({"project":{"type":"string"}}), json!([])) },
         { "name": "haven_get_artifact", "description": "Read an artifact's content (local or lazy-pulled).",
@@ -1866,6 +1942,98 @@ mod tests {
         assert_eq!(edges[0]["kind"], "dependency");
         assert_eq!(edges[0]["from"], "HV-2");
         assert_eq!(edges[0]["to"], "HV-1");
+    }
+
+    #[test]
+    fn graph_is_bounded_by_default_with_omission_metadata() {
+        let s = store();
+        let n = (DEFAULT_GRAPH_NODE_LIMIT + 1) as usize;
+        let mut reqs: Vec<Value> = (0..n)
+            .map(|i| {
+                json!({"jsonrpc":"2.0","id":i+1,"method":"tools/call","params":{
+                    "name":"haven_add_item","arguments":{"title":format!("Node {i}")}
+                }})
+            })
+            .collect();
+        reqs.push(
+            json!({"jsonrpc":"2.0","id":9001,"method":"tools/call","params":{
+                "name":"haven_graph","arguments":{}
+            }}),
+        );
+        let out = session(&s, &reqs);
+        let g = tool_payload(&out[n]);
+        let nodes = g["nodes"].as_array().unwrap();
+
+        assert_eq!(nodes.len(), DEFAULT_GRAPH_NODE_LIMIT as usize);
+        assert_eq!(nodes[0]["ref"], "HV-1");
+        assert_eq!(
+            nodes.last().unwrap()["ref"],
+            format!("HV-{DEFAULT_GRAPH_NODE_LIMIT}")
+        );
+        assert_eq!(g["totals"]["nodes"].as_u64(), Some(n as u64));
+        assert_eq!(g["omitted"]["nodes"].as_u64(), Some(1));
+        assert_eq!(
+            g["limits"]["nodes"].as_u64(),
+            Some(DEFAULT_GRAPH_NODE_LIMIT as u64)
+        );
+        assert_eq!(g["totals"]["edges"].as_u64(), Some(0));
+        assert_eq!(g["omitted"]["edges"].as_u64(), Some(0));
+        assert_eq!(g["totals"]["lineage"].as_u64(), Some(0));
+        assert_eq!(g["omitted"]["lineage"].as_u64(), Some(0));
+        assert_eq!(g["truncated"], true);
+    }
+
+    #[test]
+    fn graph_reports_node_edge_and_lineage_omissions() {
+        let s = store();
+        let out = session(
+            &s,
+            &[
+                json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{
+                    "name":"haven_add_item","arguments":{"title":"Split me"}
+                }}),
+                json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{
+                    "name":"haven_evolve","arguments":{
+                        "op":"split","refs":["HV-1"],"into":["Split A","Split B"]
+                    }
+                }}),
+                json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{
+                    "name":"haven_add_edge","arguments":{"kind":"dependency","from":"HV-2","to":"HV-3"}
+                }}),
+                json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{
+                    "name":"haven_graph",
+                    "arguments":{"all":true,"lineage":true,"node_limit":2,"edge_limit":0,"lineage_limit":1}
+                }}),
+            ],
+        );
+        assert_eq!(out[0]["result"]["isError"], false);
+        assert_eq!(out[1]["result"]["isError"], false);
+        assert_eq!(out[2]["result"]["isError"], false);
+
+        let g = tool_payload(&out[3]);
+        let node_refs: Vec<&str> = g["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|n| n["ref"].as_str().unwrap())
+            .collect();
+        assert_eq!(node_refs, ["HV-1", "HV-2"]);
+        assert!(g["edges"].as_array().unwrap().is_empty());
+        let lineage = g["lineage"].as_array().unwrap();
+        assert_eq!(lineage.len(), 1);
+        assert_eq!(lineage[0]["from"], "HV-1");
+        assert_eq!(lineage[0]["to"], "HV-2");
+
+        assert_eq!(g["totals"]["nodes"].as_u64(), Some(3));
+        assert_eq!(g["omitted"]["nodes"].as_u64(), Some(1));
+        assert_eq!(g["totals"]["edges"].as_u64(), Some(1));
+        assert_eq!(g["omitted"]["edges"].as_u64(), Some(1));
+        assert_eq!(g["totals"]["lineage"].as_u64(), Some(2));
+        assert_eq!(g["omitted"]["lineage"].as_u64(), Some(1));
+        assert_eq!(g["limits"]["nodes"].as_u64(), Some(2));
+        assert_eq!(g["limits"]["edges"].as_u64(), Some(0));
+        assert_eq!(g["limits"]["lineage"].as_u64(), Some(1));
+        assert_eq!(g["truncated"], true);
     }
 
     #[test]
