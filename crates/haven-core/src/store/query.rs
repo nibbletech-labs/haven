@@ -47,8 +47,9 @@ pub struct ProjectGraph {
 
 /// Bounded graph payload for context-constrained surfaces. Totals describe the
 /// visible graph before node/edge/lineage caps; vectors contain only the payload
-/// slice. CLI `project_graph` stays full-fidelity.
-#[derive(Debug, Clone)]
+/// slice. The CLI `graph` command uses this too — bounded by default, `--full`
+/// lifts the caps.
+#[derive(Debug, Clone, Serialize)]
 pub struct ProjectGraphPage {
     pub project: String,
     pub nodes: Vec<Item>,

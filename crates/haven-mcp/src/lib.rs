@@ -89,15 +89,22 @@ const DEFAULT_GRAPH_LINEAGE_LIMIT: i64 = 250;
 /// optional edges/artifacts/lineage, so callers should batch selected refs only.
 const MAX_GET_ITEMS_REFS: usize = 20;
 
+/// `skip_serializing_if` for the `committed` flag: omit it when false so
+/// uncommitted compact rows don't each carry `"committed":false`.
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
 /// The MCP projection of an [`Item`] (SPEC §3). Deliberately leaner than the
 /// `Item` the CLI serializes: the machine-only fields (`public_id`, `sync_state`,
 /// `revision`, `sort_key`) are *always* dropped — an agent reasons in `ref`s, not
 /// storage internals — and the `compact` form (list/next/resolve) further omits
 /// the prose fields, timestamps and includes, which an agent pulls on demand via
-/// `haven_get_item`. The `graph` view (`graph_node`) is compact plus
-/// `done_looks_like`, so a whole-graph read can be triaged (e.g. tell a sealed
-/// leaf from an unsealed one) without a per-node fetch. Borrows from the source
-/// `Item`; the enums are `Copy`.
+/// `haven_get_item`. The `graph` view (`graph_node`) is compact plus a boolean
+/// `has_acceptance` flag, so a whole-graph read can be triaged (tell a sealed leaf
+/// from an unsealed one) WITHOUT carrying the `done_looks_like` prose — the bulk
+/// of a graph payload; pull the text per-node via `haven_get_item`. Borrows from
+/// the source `Item`; the enums are `Copy`.
 #[derive(Serialize)]
 struct McpItem<'a> {
     #[serde(rename = "ref")]
@@ -106,6 +113,8 @@ struct McpItem<'a> {
     #[serde(rename = "type")]
     node_type: NodeType,
     status: Status,
+    // Omitted when false to keep compact rows lean — absent ⇒ uncommitted.
+    #[serde(skip_serializing_if = "is_false")]
     committed: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     priority: Option<i64>,
@@ -113,6 +122,11 @@ struct McpItem<'a> {
     owner_kind: Option<OwnerKind>,
     #[serde(skip_serializing_if = "Option::is_none")]
     wait_state: Option<WaitState>,
+    // Graph view only: whether acceptance (`done_looks_like`) is set — the
+    // sealed/unsealed triage signal without the prose. `Some(true)` on a sealed
+    // node, absent otherwise; fetch the text per-node via `haven_get_item`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    has_acceptance: Option<bool>,
 
     // Full-only fields — `None` in the compact form. (`done_looks_like` is also
     // populated by the `graph` view — see `graph_node`.)
@@ -175,6 +189,7 @@ impl<'a> McpItem<'a> {
             priority: item.priority,
             owner_kind: item.owner_kind,
             wait_state: item.wait_state,
+            has_acceptance: None,
             body: None,
             done_looks_like: None,
             rollup_state: None,
@@ -195,12 +210,14 @@ impl<'a> McpItem<'a> {
         }
     }
 
-    /// Graph view: the compact axes plus `done_looks_like`, so a single
-    /// `haven_graph` read can triage and plan (e.g. tell a sealed leaf from an
-    /// unsealed one) without N per-node detail fetches. list/next stay lean.
+    /// Graph view: the compact axes plus a boolean `has_acceptance` flag (NOT the
+    /// `done_looks_like` prose), so a single `haven_graph` read can triage (tell a
+    /// sealed leaf from an unsealed one) without N per-node fetches or the prose
+    /// bulk. Pull the acceptance text per-node via `haven_get_item`. list/next lean.
     fn graph_node(item: &'a Item) -> Self {
         McpItem {
-            done_looks_like: item.done_looks_like.as_deref(),
+            // The sealed/unsealed signal as a flag, not the prose (HV: graph slim).
+            has_acceptance: item.done_looks_like.as_ref().map(|_| true),
             rollup_state: item.rollup_state,
             owner_rollup: item.owner_rollup,
             has_uncommitted_descendants: item.has_uncommitted_descendants,
@@ -222,6 +239,7 @@ impl<'a> McpItem<'a> {
             priority: item.priority,
             owner_kind: item.owner_kind,
             wait_state: item.wait_state,
+            has_acceptance: None,
             body: item.body.as_deref(),
             done_looks_like: item.done_looks_like.as_deref(),
             rollup_state: item.rollup_state,
@@ -932,8 +950,9 @@ fn dispatch_tool(store: &Store, name: &str, a: &Value) -> Result<Value> {
         // The project graph in one bounded MCP read — for rendering the graph or
         // reasoning over the dependency structure without exceeding transport
         // limits on mature projects.
-        // Nodes ride as compact-plus-acceptance items (`graph_node`: axes +
-        // done_looks_like, the bulk of the payload); live-only by default (drop
+        // Nodes ride as compact-plus-flag items (`graph_node`: axes + a boolean
+        // has_acceptance, NOT the done_looks_like prose that was the payload bulk);
+        // live-only by default (drop
         // superseded/archived nodes + any edge that would dangle onto one), with
         // `all:true` to include the dead nodes.
         "haven_graph" => {
@@ -950,11 +969,7 @@ fn dispatch_tool(store: &Store, name: &str, a: &Value) -> Result<Value> {
                 edge_limit,
                 lineage_limit,
             )?;
-            let nodes: Vec<McpItem> = g
-                .nodes
-                .iter()
-                .map(|item| McpItem::graph_node(item))
-                .collect();
+            let nodes: Vec<McpItem> = g.nodes.iter().map(McpItem::graph_node).collect();
             let node_count = nodes.len();
             let edge_count = g.edges.len();
             let lineage_count = g.lineage.len();
@@ -1309,7 +1324,7 @@ fn tools_list() -> Value {
           "inputSchema": obj(json!({"ref":{"type":"string"},"project":{"type":"string"}}), json!(["ref"])) },
         { "name": "haven_search", "description": "Full-text search over item title/body. Returns compact MCP items (identity + axes, no prose/machine fields); fetch detail with haven_get_item or haven_get_items for selected hits.",
           "inputSchema": obj(json!({"query":{"type":"string"},"project":{"type":"string"},"limit":{"type":"integer"}}), json!(["query"])) },
-        { "name": "haven_graph", "description": "The project work-graph in one bounded MCP read: compact nodes plus a flat edge list ({kind, from, to}, same shape as haven_add_edge), and optionally lineage links. The default/hard caps are 100 nodes, 250 edges, and 250 lineage links; responses include totals, omitted counts, limits, and truncated so large graphs degrade instead of failing whole. Use smaller node_limit/edge_limit/lineage_limit values for tighter slices. Nodes are compact (identity + axes + done_looks_like; fetch other prose for one via haven_get_item) and live-only by default — pass all:true to include superseded/archived nodes.",
+        { "name": "haven_graph", "description": "The project work-graph in one bounded MCP read: compact nodes plus a flat edge list ({kind, from, to}, same shape as haven_add_edge), and optionally lineage links. The default/hard caps are 100 nodes, 250 edges, and 250 lineage links; responses include totals, omitted counts, limits, and truncated so large graphs degrade instead of failing whole. Use smaller node_limit/edge_limit/lineage_limit values for tighter slices. Nodes are compact (identity + axes + a boolean has_acceptance flag — fetch the done_looks_like prose and other detail per-node via haven_get_item) and live-only by default — pass all:true to include superseded/archived nodes.",
           "inputSchema": obj(json!({"project":{"type":"string"},"lineage":{"type":"boolean"},"all":{"type":"boolean"},"node_limit":{"type":"integer","minimum":0,"maximum":100,"description":"Max nodes returned; defaults to and is clamped at 100."},"edge_limit":{"type":"integer","minimum":0,"maximum":250,"description":"Max structural edges returned; defaults to and is clamped at 250."},"lineage_limit":{"type":"integer","minimum":0,"maximum":250,"description":"Max lineage links returned when lineage:true; defaults to and is clamped at 250."}}), json!([])) },
         { "name": "haven_docs", "description": "List live project living-doc anchors and their artifacts. Use this instead of hard-coding a docs ref.",
           "inputSchema": obj(json!({"project":{"type":"string"}}), json!([])) },
@@ -2921,14 +2936,50 @@ mod tests {
         assert!(live["edges"].as_array().unwrap().is_empty());
         assert!(live["nodes"][0].get("body").is_none());
         assert!(live["nodes"][0].get("sync_state").is_none());
-        // Graph nodes carry done_looks_like (the planner's sealed-leaf test reads
-        // it from one read) while prose like body stays dropped. list/next stay
-        // lean — guarded by list_items_compact_view_and_envelope.
-        assert_eq!(live["nodes"][0]["done_looks_like"], "ships");
+        // Graph nodes carry a boolean has_acceptance flag (the sealed-leaf signal)
+        // instead of the done_looks_like prose — which is dropped from the graph
+        // view; pull the text per-node via haven_get_item. list/next stay lean too.
+        assert_eq!(live["nodes"][0]["has_acceptance"], true);
+        assert!(live["nodes"][0].get("done_looks_like").is_none());
         // all:true: the dead node and its edge come back.
         let full = tool_payload(&out[5]);
         assert_eq!(full["nodes"].as_array().unwrap().len(), 2);
         assert_eq!(full["edges"].as_array().unwrap().len(), 1);
+    }
+
+    /// Compact rows omit `committed` when false (absent ⇒ uncommitted) so an
+    /// inbox-heavy list doesn't carry `"committed":false` on every row; a committed
+    /// item still serializes `committed: true`.
+    #[test]
+    fn compact_omits_committed_when_false() {
+        let s = store();
+        let out = session(
+            &s,
+            &[
+                // An uncommitted floater, then a committed-ready leaf.
+                json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{
+                    "name":"haven_add_item","arguments":{"title":"Floater"}
+                }}),
+                json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{
+                    "name":"haven_add_item","arguments":{"title":"Sealed","status":"ready","commit":true,"assign":"ai","done_looks_like":"ships"}
+                }}),
+                json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{
+                    "name":"haven_list_items","arguments":{}
+                }}),
+            ],
+        );
+        let list = tool_payload(&out[2]);
+        let items = list["items"].as_array().unwrap();
+        let floater = items.iter().find(|i| i["ref"] == "HV-1").unwrap();
+        let sealed = items.iter().find(|i| i["ref"] == "HV-2").unwrap();
+        assert!(
+            floater.get("committed").is_none(),
+            "uncommitted row must omit committed: {floater}"
+        );
+        assert_eq!(
+            sealed["committed"], true,
+            "committed row keeps committed:true"
+        );
     }
 
     /// HV-95: the new rm/mv tools over MCP — add an artifact, rename it, remove it.

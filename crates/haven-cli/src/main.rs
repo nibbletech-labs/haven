@@ -24,6 +24,34 @@ const DEFAULT_PROJECT_KEY: &str = "haven";
 const DEFAULT_PROJECT_TITLE: &str = "Haven";
 const DEFAULT_PROJECT_PREFIX: &str = "HV";
 
+/// Default page size for the CLI `item list` / `inbox` when no `--limit` is given
+/// — parity with the MCP surface, so a CLI-driven agent isn't blown up by a large
+/// backlog. `--limit 0` lifts the cap; a truncated page prints a note to stderr.
+const CLI_DEFAULT_LIST_LIMIT: usize = 100;
+/// Default caps for the CLI `graph` export unless `--full`, mirroring `haven_graph`.
+const CLI_GRAPH_NODE_LIMIT: usize = 100;
+const CLI_GRAPH_EDGE_LIMIT: usize = 250;
+const CLI_GRAPH_LINEAGE_LIMIT: usize = 250;
+
+/// Apply the default list cap (parity with MCP) + pagination to a CLI list read,
+/// warning on stderr when it truncates — never a silent truncation. `--limit 0`
+/// means unbounded.
+fn cap_list<T>(items: Vec<T>, offset: Option<usize>, limit: Option<usize>) -> Vec<T> {
+    let total = items.len();
+    let off = offset.unwrap_or(0);
+    let lim = limit.unwrap_or(CLI_DEFAULT_LIST_LIMIT);
+    let take = if lim == 0 { usize::MAX } else { lim };
+    let out: Vec<T> = items.into_iter().skip(off).take(take).collect();
+    if out.len() < total {
+        eprintln!(
+            "note: showing {} of {} items (--limit 0 for all, or --limit/--offset N)",
+            out.len(),
+            total
+        );
+    }
+    out
+}
+
 fn cloud_sync_preview_enabled() -> bool {
     std::env::var(CLOUD_SYNC_PREVIEW_ENV)
         .ok()
@@ -633,7 +661,8 @@ struct ItemListArgs {
     /// Only items untouched for at least N days (stale/forgotten work).
     #[arg(long)]
     stale: Option<i64>,
-    /// Return at most N items (parity with `next`); applied after ordering.
+    /// Return at most N items (default 100; `--limit 0` for all). Applied after
+    /// ordering; a truncated page prints a note to stderr.
     #[arg(long)]
     limit: Option<usize>,
     /// Skip the first N items (paginate with --limit).
@@ -817,7 +846,7 @@ struct InboxArgs {
     /// Filter by owner kind: human | ai.
     #[arg(long)]
     owner: Option<String>,
-    /// Return at most N items.
+    /// Return at most N items (default 100; `--limit 0` for all).
     #[arg(long)]
     limit: Option<usize>,
     /// Skip the first N items.
@@ -922,6 +951,11 @@ struct GraphArgs {
     /// the `haven_graph` MCP tool (HV-53).
     #[arg(long)]
     all: bool,
+    /// Export the whole graph uncapped. Default applies the same node/edge/lineage
+    /// caps as the `haven_graph` MCP tool so a large graph can't blow an agent's
+    /// context budget; the response carries node/edge/lineage totals either way.
+    #[arg(long)]
+    full: bool,
 }
 
 #[derive(Args)]
@@ -1188,14 +1222,7 @@ fn run(cli: &Cli) -> Result<Output> {
                 owner,
                 ..Default::default()
             };
-            let mut items = s.list_items(project, &filter)?;
-            if a.offset.is_some() || a.limit.is_some() {
-                items = items
-                    .into_iter()
-                    .skip(a.offset.unwrap_or(0))
-                    .take(a.limit.unwrap_or(usize::MAX))
-                    .collect();
-            }
+            let items = cap_list(s.list_items(project, &filter)?, a.offset, a.limit);
             Ok(Output::Items(items))
         }
         Command::Decompose(a) => cmd_decompose(project, a),
@@ -1208,11 +1235,27 @@ fn run(cli: &Cli) -> Result<Output> {
         }
         Command::Graph(a) => {
             let s = config::open_store()?;
-            let graph = s.project_graph(project, a.lineage)?;
-            // Live-only by default (drop dead nodes + dangling edges), matching the
-            // `haven_graph` MCP tool; `--all` includes archived/superseded (HV-53).
-            let graph = if a.all { graph } else { graph.live_only() };
-            Ok(Output::Json(serde_json::to_value(graph)?))
+            // Bounded by default (parity with `haven_graph`): cap nodes/edges/lineage
+            // so a mature graph doesn't blow a CLI-driven agent's budget; `--full`
+            // exports the whole graph uncapped. `--all` includes dead nodes (HV-53).
+            let (nl, el, ll) = if a.full {
+                (usize::MAX, usize::MAX, usize::MAX)
+            } else {
+                (
+                    CLI_GRAPH_NODE_LIMIT,
+                    CLI_GRAPH_EDGE_LIMIT,
+                    CLI_GRAPH_LINEAGE_LIMIT,
+                )
+            };
+            let page = s.project_graph_page(project, a.lineage, a.all, nl, el, ll)?;
+            if page.node_total > page.nodes.len() {
+                eprintln!(
+                    "note: showing {} of {} nodes (--full for the whole graph)",
+                    page.nodes.len(),
+                    page.node_total
+                );
+            }
+            Ok(Output::Json(serde_json::to_value(page)?))
         }
         Command::Xref(a) => {
             let s = config::open_store()?;
