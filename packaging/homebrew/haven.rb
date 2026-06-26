@@ -13,22 +13,22 @@ class Haven < Formula
 
   on_macos do
     on_arm do
-      url "https://github.com/nibbletech-labs/haven/releases/download/v0.1.2/haven-0.1.2-aarch64-apple-darwin.tar.gz"
+      url "https://github.com/nibbletech-labs/haven/releases/download/v0.1.3/haven-0.1.3-aarch64-apple-darwin.tar.gz"
       sha256 "REPLACE_WITH_AARCH64_APPLE_DARWIN_SHA256"
     end
     on_intel do
-      url "https://github.com/nibbletech-labs/haven/releases/download/v0.1.2/haven-0.1.2-x86_64-apple-darwin.tar.gz"
+      url "https://github.com/nibbletech-labs/haven/releases/download/v0.1.3/haven-0.1.3-x86_64-apple-darwin.tar.gz"
       sha256 "REPLACE_WITH_X86_64_APPLE_DARWIN_SHA256"
     end
   end
 
   on_linux do
     on_arm do
-      url "https://github.com/nibbletech-labs/haven/releases/download/v0.1.2/haven-0.1.2-aarch64-unknown-linux-musl.tar.gz"
+      url "https://github.com/nibbletech-labs/haven/releases/download/v0.1.3/haven-0.1.3-aarch64-unknown-linux-musl.tar.gz"
       sha256 "REPLACE_WITH_AARCH64_UNKNOWN_LINUX_MUSL_SHA256"
     end
     on_intel do
-      url "https://github.com/nibbletech-labs/haven/releases/download/v0.1.2/haven-0.1.2-x86_64-unknown-linux-musl.tar.gz"
+      url "https://github.com/nibbletech-labs/haven/releases/download/v0.1.3/haven-0.1.3-x86_64-unknown-linux-musl.tar.gz"
       sha256 "REPLACE_WITH_X86_64_UNKNOWN_LINUX_MUSL_SHA256"
     end
   end
