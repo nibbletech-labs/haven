@@ -38,7 +38,7 @@ pub use prime::{Prime, PrimeActiveItem, PrimeInboxItem, PrimeQueueItem};
 pub use query::{
     DispatchArtifact, DispatchCandidate, DispatchContextItem, DispatchRecommendation,
     DispatchSummary, DocAnchor, GraphEdge, GroomingPressure, LineageDirection, LineageGraph,
-    LineageLink, ProjectGraph, DEFAULT_DISPATCH_LIMIT, DEFAULT_NEXT_LIMIT,
+    LineageLink, ProjectGraph, ProjectGraphPage, DEFAULT_DISPATCH_LIMIT, DEFAULT_NEXT_LIMIT,
     GROOMING_NUDGE_THRESHOLD,
 };
 

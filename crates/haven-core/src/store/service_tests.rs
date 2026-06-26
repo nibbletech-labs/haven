@@ -429,6 +429,31 @@ fn list_filters_by_wait_state_and_staleness() {
 }
 
 #[test]
+fn list_items_page_returns_total_and_requested_slice() {
+    let s = store();
+    add(&s, "A");
+    add(&s, "B");
+    add(&s, "C");
+
+    let (total, page) = s
+        .list_items_page(None, &ItemFilter::default(), 2, 1)
+        .unwrap();
+    assert_eq!(total, 3);
+    assert_eq!(
+        page.iter()
+            .map(|i| i.reference.as_str())
+            .collect::<Vec<_>>(),
+        ["HV-2", "HV-3"]
+    );
+
+    let (total, empty) = s
+        .list_items_page(None, &ItemFilter::default(), 2, 10)
+        .unwrap();
+    assert_eq!(total, 3);
+    assert!(empty.is_empty());
+}
+
+#[test]
 fn project_graph_returns_all_nodes_and_edges_in_one_call() {
     let s = store();
     add(&s, "A"); // HV-1
@@ -2942,6 +2967,30 @@ fn get_item_hinted_flags_superseded_ref() {
     // A LIVE ref carries no hint.
     let (_live, none) = s.get_item_hinted(None, &new.reference, &[]).unwrap();
     assert!(none.is_none(), "a live ref must not carry a stale_ref hint");
+}
+
+#[test]
+fn get_items_hinted_preserves_order_duplicates_and_stale_hints() {
+    let s = store();
+    let old = add(&s, "Old"); // HV-1
+    let new = add(&s, "New"); // HV-2
+    s.evolve_supersede(None, &old.reference, &new.reference, None, None)
+        .unwrap();
+
+    let got = s
+        .get_items_hinted(None, &[&new.reference, &old.reference, &old.reference], &[])
+        .unwrap();
+    let refs: Vec<&str> = got
+        .iter()
+        .map(|(item, _)| item.reference.as_str())
+        .collect();
+    assert_eq!(refs, ["HV-2", "HV-1", "HV-1"]);
+    assert!(got[0].1.is_none(), "live ref must not carry stale hint");
+    for (_, hint) in &got[1..] {
+        let hint = hint.as_ref().expect("old ref should carry stale hint");
+        assert_eq!(hint.requested, "HV-1");
+        assert_eq!(hint.resolved_to, vec!["HV-2".to_string()]);
+    }
 }
 
 /// An ARCHIVED ref (no live descendant) is also flagged stale — the hint is

@@ -58,7 +58,8 @@ Run every Haven interaction through these five steps:
 4. **Confirm the result** from the returned JSON: the `ref`, `status`, `committed`,
    `owner`, `wait_state`. Don't assume — read it back. (`haven_list_items`/`next`
    return a *compact* view — those axes, no prose; pull `body`/`why`/`done_looks_like`
-   for one item with `haven_get_item`.)
+   for one item with `haven_get_item`, or for a small selected set with
+   `haven_get_items`.)
 5. **Never touch structure or `backlog.md` by hand.** Mutate the graph *only*
    through tools; edit *content* as files. (The one rule, below.)
 
@@ -288,6 +289,7 @@ haven_update_item{"project":"haven","ref":"HV-1","status":"ready","commit":true,
 // List is compact + paginated: {total, count, offset, items[]}, default limit 100.
 haven_list_items   {"project":"haven","status":"ready","limit":20,"offset":0}
 haven_get_item     {"project":"haven","ref":"HV-1"}    // full item (prose + includes)
+haven_get_items    {"project":"haven","refs":["HV-1","HV-2"]} // bounded batch detail
 // Dispatch, and diagnose if empty.
 haven_dispatch     {"project":"haven","owner":"ai","limit":5}
 haven_next         {"project":"haven","owner":"ai"}

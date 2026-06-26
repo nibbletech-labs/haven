@@ -419,6 +419,20 @@ impl Store {
         Ok((self.get_item(project, selector, include)?, hint))
     }
 
+    /// Batch detail read: preserve the caller's order, including duplicate refs,
+    /// while reusing the exact single-item hydration path.
+    pub fn get_items_hinted(
+        &self,
+        project: Option<&str>,
+        selectors: &[&str],
+        include: &[Include],
+    ) -> Result<Vec<(Item, Option<StaleRef>)>> {
+        selectors
+            .iter()
+            .map(|selector| self.get_item_hinted(project, selector, include))
+            .collect()
+    }
+
     pub fn get_item(
         &self,
         project: Option<&str>,
@@ -463,7 +477,60 @@ impl Store {
     /// List items in a project under the given filters.
     pub fn list_items(&self, project: Option<&str>, filter: &ItemFilter) -> Result<Vec<Item>> {
         let (project_id, _key) = self.require_project(project)?;
-        let mut sql = format!("SELECT {ITEM_SELECT} FROM {ITEM_FROM} WHERE n.project_id = ?1");
+        let (where_sql, args) = self.item_filter_where(project_id, filter)?;
+        let sql = format!(
+            "SELECT {ITEM_SELECT} FROM {ITEM_FROM} {where_sql}
+             ORDER BY n.priority IS NULL, n.priority, n.sort_key IS NULL, n.sort_key, n.created_at, n.id"
+        );
+
+        let mut stmt = self.conn.prepare(&sql)?;
+        let params = rusqlite::params_from_iter(args.iter().map(|b| b.as_ref()));
+        let rows = stmt.query_map(params, item_from_row)?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// Paginated item list plus the total matching count. Ordering and filtering
+    /// are identical to [`Self::list_items`].
+    pub fn list_items_page(
+        &self,
+        project: Option<&str>,
+        filter: &ItemFilter,
+        limit: usize,
+        offset: usize,
+    ) -> Result<(usize, Vec<Item>)> {
+        let (project_id, _key) = self.require_project(project)?;
+        let (where_sql, mut args) = self.item_filter_where(project_id, filter)?;
+        let total_sql = format!("SELECT count(*) FROM {ITEM_FROM} {where_sql}");
+        let total: i64 = self.conn.query_row(
+            &total_sql,
+            rusqlite::params_from_iter(args.iter().map(|b| b.as_ref())),
+            |r| r.get(0),
+        )?;
+
+        let sql = format!(
+            "SELECT {ITEM_SELECT} FROM {ITEM_FROM} {where_sql}
+             ORDER BY n.priority IS NULL, n.priority, n.sort_key IS NULL, n.sort_key, n.created_at, n.id
+             LIMIT ?{} OFFSET ?{}",
+            args.len() + 1,
+            args.len() + 2
+        );
+        args.push(Box::new(limit as i64));
+        args.push(Box::new(offset as i64));
+        let mut stmt = self.conn.prepare(&sql)?;
+        let params = rusqlite::params_from_iter(args.iter().map(|b| b.as_ref()));
+        let rows = stmt.query_map(params, item_from_row)?;
+        Ok((
+            total.max(0) as usize,
+            rows.collect::<rusqlite::Result<Vec<_>>>()?,
+        ))
+    }
+
+    fn item_filter_where(
+        &self,
+        project_id: i64,
+        filter: &ItemFilter,
+    ) -> Result<(String, Vec<Box<dyn rusqlite::ToSql>>)> {
+        let mut sql = "WHERE n.project_id = ?1".to_string();
         let mut args: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(project_id)];
 
         if let Some(status) = filter.status {
@@ -518,12 +585,7 @@ impl Store {
             ));
             args.push(Box::new(group_id));
         }
-        sql.push_str(" ORDER BY n.priority IS NULL, n.priority, n.sort_key IS NULL, n.sort_key, n.created_at, n.id");
-
-        let mut stmt = self.conn.prepare(&sql)?;
-        let params = rusqlite::params_from_iter(args.iter().map(|b| b.as_ref()));
-        let rows = stmt.query_map(params, item_from_row)?;
-        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+        Ok((sql, args))
     }
 
     /// [`Store::update_item`] plus a [`StaleRef`] hint when the target ref is dead

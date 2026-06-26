@@ -25,6 +25,6 @@ pub use store::{
     DispatchSummary, DueUpdate, EdgeKind, EvolveResult, GraphEdge, HandoffInput, HandoffResult,
     ImportItem, ImportOutcome, Include, Integrity, ItemFilter, ItemUpdate, LineageDirection,
     LineageGraph, LineageLink, NewArtifact, NewItem, Prime, PrimeActiveItem, PrimeInboxItem,
-    PrimeQueueItem, ProjectArchive, ProjectGraph, RestoreReport, SimilarItem, StaleRef, Store,
-    WaitUpdate, DEFAULT_DISPATCH_LIMIT, DEFAULT_NEXT_LIMIT,
+    PrimeQueueItem, ProjectArchive, ProjectGraph, ProjectGraphPage, RestoreReport, SimilarItem,
+    StaleRef, Store, WaitUpdate, DEFAULT_DISPATCH_LIMIT, DEFAULT_NEXT_LIMIT,
 };

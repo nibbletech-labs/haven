@@ -45,6 +45,21 @@ pub struct ProjectGraph {
     pub grooming_nudge: Option<String>,
 }
 
+/// Bounded graph payload for context-constrained surfaces. Totals describe the
+/// visible graph before node/edge/lineage caps; vectors contain only the payload
+/// slice. CLI `project_graph` stays full-fidelity.
+#[derive(Debug, Clone)]
+pub struct ProjectGraphPage {
+    pub project: String,
+    pub nodes: Vec<Item>,
+    pub edges: Vec<GraphEdge>,
+    pub lineage: Vec<LineageLink>,
+    pub node_total: usize,
+    pub edge_total: usize,
+    pub lineage_total: usize,
+    pub grooming_nudge: Option<String>,
+}
+
 /// Compact context for a parent/group/blocker shown in a dispatch summary.
 #[derive(Debug, Clone, Serialize)]
 pub struct DispatchContextItem {
@@ -615,12 +630,14 @@ impl Store {
         project: &str,
         refs: &[String],
     ) -> Result<Vec<DispatchContextItem>> {
-        refs.iter()
-            .map(|r| {
-                self.get_item(Some(project), r, &[])
-                    .map(DispatchContextItem::from)
+        let ref_slices: Vec<&str> = refs.iter().map(String::as_str).collect();
+        self.get_items_hinted(Some(project), &ref_slices, &[])
+            .map(|items| {
+                items
+                    .into_iter()
+                    .map(|(item, _stale)| DispatchContextItem::from(item))
+                    .collect()
             })
-            .collect()
     }
 
     /// FTS5 search over node title/body, ranked by relevance.
@@ -787,20 +804,8 @@ impl Store {
         } else {
             Vec::new()
         };
-        // Hydrate the derived rollup for every container, and the context-pack
-        // pointer for every leaf — read-only projections so a whole-graph read
-        // can triage which ready leaves carry a pack (HV-75).
         for node in &mut nodes {
-            if node.node_type.is_container() {
-                let (rollup, owner_rollup, has_uncommitted) = self.container_rollup(node.id)?;
-                node.rollup_state = Some(rollup);
-                node.owner_rollup = Some(owner_rollup);
-                node.has_uncommitted_descendants = Some(has_uncommitted);
-            } else {
-                let (pack, clash) = self.context_pack_for_node(node.id)?;
-                node.context_pack = pack;
-                node.context_pack_clash = clash;
-            }
+            self.hydrate_graph_node(node)?;
         }
         let grooming_nudge = self.grooming_pressure(project)?.nudge;
         Ok(ProjectGraph {
@@ -810,6 +815,115 @@ impl Store {
             lineage,
             grooming_nudge,
         })
+    }
+
+    /// Bounded graph read for MCP: compute totals over the visible graph, but
+    /// hydrate expensive derived node fields only for payload nodes.
+    pub fn project_graph_page(
+        &self,
+        project: Option<&str>,
+        lineage: bool,
+        include_dead: bool,
+        node_limit: usize,
+        edge_limit: usize,
+        lineage_limit: usize,
+    ) -> Result<ProjectGraphPage> {
+        use std::collections::HashSet;
+
+        let (project_id, key) = self.require_project(project)?;
+        let visible_nodes = self.list_items(
+            project,
+            &ItemFilter {
+                include_dead,
+                ..Default::default()
+            },
+        )?;
+        let visible_refs: HashSet<String> =
+            visible_nodes.iter().map(|n| n.reference.clone()).collect();
+        let node_total = visible_nodes.len();
+        let mut nodes: Vec<Item> = visible_nodes.into_iter().take(node_limit).collect();
+        for node in &mut nodes {
+            self.hydrate_graph_node(node)?;
+        }
+        let payload_refs: HashSet<String> = nodes.iter().map(|n| n.reference.clone()).collect();
+
+        let mut all_edges = Vec::new();
+        all_edges.extend(self.edges_of_kind(
+            project_id,
+            EdgeKind::Decomposition,
+            "SELECT pn.ref, cn.ref FROM decomposition_edges e
+               JOIN nodes pn ON pn.id = e.parent_id
+               JOIN nodes cn ON cn.id = e.child_id
+             WHERE pn.project_id = ?1 ORDER BY pn.ref, cn.ref",
+        )?);
+        all_edges.extend(self.edges_of_kind(
+            project_id,
+            EdgeKind::Dependency,
+            "SELECT nn.ref, dn.ref FROM dependency_edges e
+               JOIN nodes nn ON nn.id = e.node_id
+               JOIN nodes dn ON dn.id = e.depends_on_id
+             WHERE nn.project_id = ?1 ORDER BY nn.ref, dn.ref",
+        )?);
+        all_edges.extend(self.edges_of_kind(
+            project_id,
+            EdgeKind::Grouping,
+            "SELECT gn.ref, mn.ref FROM grouping_edges e
+               JOIN nodes gn ON gn.id = e.group_id
+               JOIN nodes mn ON mn.id = e.member_id
+             WHERE gn.project_id = ?1 ORDER BY gn.ref, mn.ref",
+        )?);
+        let visible_edges: Vec<GraphEdge> = all_edges
+            .into_iter()
+            .filter(|e| visible_refs.contains(&e.from) && visible_refs.contains(&e.to))
+            .collect();
+        let edge_total = visible_edges.len();
+        let edges = visible_edges
+            .into_iter()
+            .filter(|e| payload_refs.contains(&e.from) && payload_refs.contains(&e.to))
+            .take(edge_limit)
+            .collect();
+
+        let visible_lineage = if lineage {
+            self.project_lineage_links(project_id)?
+                .into_iter()
+                .filter(|l| visible_refs.contains(&l.from) && visible_refs.contains(&l.to))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let lineage_total = visible_lineage.len();
+        let lineage = visible_lineage
+            .into_iter()
+            .filter(|l| payload_refs.contains(&l.from) && payload_refs.contains(&l.to))
+            .take(lineage_limit)
+            .collect();
+        let grooming_nudge = self.grooming_pressure(project)?.nudge;
+        Ok(ProjectGraphPage {
+            project: key,
+            nodes,
+            edges,
+            lineage,
+            node_total,
+            edge_total,
+            lineage_total,
+            grooming_nudge,
+        })
+    }
+
+    fn hydrate_graph_node(&self, node: &mut Item) -> Result<()> {
+        // Hydrate the derived rollup for containers, and the context-pack pointer
+        // for leaves — read-only projections used by graph/detail views.
+        if node.node_type.is_container() {
+            let (rollup, owner_rollup, has_uncommitted) = self.container_rollup(node.id)?;
+            node.rollup_state = Some(rollup);
+            node.owner_rollup = Some(owner_rollup);
+            node.has_uncommitted_descendants = Some(has_uncommitted);
+        } else {
+            let (pack, clash) = self.context_pack_for_node(node.id)?;
+            node.context_pack = pack;
+            node.context_pack_clash = clash;
+        }
+        Ok(())
     }
 
     /// A container's LIVE descendants as `(status, committed, owner_kind)` tuples,

@@ -647,7 +647,8 @@ struct ItemListArgs {
 
 #[derive(Args)]
 struct ItemGetArgs {
-    reference: String,
+    #[arg(required = true)]
+    references: Vec<String>,
     /// Comma-separated: edges,artifacts,lineage
     #[arg(long, value_delimiter = ',')]
     include: Vec<String>,
@@ -2680,11 +2681,20 @@ fn cmd_item(project: Option<&str>, cmd: &ItemCmd) -> Result<Output> {
                 .iter()
                 .map(|i| Include::parse(i))
                 .collect::<Result<Vec<_>>>()?;
-            Ok(Output::Item(s.get_item(
-                project,
-                &a.reference,
-                &includes,
-            )?))
+            if a.references.len() == 1 {
+                Ok(Output::Item(s.get_item(
+                    project,
+                    &a.references[0],
+                    &includes,
+                )?))
+            } else {
+                Ok(Output::Items(
+                    refs(&a.references)
+                        .iter()
+                        .map(|r| s.get_item(project, r, &includes))
+                        .collect::<Result<Vec<_>>>()?,
+                ))
+            }
         }
         ItemCmd::Update(a) => {
             // `item update --commit/--uncommit` is a common reflex, but commitment

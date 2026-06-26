@@ -13,12 +13,13 @@
 
 use std::collections::HashSet;
 
+use rusqlite::params;
 use serde::Serialize;
 
 use crate::error::Result;
 use crate::model::*;
 
-use super::{ItemFilter, Store};
+use super::{item_from_row, ItemFilter, Store, ITEM_FROM, ITEM_SELECT};
 
 /// How many committed-ready queue items to show before truncating (token budget).
 const PRIME_QUEUE_CAP: usize = 8;
@@ -110,7 +111,7 @@ impl Store {
     pub fn prime(&self, project: Option<&str>) -> Result<Prime> {
         // §1 Project + one-line state. Reuse store_status (and resolve the prefix
         // from the project record) rather than re-counting here.
-        let (_project_id, key) = self.require_project(project)?;
+        let (project_id, key) = self.require_project(project)?;
         let status = self.store_status(project)?;
         let prefix = self.get_project(&key)?.ref_prefix;
         let get_i64 = |k: &str| status.get(k).and_then(|v| v.as_i64()).unwrap_or(0);
@@ -124,19 +125,19 @@ impl Store {
             .into_iter()
             .map(|i| i.reference)
             .collect();
-        let committed_ready = self.list_items(
+        let (queue_total, committed_ready) = self.list_items_page(
             project,
             &ItemFilter {
                 status: Some(Status::Ready),
                 committed: Some(true),
                 ..Default::default()
             },
+            PRIME_QUEUE_CAP,
+            0,
         )?;
-        let queue_total = committed_ready.len();
         let next_eligible_total = next_eligible.len();
         let queue: Vec<PrimeQueueItem> = committed_ready
             .into_iter()
-            .take(PRIME_QUEUE_CAP)
             .map(|i| PrimeQueueItem {
                 next_eligible: next_eligible.contains(&i.reference),
                 reference: i.reference,
@@ -147,62 +148,33 @@ impl Store {
 
         // §3 In-progress + waiting, with owner. Union of the in_progress items and
         // any item carrying a wait_state (parked, regardless of status), deduped.
-        let in_progress = self.list_items(
-            project,
-            &ItemFilter {
-                status: Some(Status::InProgress),
-                ..Default::default()
-            },
-        )?;
-        let mut active: Vec<PrimeActiveItem> = Vec::new();
-        let mut seen: HashSet<String> = HashSet::new();
-        let mut push = |i: Item, active: &mut Vec<PrimeActiveItem>| {
-            if seen.insert(i.reference.clone()) {
-                active.push(PrimeActiveItem {
-                    reference: i.reference,
-                    title: i.title,
-                    status: i.status,
-                    owner: i.owner_kind,
-                    wait: i.wait_state,
-                });
-            }
-        };
-        for i in in_progress {
-            push(i, &mut active);
-        }
-        for wait in [
-            WaitState::OnHuman,
-            WaitState::OnDependency,
-            WaitState::OnExternal,
-        ] {
-            let waiting = self.list_items(
-                project,
-                &ItemFilter {
-                    wait: Some(wait),
-                    ..Default::default()
-                },
-            )?;
-            for i in waiting {
-                push(i, &mut active);
-            }
-        }
-        let active_total = active.len();
-        active.truncate(PRIME_ACTIVE_CAP);
+        let (active_total, active_items) = self.prime_active_page(project_id, PRIME_ACTIVE_CAP)?;
+        let active: Vec<PrimeActiveItem> = active_items
+            .into_iter()
+            .map(|i| PrimeActiveItem {
+                reference: i.reference,
+                title: i.title,
+                status: i.status,
+                owner: i.owner_kind,
+                wait: i.wait_state,
+            })
+            .collect();
 
         // §5 Untriaged-inbox view. Reuse the HV-82 grooming-pressure query for the
         // count + nudge, and the same inbox-floater filter it counts over for the
         // top few to triage — so handoff-swept captures resurface on resume.
         let pressure = self.grooming_pressure(project)?;
-        let inbox: Vec<PrimeInboxItem> = self
-            .list_items(
-                project,
-                &ItemFilter {
-                    inbox: true,
-                    ..Default::default()
-                },
-            )?
+        let (_inbox_total, inbox_items) = self.list_items_page(
+            project,
+            &ItemFilter {
+                inbox: true,
+                ..Default::default()
+            },
+            PRIME_INBOX_CAP,
+            0,
+        )?;
+        let inbox: Vec<PrimeInboxItem> = inbox_items
             .into_iter()
-            .take(PRIME_INBOX_CAP)
             .map(|i| PrimeInboxItem {
                 reference: i.reference,
                 title: i.title,
@@ -225,6 +197,36 @@ impl Store {
             inbox,
             grooming_nudge: pressure.nudge,
         })
+    }
+
+    fn prime_active_page(&self, project_id: i64, limit: usize) -> Result<(usize, Vec<Item>)> {
+        let predicate = "n.project_id = ?1
+             AND n.status NOT IN ('archived','superseded')
+             AND (n.status = 'in_progress' OR n.wait_state IS NOT NULL)";
+        let total: i64 = self.conn.query_row(
+            &format!("SELECT count(*) FROM nodes n WHERE {predicate}"),
+            [project_id],
+            |r| r.get(0),
+        )?;
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT {ITEM_SELECT} FROM {ITEM_FROM}
+             WHERE {predicate}
+             ORDER BY
+               CASE
+                 WHEN n.status = 'in_progress' THEN 0
+                 WHEN n.wait_state = 'on_human' THEN 1
+                 WHEN n.wait_state = 'on_dependency' THEN 2
+                 WHEN n.wait_state = 'on_external' THEN 3
+                 ELSE 4
+               END,
+               n.priority IS NULL, n.priority, n.sort_key IS NULL, n.sort_key, n.created_at, n.id
+             LIMIT ?2"
+        ))?;
+        let rows = stmt.query_map(params![project_id, limit as i64], item_from_row)?;
+        Ok((
+            total.max(0) as usize,
+            rows.collect::<rusqlite::Result<Vec<_>>>()?,
+        ))
     }
 }
 

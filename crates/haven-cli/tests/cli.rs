@@ -1111,6 +1111,10 @@ fn full_lifecycle() {
     h.ok(&["depend", "HV-6", "--on", "HV-2"]);
     let full = h.json(&["item", "get", "HV-1", "--include", "edges"]);
     assert_eq!(full["edges"]["children"][0], "HV-6");
+    let many = h.json(&["item", "get", "HV-2", "HV-1"]);
+    let many = many.as_array().unwrap();
+    assert_eq!(many[0]["ref"], "HV-2");
+    assert_eq!(many[1]["ref"], "HV-1");
 
     // Evolve split supersedes the source and resolves forward.
     let split = h.json(&[

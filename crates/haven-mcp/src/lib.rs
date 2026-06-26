@@ -85,6 +85,9 @@ const DEFAULT_GRAPH_NODE_LIMIT: i64 = DEFAULT_LIST_LIMIT;
 const DEFAULT_GRAPH_EDGE_LIMIT: i64 = 250;
 /// Default/hard lineage link cap for `haven_graph` over MCP.
 const DEFAULT_GRAPH_LINEAGE_LIMIT: i64 = 250;
+/// Hard cap for full batch item hydration over MCP. Full items include prose and
+/// optional edges/artifacts/lineage, so callers should batch selected refs only.
+const MAX_GET_ITEMS_REFS: usize = 20;
 
 /// The MCP projection of an [`Item`] (SPEC §3). Deliberately leaner than the
 /// `Item` the CLI serializes: the machine-only fields (`public_id`, `sync_state`,
@@ -465,6 +468,42 @@ fn str_array(v: &Value, k: &str) -> Vec<String> {
         })
         .unwrap_or_default()
 }
+fn req_str_array(v: &Value, k: &str) -> Result<Vec<String>> {
+    let arr = v
+        .get(k)
+        .and_then(|x| x.as_array())
+        .ok_or_else(|| HavenError::Invalid(format!("missing required arg '{k}'")))?;
+    arr.iter()
+        .map(|e| {
+            e.as_str().map(String::from).ok_or_else(|| {
+                HavenError::Invalid(format!("arg '{k}' must be an array of strings"))
+            })
+        })
+        .collect()
+}
+
+fn include_args(a: &Value) -> (Vec<Include>, Vec<String>) {
+    let mut includes = Vec::new();
+    let mut invalid = Vec::new();
+    for s in str_array(a, "include") {
+        match Include::parse(&s) {
+            Ok(inc) => includes.push(inc),
+            Err(_) => invalid.push(s),
+        }
+    }
+    (includes, invalid)
+}
+
+fn attach_invalid_include(out: &mut Value, invalid: Vec<String>) {
+    if !invalid.is_empty() {
+        if let Value::Object(map) = out {
+            map.insert(
+                "invalid_include".into(),
+                json!({ "keys": invalid, "valid": "edges, artifacts, lineage" }),
+            );
+        }
+    }
+}
 
 /// Attach a `stale_ref` advisory to a success payload when the resolved ref was
 /// dead (superseded/archived) — HV-154. Rides the response object the same way
@@ -605,16 +644,10 @@ fn dispatch_tool(store: &Store, name: &str, a: &Value) -> Result<Value> {
             // Compact, paginated view: prose + machine fields stripped, bounded by
             // `limit` (default 100) from `offset`. `total` is the full match count,
             // so a truncated page is never silent.
-            let all = store.list_items(project, &filter)?;
-            let total = all.len();
             let offset = opt_i64(a, "offset").unwrap_or(0).max(0) as usize;
             let limit = opt_i64(a, "limit").unwrap_or(DEFAULT_LIST_LIMIT).max(0) as usize;
-            let items: Vec<McpItem> = all
-                .iter()
-                .skip(offset)
-                .take(limit)
-                .map(McpItem::compact)
-                .collect();
+            let (total, page) = store.list_items_page(project, &filter, limit, offset)?;
+            let items: Vec<McpItem> = page.iter().map(McpItem::compact).collect();
             Ok(json!({
                 "total": total,
                 "count": items.len(),
@@ -630,16 +663,10 @@ fn dispatch_tool(store: &Store, name: &str, a: &Value) -> Result<Value> {
                 inbox: true,
                 ..Default::default()
             };
-            let all = store.list_items(project, &filter)?;
-            let total = all.len();
             let offset = opt_i64(a, "offset").unwrap_or(0).max(0) as usize;
             let limit = opt_i64(a, "limit").unwrap_or(DEFAULT_LIST_LIMIT).max(0) as usize;
-            let items: Vec<McpItem> = all
-                .iter()
-                .skip(offset)
-                .take(limit)
-                .map(McpItem::compact)
-                .collect();
+            let (total, page) = store.list_items_page(project, &filter, limit, offset)?;
+            let items: Vec<McpItem> = page.iter().map(McpItem::compact).collect();
             Ok(json!({
                 "total": total,
                 "count": items.len(),
@@ -656,28 +683,42 @@ fn dispatch_tool(store: &Store, name: &str, a: &Value) -> Result<Value> {
             // key while honouring the valid ones (no whole-set short-circuit).
             // The valid keys load; the bad keys ride an `invalid_include` advisory
             // naming them + the legal set.
-            let mut includes = Vec::new();
-            let mut invalid: Vec<String> = Vec::new();
-            for s in str_array(a, "include") {
-                match Include::parse(&s) {
-                    Ok(inc) => includes.push(inc),
-                    Err(_) => invalid.push(s),
-                }
-            }
+            let (includes, invalid) = include_args(a);
             // HV-154: a dead (superseded/archived) ref still returns the item,
             // but rides a `stale_ref{ref, resolved_to}` hint so the caller learns
             // where the live work moved instead of acting on the dead node.
             let (item, stale) = store.get_item_hinted(project, req_str(a, "ref")?, &includes)?;
             let mut out = to_value(McpItem::full(&item))?;
             attach_stale_ref(&mut out, stale)?;
-            if !invalid.is_empty() {
-                if let Value::Object(map) = &mut out {
-                    map.insert(
-                        "invalid_include".into(),
-                        json!({ "keys": invalid, "valid": "edges, artifacts, lineage" }),
-                    );
-                }
+            attach_invalid_include(&mut out, invalid);
+            Ok(out)
+        }
+        "haven_get_items" => {
+            let refs = req_str_array(a, "refs")?;
+            if refs.is_empty() {
+                return Err(HavenError::Invalid(
+                    "arg 'refs' must contain at least one ref".into(),
+                ));
             }
+            if refs.len() > MAX_GET_ITEMS_REFS {
+                return Err(HavenError::Invalid(format!(
+                    "haven_get_items accepts at most {MAX_GET_ITEMS_REFS} refs"
+                )));
+            }
+            let (includes, invalid) = include_args(a);
+            let ref_slices: Vec<&str> = refs.iter().map(String::as_str).collect();
+            let mut items = Vec::with_capacity(refs.len());
+            for (item, stale) in store.get_items_hinted(project, &ref_slices, &includes)? {
+                let mut out = to_value(McpItem::full(&item))?;
+                attach_stale_ref(&mut out, stale)?;
+                items.push(out);
+            }
+            let mut out = json!({
+                "count": items.len(),
+                "limit": MAX_GET_ITEMS_REFS,
+                "items": items,
+            });
+            attach_invalid_include(&mut out, invalid);
             Ok(out)
         }
         "haven_next" => {
@@ -885,7 +926,8 @@ fn dispatch_tool(store: &Store, name: &str, a: &Value) -> Result<Value> {
             to_value(items.iter().map(McpItem::compact).collect::<Vec<_>>())
         }
         "haven_search" => {
-            to_value(store.search(project, req_str(a, "query")?, opt_i64(a, "limit"))?)
+            let items = store.search(project, req_str(a, "query")?, opt_i64(a, "limit"))?;
+            to_value(items.iter().map(McpItem::compact).collect::<Vec<_>>())
         }
         // The project graph in one bounded MCP read — for rendering the graph or
         // reasoning over the dependency structure without exceeding transport
@@ -896,74 +938,37 @@ fn dispatch_tool(store: &Store, name: &str, a: &Value) -> Result<Value> {
         // `all:true` to include the dead nodes.
         "haven_graph" => {
             let lineage_requested = opt_bool(a, "lineage").unwrap_or(false);
-            let g = store.project_graph(project, lineage_requested)?;
             let all = opt_bool(a, "all").unwrap_or(false);
             let node_limit = opt_capped_usize(a, "node_limit", DEFAULT_GRAPH_NODE_LIMIT);
             let edge_limit = opt_capped_usize(a, "edge_limit", DEFAULT_GRAPH_EDGE_LIMIT);
             let lineage_limit = opt_capped_usize(a, "lineage_limit", DEFAULT_GRAPH_LINEAGE_LIMIT);
-            let visible_nodes: Vec<&Item> = g
+            let g = store.project_graph_page(
+                project,
+                lineage_requested,
+                all,
+                node_limit,
+                edge_limit,
+                lineage_limit,
+            )?;
+            let nodes: Vec<McpItem> = g
                 .nodes
-                .iter()
-                .filter(|n| all || !matches!(n.status, Status::Superseded | Status::Archived))
-                .collect();
-            let visible_refs: std::collections::HashSet<&str> =
-                visible_nodes.iter().map(|n| n.reference.as_str()).collect();
-            let payload_nodes: Vec<&Item> =
-                visible_nodes.iter().copied().take(node_limit).collect();
-            let payload_refs: std::collections::HashSet<&str> =
-                payload_nodes.iter().map(|n| n.reference.as_str()).collect();
-            let nodes: Vec<McpItem> = payload_nodes
                 .iter()
                 .map(|item| McpItem::graph_node(item))
                 .collect();
-            let visible_edges: Vec<_> = g
-                .edges
-                .iter()
-                .filter(|e| {
-                    visible_refs.contains(e.from.as_str()) && visible_refs.contains(e.to.as_str())
-                })
-                .collect();
-            let edges: Vec<_> = visible_edges
-                .iter()
-                .copied()
-                .filter(|e| {
-                    payload_refs.contains(e.from.as_str()) && payload_refs.contains(e.to.as_str())
-                })
-                .take(edge_limit)
-                .collect();
-            let visible_lineage: Vec<_> = g
-                .lineage
-                .iter()
-                .filter(|l| {
-                    visible_refs.contains(l.from.as_str()) && visible_refs.contains(l.to.as_str())
-                })
-                .collect();
-            let lineage: Vec<_> = visible_lineage
-                .iter()
-                .copied()
-                .filter(|l| {
-                    payload_refs.contains(l.from.as_str()) && payload_refs.contains(l.to.as_str())
-                })
-                .take(lineage_limit)
-                .collect();
-
-            let node_total = visible_nodes.len();
-            let edge_total = visible_edges.len();
-            let lineage_total = visible_lineage.len();
             let node_count = nodes.len();
-            let edge_count = edges.len();
-            let lineage_count = lineage.len();
-            let node_omitted = node_total.saturating_sub(node_count);
-            let edge_omitted = edge_total.saturating_sub(edge_count);
-            let lineage_omitted = lineage_total.saturating_sub(lineage_count);
+            let edge_count = g.edges.len();
+            let lineage_count = g.lineage.len();
+            let node_omitted = g.node_total.saturating_sub(node_count);
+            let edge_omitted = g.edge_total.saturating_sub(edge_count);
+            let lineage_omitted = g.lineage_total.saturating_sub(lineage_count);
             let mut out = json!({
                 "project": &g.project,
                 "nodes": nodes,
-                "edges": edges,
+                "edges": &g.edges,
                 "totals": {
-                    "nodes": node_total,
-                    "edges": edge_total,
-                    "lineage": lineage_total,
+                    "nodes": g.node_total,
+                    "edges": g.edge_total,
+                    "lineage": g.lineage_total,
                 },
                 "omitted": {
                     "nodes": node_omitted,
@@ -980,8 +985,8 @@ fn dispatch_tool(store: &Store, name: &str, a: &Value) -> Result<Value> {
             // Preserve the original default contract: lineage is absent unless it
             // was requested. When requested, include even an empty array if links
             // existed but were omitted so the cap is visible beside metadata.
-            if lineage_requested && (!lineage.is_empty() || lineage_total > 0) {
-                out["lineage"] = to_value(&lineage)?;
+            if lineage_requested && (!g.lineage.is_empty() || g.lineage_total > 0) {
+                out["lineage"] = to_value(&g.lineage)?;
             }
             // Grooming nudge (HV-82) rides along only when work has piled up, so
             // a planner reorienting via the graph is prompted to groom first.
@@ -1270,7 +1275,7 @@ fn tools_list() -> Value {
         "required": ["title"]
     });
     json!([
-        { "name": "haven_list_items", "description": "List items in a project under filters. Returns a compact, paginated view {total, count, offset, items[]} — each item carries identity + axes only (ref, title, type, status, committed, owner, priority, wait); fetch prose/detail for one item with haven_get_item. Truncated to `limit` (default 100) from `offset`, in (priority, sort_key, created_at) order; `total` is the full match count. `wait` (on_human|on_dependency|on_external) answers 'what's waiting on me / stuck on X'; `stale` (days) surfaces items untouched for N+ days.",
+        { "name": "haven_list_items", "description": "List items in a project under filters. Returns a compact, paginated view {total, count, offset, items[]} — each item carries identity + axes only (ref, title, type, status, committed, owner, priority, wait); fetch prose/detail with haven_get_item or bounded haven_get_items for selected refs. Truncated to `limit` (default 100) from `offset`, in (priority, sort_key, created_at) order; `total` is the full match count. `wait` (on_human|on_dependency|on_external) answers 'what's waiting on me / stuck on X'; `stale` (days) surfaces items untouched for N+ days.",
           "inputSchema": obj(json!({"project":{"type":"string"},"status":{"type":"string","enum":["discovery","definition","ready","in_progress","blocked","done","superseded","archived"]},"type":{"type":"string","enum":["task","code","research","data","design","admin","release","phase","gate","anchor"]},"owner":{"type":"string","enum":["human","ai"]},"committed":{"type":"boolean"},"icebox":{"type":"boolean"},"group":{"type":"string"},"wait":{"type":"string","enum":["on_human","on_dependency","on_external"]},"stale":{"type":"integer"},"limit":{"type":"integer"},"offset":{"type":"integer"}}), json!([])) },
         { "name": "haven_inbox", "description": "Untriaged floaters: uncommitted, live (not archived/superseded), with no acceptance (done_looks_like) set yet — the triage queue behind capture→triage→next. Same compact, paginated {total, count, offset, items[]} envelope as haven_list_items.",
           "inputSchema": obj(json!({"project":{"type":"string"},"owner":{"type":"string","enum":["human","ai"]},"limit":{"type":"integer"},"offset":{"type":"integer"}}), json!([])) },
@@ -1278,7 +1283,9 @@ fn tools_list() -> Value {
           "inputSchema": obj(json!({"ref":{"type":"string"},"project":{"type":"string"}}), json!(["ref"])) },
         { "name": "haven_get_item", "description": "Fetch one item in full (prose + requested edges/artifacts/lineage); internal sync fields (public_id/sync_state/revision) are omitted. The detail door for an item shown compactly by haven_list_items/haven_next. If the ref is superseded/archived the item still returns, but the response also carries `stale_ref` {ref, resolved_to:[live ref(s)]} — the work has moved; follow resolved_to. An unknown `include` key is rejected on its own (the valid keys still load) and reported under `invalid_include`.",
           "inputSchema": obj(json!({"ref":{"type":"string"},"project":{"type":"string"},"include":{"type":"array","items":{"type":"string","enum":["edges","artifacts","lineage"]}}}), json!(["ref"])) },
-        { "name": "haven_next", "description": "Items ready to dispatch (committed, ready, unblocked), highest priority band first. Returns a compact view per item (identity + axes, no prose — fetch full via haven_get_item). Bounded by default: returns at most the top 50 of the ranked frontier unless `limit` is given — re-poll between batches rather than asking for the whole frontier at once.",
+        { "name": "haven_get_items", "description": "Fetch selected refs in full in one bounded read (same item shape as haven_get_item); preserves input order and duplicate refs. Use after compact navigation when several known refs need prose/detail. Hard-capped at 20 refs to avoid full-prose context blowups. Stale refs ride `stale_ref` on their individual item object; invalid include keys are reported once under `invalid_include` while valid includes still load.",
+          "inputSchema": obj(json!({"refs":{"type":"array","items":{"type":"string"},"minItems":1,"maxItems":20},"project":{"type":"string"},"include":{"type":"array","items":{"type":"string","enum":["edges","artifacts","lineage"]}}}), json!(["refs"])) },
+        { "name": "haven_next", "description": "Items ready to dispatch (committed, ready, unblocked), highest priority band first. Returns a compact view per item (identity + axes, no prose — fetch full via haven_get_item or bounded haven_get_items for selected refs). Bounded by default: returns at most the top 50 of the ranked frontier unless `limit` is given — re-poll between batches rather than asking for the whole frontier at once.",
           "inputSchema": obj(json!({"project":{"type":"string"},"owner":{"type":"string","enum":["human","ai"]},"limit":{"type":"integer"}}), json!([])) },
         { "name": "haven_dispatch", "description": "Lean 'what should I work on?' briefing: bounded haven_next plus targeted per-candidate details (acceptance, parent/group context, blockers, artifact pointers) without pulling the whole graph. Use `scope` with a parent/release/phase ref to restrict candidates to that live subtree. Includes next-explain diagnostics when empty, or when `explain:true` is passed.",
           "inputSchema": obj(json!({"project":{"type":"string"},"owner":{"type":"string","enum":["human","ai"]},"limit":{"type":"integer"},"scope":{"type":"string"},"explain":{"type":"boolean"}}), json!([])) },
@@ -1300,7 +1307,7 @@ fn tools_list() -> Value {
           "inputSchema": obj(json!({"ref":{"type":"string"},"direction":{"type":"string","enum":["ancestors","descendants","both"]},"depth":{"type":"integer"},"project":{"type":"string"}}), json!(["ref"])) },
         { "name": "haven_resolve_live", "description": "DEPRECATED (kept one release) — prefer the automatic stale_ref hint. haven_get_item/haven_update_item/haven_add_edge now resolve a superseded/archived ref forward through lineage automatically and ride a `stale_ref` {ref, resolved_to} field on the success response, so you rarely need to call this directly. Still resolves a possibly superseded/archived ref to its live descendant(s) (a live item resolves to itself); returns compact items.",
           "inputSchema": obj(json!({"ref":{"type":"string"},"project":{"type":"string"}}), json!(["ref"])) },
-        { "name": "haven_search", "description": "Full-text search over item title/body.",
+        { "name": "haven_search", "description": "Full-text search over item title/body. Returns compact MCP items (identity + axes, no prose/machine fields); fetch detail with haven_get_item or haven_get_items for selected hits.",
           "inputSchema": obj(json!({"query":{"type":"string"},"project":{"type":"string"},"limit":{"type":"integer"}}), json!(["query"])) },
         { "name": "haven_graph", "description": "The project work-graph in one bounded MCP read: compact nodes plus a flat edge list ({kind, from, to}, same shape as haven_add_edge), and optionally lineage links. The default/hard caps are 100 nodes, 250 edges, and 250 lineage links; responses include totals, omitted counts, limits, and truncated so large graphs degrade instead of failing whole. Use smaller node_limit/edge_limit/lineage_limit values for tighter slices. Nodes are compact (identity + axes + done_looks_like; fetch other prose for one via haven_get_item) and live-only by default — pass all:true to include superseded/archived nodes.",
           "inputSchema": obj(json!({"project":{"type":"string"},"lineage":{"type":"boolean"},"all":{"type":"boolean"},"node_limit":{"type":"integer","minimum":0,"maximum":100,"description":"Max nodes returned; defaults to and is clamped at 100."},"edge_limit":{"type":"integer","minimum":0,"maximum":250,"description":"Max structural edges returned; defaults to and is clamped at 250."},"lineage_limit":{"type":"integer","minimum":0,"maximum":250,"description":"Max lineage links returned when lineage:true; defaults to and is clamped at 250."}}), json!([])) },
@@ -1458,12 +1465,13 @@ mod tests {
         assert_eq!(out.len(), 2);
         assert_eq!(out[0]["result"]["serverInfo"]["name"], "haven");
         let tools = out[1]["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 33);
+        assert_eq!(tools.len(), 34);
         assert!(tools.iter().any(|t| t["name"] == "haven_claim"));
         assert!(tools.iter().any(|t| t["name"] == "haven_import"));
         assert!(tools.iter().any(|t| t["name"] == "haven_prime"));
         assert!(tools.iter().any(|t| t["name"] == "haven_inbox"));
         assert!(tools.iter().any(|t| t["name"] == "haven_xref"));
+        assert!(tools.iter().any(|t| t["name"] == "haven_get_items"));
         assert!(tools.iter().any(|t| t["name"] == "haven_next"));
         assert!(tools.iter().any(|t| t["name"] == "haven_dispatch"));
         assert!(tools.iter().any(|t| t["name"] == "haven_next_explain"));
@@ -2478,6 +2486,43 @@ mod tests {
     }
 
     #[test]
+    fn search_returns_compact_mcp_items() {
+        let s = store();
+        let out = session(
+            &s,
+            &[
+                json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{
+                    "name":"haven_add_item",
+                    "arguments":{"title":"Token refresh","body":"retry on 401","why":"because"}
+                }}),
+                json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{
+                    "name":"haven_search","arguments":{"query":"retry"}
+                }}),
+            ],
+        );
+        let payload = tool_payload(&out[1]);
+        let hits = payload.as_array().unwrap();
+        assert_eq!(hits.len(), 1);
+        let hit = &hits[0];
+        assert_eq!(hit["ref"], "HV-1");
+        assert_eq!(hit["title"], "Token refresh");
+        for k in [
+            "body",
+            "why",
+            "done_looks_like",
+            "created_at",
+            "updated_at",
+            "public_id",
+            "sync_state",
+            "revision",
+            "sort_key",
+            "metadata",
+        ] {
+            assert!(hit.get(k).is_none(), "search compact item should omit {k}");
+        }
+    }
+
+    #[test]
     fn inbox_tool_returns_untriaged_floaters_and_drops_on_triage() {
         let s = store();
         let out = session(
@@ -2717,6 +2762,75 @@ mod tests {
                 "full item should omit machine field {k}"
             );
         }
+    }
+
+    #[test]
+    fn get_items_returns_full_items_in_order_with_per_item_stale_hints() {
+        let s = store();
+        let out = session(
+            &s,
+            &[
+                json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{
+                    "name":"haven_add_item",
+                    "arguments":{"title":"Old","body":"old body","why":"old why"}
+                }}),
+                json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{
+                    "name":"haven_add_item",
+                    "arguments":{"title":"New","body":"new body"}
+                }}),
+                json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{
+                    "name":"haven_evolve",
+                    "arguments":{"op":"supersede","refs":["HV-1"],"with":"HV-2"}
+                }}),
+                json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{
+                    "name":"haven_get_items",
+                    "arguments":{"refs":["HV-2","HV-1","HV-1"],"include":["lineage","bogus"]}
+                }}),
+            ],
+        );
+        let batch = tool_payload(&out[3]);
+        assert_eq!(batch["count"], 3);
+        assert_eq!(batch["limit"], MAX_GET_ITEMS_REFS);
+        assert_eq!(batch["invalid_include"]["keys"][0], "bogus");
+        let items = batch["items"].as_array().unwrap();
+        assert_eq!(items[0]["ref"], "HV-2");
+        assert_eq!(items[1]["ref"], "HV-1");
+        assert_eq!(items[2]["ref"], "HV-1");
+        assert_eq!(items[1]["body"], "old body");
+        assert!(items[1]["lineage"].is_array(), "valid includes still load");
+        assert_eq!(items[1]["stale_ref"]["resolved_to"][0], "HV-2");
+        assert_eq!(items[2]["stale_ref"]["resolved_to"][0], "HV-2");
+        for item in items {
+            for k in ["public_id", "sync_state", "revision", "sort_key"] {
+                assert!(
+                    item.get(k).is_none(),
+                    "batch full item should omit machine field {k}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn get_items_rejects_batches_over_the_context_cap() {
+        let s = store();
+        let refs: Vec<String> = (1..=(MAX_GET_ITEMS_REFS + 1))
+            .map(|i| format!("HV-{i}"))
+            .collect();
+        let out = session(
+            &s,
+            &[
+                json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{
+                    "name":"haven_get_items",
+                    "arguments":{"refs":refs}
+                }}),
+            ],
+        );
+        assert_eq!(out[0]["result"]["isError"], true);
+        assert_eq!(tool_payload(&out[0])["error"]["code"], "invalid");
+        assert!(tool_payload(&out[0])["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("at most 20 refs"));
     }
 
     #[test]
@@ -2962,18 +3076,20 @@ mod tests {
             }
         }
         // include is an ARRAY param — the enum constrains its items.
-        let inc: Vec<String> = props("haven_get_item")["include"]["items"]["enum"]
-            .as_array()
-            .expect("get_item.include.items should carry an enum")
-            .iter()
-            .map(|v| v.as_str().unwrap().to_string())
-            .collect();
-        assert!(!inc.is_empty(), "include item enum is empty");
-        for v in &inc {
-            assert!(
-                Include::parse(v).is_ok(),
-                "get_item.include enum {v:?} not a real Include"
-            );
+        for tool in ["haven_get_item", "haven_get_items"] {
+            let inc: Vec<String> = props(tool)["include"]["items"]["enum"]
+                .as_array()
+                .unwrap_or_else(|| panic!("{tool}.include.items should carry an enum"))
+                .iter()
+                .map(|v| v.as_str().unwrap().to_string())
+                .collect();
+            assert!(!inc.is_empty(), "{tool}.include item enum is empty");
+            for v in &inc {
+                assert!(
+                    Include::parse(v).is_ok(),
+                    "{tool}.include enum {v:?} not a real Include"
+                );
+            }
         }
     }
 

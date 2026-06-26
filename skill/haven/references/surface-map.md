@@ -128,7 +128,7 @@ haven mcp
 
 ## MCP tool catalogue
 
-33 tools, each taking an optional `project` and naming items by `ref` or
+34 tools, each taking an optional `project` and naming items by `ref` or
 `public_id`. Required args in **bold**.
 
 | Tool | Args |
@@ -137,6 +137,7 @@ haven mcp
 | `haven_inbox` | `owner?, limit?, offset?` — untriaged floaters (uncommitted, live, no `done_looks_like` yet); same compact paginated envelope as `haven_list_items` |
 | `haven_xref` | **`ref`** — cross-store links on the node's artifacts: a sorted `{node, outbound[], inbound[]}` report (outbound xrefs + inbound backlinks); read-only |
 | `haven_get_item` | **`ref`**, `include?: ["edges","artifacts","lineage"]` — the full item (prose + includes); the detail door. A superseded/archived ref still returns the item but rides a `stale_ref` `{ref, resolved_to:[…]}` hint (the work moved — follow `resolved_to`) |
+| `haven_get_items` | **`refs`** (array, max 20), `include?: ["edges","artifacts","lineage"]` — selected refs in full, preserving input order and duplicates; stale refs ride `stale_ref` per item |
 | `haven_next` | `owner?, limit?` — compact items; `owner` filters ASSIGNMENT (`owner_kind = owner`), unassigned (NULL) excluded |
 | `haven_dispatch` | `owner?, limit?, scope?, explain?` — lean "what should I work on?" briefing: bounded `next` plus targeted candidate detail (`done_looks_like`, parent/group context, blocked dependents, artifact pointers); `scope` restricts candidates to live descendants of a parent/release/phase ref |
 | `haven_next_explain` | `owner?` — diagnose an empty queue (counts by reason + hint) |
@@ -148,7 +149,7 @@ haven mcp
 | `haven_evolve` | **`op`** (`split`\|`merge`\|`supersede`), **`refs`**, `into?, with?, title?, rationale?, by?` |
 | `haven_lineage` | **`ref`**, `direction?, depth?` |
 | `haven_resolve_live` | **`ref`** — _deprecated (kept one release):_ follow a stale (superseded/archived) ref to its live descendant(s); compact items. The read path now runs this automatically — `haven_get_item`/`haven_update_item`/`haven_add_edge` ride a `stale_ref` hint — so you rarely call this directly |
-| `haven_search` | **`query`**, `limit?` |
+| `haven_search` | **`query`**, `limit?` — compact search hits; fetch detail with `haven_get_item` / `haven_get_items` |
 | `haven_graph` | `lineage?, all?, node_limit?, edge_limit?, lineage_limit?` — bounded MCP graph read (compact nodes + `{kind,from,to}` edges); live nodes only unless `all`; defaults/hard caps are 100 nodes, 250 edges, 250 lineage links, and the response carries `totals`, `omitted`, `limits`, and `truncated` |
 | `haven_docs` | `project?` — live project-doc anchors and their artifacts |
 | `haven_get_artifact` | **`ref`**, `role?, path?` |
@@ -174,14 +175,14 @@ To keep context lean, item reads come in two shapes, and internal sync fields
 
 - **Compact** — navigation only: `ref, title, type, status, committed, owner_kind?,
   priority?, wait_state?`. Used by `haven_list_items` (inside the `{total, count,
-  offset, items[]}` envelope), `haven_next`, `haven_resolve_live`, and the
+  offset, items[]}` envelope), `haven_next`, `haven_search`, `haven_resolve_live`, and the
   `unblocked[]` list of `haven_complete_item`.
 - **Full** — compact **+** prose (`body, done_looks_like, why`), `assignee?`,
   timestamps, non-empty `metadata`, and any requested `edges`/`artifacts`/`lineage`.
-  Returned by `haven_get_item` and `haven_update_item`.
+  Returned by `haven_get_item`, `haven_get_items`, and `haven_update_item`.
 
-So a list/next tells you *what* exists; reach for `haven_get_item` when you need the
-prose or relationships of a specific item. `haven_graph` nodes are compact too
+So a list/next/search tells you *what* exists; reach for `haven_get_item` or bounded
+`haven_get_items` when you need the prose or relationships of selected refs. `haven_graph` nodes are compact too
 (live-only unless `all`) and MCP responses are capped with explicit omission
 metadata; only `haven_docs` returns full anchor nodes (with artifacts).
 
@@ -191,7 +192,7 @@ The collapses that catch people out:
 
 | CLI | MCP |
 |---|---|
-| `item list` / `get` / `add` | `haven_list_items` / `haven_get_item` / `haven_add_item` |
+| `item list` / `get` / `add` | `haven_list_items` / `haven_get_item` or `haven_get_items` / `haven_add_item` |
 | `item add --if-absent` | `haven_add_item {if_absent: true}` — both surfaces return `existing`/`similar` on the add response |
 | `import <file.json>` | `haven_import {items: [...]}` — the file's JSON array passed inline; same atomic batch (temp-id/forward-ref resolution, `if_absent` dedupe, born-state guard) |
 | `item update` **+** `commit` / `uncommit` / `assign` | **all one tool:** `haven_update_item` (fields `commit: true/false`, `assign`, plus the update fields) |
