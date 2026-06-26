@@ -213,11 +213,20 @@ impl<'a> McpItem<'a> {
     /// Graph view: the compact axes plus a boolean `has_acceptance` flag (NOT the
     /// `done_looks_like` prose), so a single `haven_graph` read can triage (tell a
     /// sealed leaf from an unsealed one) without N per-node fetches or the prose
-    /// bulk. Pull the acceptance text per-node via `haven_get_item`. list/next lean.
-    fn graph_node(item: &'a Item) -> Self {
+    /// bulk. Pull the text per-node via `haven_get_item`, or pass `include_acceptance`
+    /// to ride the `done_looks_like` text on the nodes in one read (for consumers that
+    /// judge against it — verify, dispatch detail). list/next stay lean either way.
+    fn graph_node(item: &'a Item, include_acceptance: bool) -> Self {
+        // Default: the sealed/unsealed signal as a FLAG, not the prose (the bulk).
+        // `include_acceptance` swaps the flag for the actual done_looks_like text.
+        let (done_looks_like, has_acceptance) = if include_acceptance {
+            (item.done_looks_like.as_deref(), None)
+        } else {
+            (None, item.done_looks_like.as_ref().map(|_| true))
+        };
         McpItem {
-            // The sealed/unsealed signal as a flag, not the prose (HV: graph slim).
-            has_acceptance: item.done_looks_like.as_ref().map(|_| true),
+            done_looks_like,
+            has_acceptance,
             rollup_state: item.rollup_state,
             owner_rollup: item.owner_rollup,
             has_uncommitted_descendants: item.has_uncommitted_descendants,
@@ -958,6 +967,7 @@ fn dispatch_tool(store: &Store, name: &str, a: &Value) -> Result<Value> {
         "haven_graph" => {
             let lineage_requested = opt_bool(a, "lineage").unwrap_or(false);
             let all = opt_bool(a, "all").unwrap_or(false);
+            let include_acceptance = opt_bool(a, "include_acceptance").unwrap_or(false);
             let node_limit = opt_capped_usize(a, "node_limit", DEFAULT_GRAPH_NODE_LIMIT);
             let edge_limit = opt_capped_usize(a, "edge_limit", DEFAULT_GRAPH_EDGE_LIMIT);
             let lineage_limit = opt_capped_usize(a, "lineage_limit", DEFAULT_GRAPH_LINEAGE_LIMIT);
@@ -969,7 +979,11 @@ fn dispatch_tool(store: &Store, name: &str, a: &Value) -> Result<Value> {
                 edge_limit,
                 lineage_limit,
             )?;
-            let nodes: Vec<McpItem> = g.nodes.iter().map(McpItem::graph_node).collect();
+            let nodes: Vec<McpItem> = g
+                .nodes
+                .iter()
+                .map(|n| McpItem::graph_node(n, include_acceptance))
+                .collect();
             let node_count = nodes.len();
             let edge_count = g.edges.len();
             let lineage_count = g.lineage.len();
@@ -1324,8 +1338,8 @@ fn tools_list() -> Value {
           "inputSchema": obj(json!({"ref":{"type":"string"},"project":{"type":"string"}}), json!(["ref"])) },
         { "name": "haven_search", "description": "Full-text search over item title/body. Returns compact MCP items (identity + axes, no prose/machine fields); fetch detail with haven_get_item or haven_get_items for selected hits.",
           "inputSchema": obj(json!({"query":{"type":"string"},"project":{"type":"string"},"limit":{"type":"integer"}}), json!(["query"])) },
-        { "name": "haven_graph", "description": "The project work-graph in one bounded MCP read: compact nodes plus a flat edge list ({kind, from, to}, same shape as haven_add_edge), and optionally lineage links. The default/hard caps are 100 nodes, 250 edges, and 250 lineage links; responses include totals, omitted counts, limits, and truncated so large graphs degrade instead of failing whole. Use smaller node_limit/edge_limit/lineage_limit values for tighter slices. Nodes are compact (identity + axes + a boolean has_acceptance flag — fetch the done_looks_like prose and other detail per-node via haven_get_item) and live-only by default — pass all:true to include superseded/archived nodes.",
-          "inputSchema": obj(json!({"project":{"type":"string"},"lineage":{"type":"boolean"},"all":{"type":"boolean"},"node_limit":{"type":"integer","minimum":0,"maximum":100,"description":"Max nodes returned; defaults to and is clamped at 100."},"edge_limit":{"type":"integer","minimum":0,"maximum":250,"description":"Max structural edges returned; defaults to and is clamped at 250."},"lineage_limit":{"type":"integer","minimum":0,"maximum":250,"description":"Max lineage links returned when lineage:true; defaults to and is clamped at 250."}}), json!([])) },
+        { "name": "haven_graph", "description": "The project work-graph in one bounded MCP read: compact nodes plus a flat edge list ({kind, from, to}, same shape as haven_add_edge), and optionally lineage links. The default/hard caps are 100 nodes, 250 edges, and 250 lineage links; responses include totals, omitted counts, limits, and truncated so large graphs degrade instead of failing whole. Use smaller node_limit/edge_limit/lineage_limit values for tighter slices. Nodes are compact (identity + axes + a boolean has_acceptance flag — fetch the done_looks_like prose and other detail per-node via haven_get_item, OR pass include_acceptance:true to ride each node's done_looks_like text in one read, e.g. to judge acceptance across a subtree) and live-only by default — pass all:true to include superseded/archived nodes.",
+          "inputSchema": obj(json!({"project":{"type":"string"},"lineage":{"type":"boolean"},"all":{"type":"boolean"},"include_acceptance":{"type":"boolean","description":"Ride each node's done_looks_like text on the graph (instead of the lean has_acceptance flag) — for judging acceptance across the graph in one read."},"node_limit":{"type":"integer","minimum":0,"maximum":100,"description":"Max nodes returned; defaults to and is clamped at 100."},"edge_limit":{"type":"integer","minimum":0,"maximum":250,"description":"Max structural edges returned; defaults to and is clamped at 250."},"lineage_limit":{"type":"integer","minimum":0,"maximum":250,"description":"Max lineage links returned when lineage:true; defaults to and is clamped at 250."}}), json!([])) },
         { "name": "haven_docs", "description": "List live project living-doc anchors and their artifacts. Use this instead of hard-coding a docs ref.",
           "inputSchema": obj(json!({"project":{"type":"string"}}), json!([])) },
         { "name": "haven_get_artifact", "description": "Read an artifact's content (local or lazy-pulled).",
@@ -2980,6 +2994,35 @@ mod tests {
             sealed["committed"], true,
             "committed row keeps committed:true"
         );
+    }
+
+    /// `haven_graph` defaults to the lean `has_acceptance` flag; `include_acceptance`
+    /// swaps it for the `done_looks_like` text in one read (for verify/dispatch).
+    #[test]
+    fn graph_include_acceptance_rides_done_looks_like() {
+        let s = store();
+        let out = session(
+            &s,
+            &[
+                json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{
+                    "name":"haven_add_item","arguments":{"title":"Sealed","status":"ready","commit":true,"assign":"ai","done_looks_like":"ships"}
+                }}),
+                json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{
+                    "name":"haven_graph","arguments":{}
+                }}),
+                json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{
+                    "name":"haven_graph","arguments":{"include_acceptance":true}
+                }}),
+            ],
+        );
+        // Default: the flag, not the prose.
+        let lean = tool_payload(&out[1]);
+        assert_eq!(lean["nodes"][0]["has_acceptance"], true);
+        assert!(lean["nodes"][0].get("done_looks_like").is_none());
+        // Opt-in: the prose, and the now-redundant flag is dropped.
+        let full = tool_payload(&out[2]);
+        assert_eq!(full["nodes"][0]["done_looks_like"], "ships");
+        assert!(full["nodes"][0].get("has_acceptance").is_none());
     }
 
     /// HV-95: the new rm/mv tools over MCP — add an artifact, rename it, remove it.

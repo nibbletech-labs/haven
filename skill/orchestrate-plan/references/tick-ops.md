@@ -16,7 +16,7 @@ to be reused verbatim by the v2 executor. `<P>` = the project key.
 - MCP: `haven_graph {"project":"<P>"}`
 
 Returns live nodes (compact: ref, title, type, status, committed, owner, priority,
-wait — **and `done_looks_like`**, which the graph view includes so you can run the
+wait — **and `done_looks_like`**, which the graph view includes when you pass `include_acceptance:true`, so you can run the
 sealed-leaf test from this one read) plus a flat edge list `{kind, from, to}`. Pass
 `all:true` only if you need superseded/archived nodes.
 

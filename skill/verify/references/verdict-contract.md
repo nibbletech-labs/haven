@@ -1,7 +1,7 @@
 # Verdict contract — three verdicts, deterministic-only counting
 
 `verify` returns exactly **one of three** verdicts, each with **evidence**. The yardstick
-is **always the target's LIVE `done_looks_like`** (read per invocation via the graph,
+is **always the target's LIVE `done_looks_like`** (read per invocation via `haven_graph {include_acceptance:true}` or `haven_get_item`,
 never a frozen pack copy) plus any inherited **shared-requirements** from the container
 context-pack. Three verdicts only — keep the gate crisp.
 
@@ -50,7 +50,7 @@ Mode-2 concern, deferred.)
 
 ## The yardstick — live, not frozen
 
-Re-read `done_looks_like` from the graph on **every** invocation, so re-grooming the node
+Re-read `done_looks_like` on **every** invocation (via `haven_graph {include_acceptance:true}` or `haven_get_item`), so re-grooming the node
 can never make a stale verdict drift. **Brownfield:** reality-check each `[VERIFY]` claim
 against the live code before judging. **Greenfield:** there is little code to check against
 — treat `[VERIFY]` items as **human-locked design decisions**; an unlocked one is a

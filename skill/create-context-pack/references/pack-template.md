@@ -45,7 +45,7 @@ This pack describes work that does **not exist yet**. Treat every statement belo
    lineage), then regenerate this pack.
 4. This same pack is your **doneness yardstick**: a leaf is done when its `done_looks_like`
    — plus any shared requirement it inherits from section 2 — is demonstrably met. The
-   canonical acceptance is the node's live `done_looks_like` (read it from `haven graph` or
+   canonical acceptance is the node's live `done_looks_like` (read it from `haven graph` / `haven_graph {include_acceptance:true}`, or
    the member's `spec`), which section 4 points at rather than copies.
 
 ## 1. Foundation — why this group exists

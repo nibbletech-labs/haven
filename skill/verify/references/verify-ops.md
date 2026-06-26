@@ -13,7 +13,7 @@ The canonical argument reference is the `haven` skill's `references/surface-map.
 - CLI: `haven graph -p <P>`
 - MCP: `haven_graph {"project":"<P>"}`
 
-Returns live nodes (compact: ref, title, type, status, **`done_looks_like`**) + edges +
+Returns live nodes (compact: ref, title, type, status, a **`has_acceptance`** flag — add **`include_acceptance:true`** to ride each node's **`done_looks_like`** text) + edges +
 per-leaf `context_pack {container, artifact}`. Resolve the project first if unknown: CLI
 `haven project list`; MCP `haven_list_projects`.
 
