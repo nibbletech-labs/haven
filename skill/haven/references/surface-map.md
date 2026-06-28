@@ -82,7 +82,7 @@ haven item rank <ref> [--before <ref>] [--after <ref>] [--rationale "…"]
 haven item archive <ref>… [--rationale "…"]  # one or more refs (grooming)
 haven item reopen  <ref> [--rationale "…"]
 # Item-level external references (handoff locator for Jira/Linear/GitHub work — HV-226)
-haven item extref add  <ref> --store <s> --target <t> [--url] [--status] [--canonical] [--note "…"] [--no-in-progress]
+haven item extref add  <ref> --store <s> --target <t> [--url] [--status] [--canonical] [--receipt "…"] [--no-in-progress]
                                             # upsert by (store,target); flips item in_progress unless --no-in-progress;
                                             # leaves owner/wait untouched (NOT the ai↔human handoff)
 haven item extref list <ref>
@@ -176,7 +176,7 @@ haven mcp
 | `haven_claim` | **`ref`**, `owner?` (`human`\|`ai`, default `ai`), `actor?` — atomically set owner + `in_progress` (compare-and-set); errors with a conflict if already claimed/in_progress. Frames `in_progress` as a soft claim |
 | `haven_handoff` | **`ref`**, **`to`** (`human`\|`ai`), `from?, note?, status?, wait?, actor?` — atomic baton-pass |
 | `haven_complete_item` | **`ref`**, `evidence?, artifact_role?, by?` — mark done, record evidence, report what it unblocked (as compact items) |
-| `haven_set_extref` | **`ref`**, **`store`**, **`target`**, `url?, status?, execution_canonical?, note?, in_progress?` — record (upsert by `(store,target)`) an item-level external reference at `items.metadata.external_refs[]`: the handoff LOCATOR for work executing in an external PM/dev system (Jira/Linear/GitHub), distinct from artifact `xref`. Flips the item to `in_progress` by default (`in_progress:false` to skip); leaves owner + wait_state untouched (NOT the ai↔human handoff). Returns the updated item |
+| `haven_set_extref` | **`ref`**, **`store`**, **`target`**, `url?, status?, execution_canonical?, receipt?, in_progress?` — record (upsert by `(store,target)`) an item-level external reference at `items.metadata.external_refs[]`: the handoff LOCATOR for work executing in an external PM/dev system (Jira/Linear/GitHub), distinct from artifact `xref`. Flips the item to `in_progress` by default (`in_progress:false` to skip); leaves owner + wait_state untouched (NOT the ai↔human handoff). Returns the updated item |
 | `haven_rm_extref` | **`ref`**, **`target`**, `store?` — remove external reference(s) matching `target` (and optionally `store`) from the item |
 | `haven_find_extref` | **`target`**, `store?` — reverse lookup: items carrying an external ref with this `target` (reconcile an external id back to its Haven item); read-only, compact items |
 

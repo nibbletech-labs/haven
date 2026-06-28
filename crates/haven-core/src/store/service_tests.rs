@@ -3402,7 +3402,7 @@ fn eref(store: &str, target: &str) -> ExternalRef {
         url: None,
         status: None,
         execution_canonical: false,
-        note: None,
+        receipt: None,
     }
 }
 
@@ -3420,7 +3420,7 @@ fn external_ref_add_round_trip_and_flips_in_progress() {
                 url: Some("https://x/PROJ-9".into()),
                 status: Some("In Progress".into()),
                 execution_canonical: true,
-                note: Some("handed to platform team".into()),
+                receipt: Some("handed to platform team".into()),
             },
             true,
         )
@@ -3437,7 +3437,7 @@ fn external_ref_add_round_trip_and_flips_in_progress() {
     assert_eq!(refs[0].target, "PROJ-9");
     assert!(refs[0].execution_canonical);
     assert_eq!(refs[0].url.as_deref(), Some("https://x/PROJ-9"));
-    assert_eq!(refs[0].note.as_deref(), Some("handed to platform team"));
+    assert_eq!(refs[0].receipt.as_deref(), Some("handed to platform team"));
 }
 
 #[test]

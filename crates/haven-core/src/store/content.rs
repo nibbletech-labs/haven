@@ -93,7 +93,7 @@ pub(crate) fn validate_xref_metadata(meta: &serde_json::Value) -> Result<()> {
 
 /// Validate the `metadata.external_refs` payload on the **item** write path
 /// (HV-226). The item-level sibling of [`validate_xref_metadata`]: rejects an entry
-/// missing a non-empty `store` or `target`. `url`/`status`/`note` are optional
+/// missing a non-empty `store` or `target`. `url`/`status`/`receipt` are optional
 /// strings and `execution_canonical` an optional bool; `store` is a free value (an
 /// unrecognized store is only ever a doctor lint, mirroring [`RECOGNIZED_STORES`]
 /// for xref — never a write-time rejection). A metadata object with no
@@ -134,8 +134,8 @@ pub(crate) fn validate_external_refs(meta: &serde_json::Value) -> Result<()> {
                 )))
             }
         }
-        // `url` / `status` / `note` — when present, must be strings.
-        for key in ["url", "status", "note"] {
+        // `url` / `status` / `receipt` — when present, must be strings.
+        for key in ["url", "status", "receipt"] {
             if let Some(v) = e.get(key) {
                 if !v.is_string() {
                     return Err(HavenError::Invalid(format!(

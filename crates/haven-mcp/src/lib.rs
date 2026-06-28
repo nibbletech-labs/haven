@@ -720,7 +720,7 @@ fn dispatch_tool(store: &Store, name: &str, a: &Value) -> Result<Value> {
                 url: opt_str(a, "url").map(String::from),
                 status: opt_str(a, "status").map(String::from),
                 execution_canonical: opt_bool(a, "execution_canonical").unwrap_or(false),
-                note: opt_str(a, "note").map(String::from),
+                receipt: opt_str(a, "receipt").map(String::from),
             };
             let in_progress = opt_bool(a, "in_progress").unwrap_or(true);
             let item = store.add_external_ref(project, req_str(a, "ref")?, eref, in_progress)?;
@@ -1424,8 +1424,8 @@ fn tools_list() -> Value {
           "inputSchema": obj(json!({"ref":{"type":"string"},"to":{"type":"string","enum":["human","ai"]},"from":{"type":"string","enum":["human","ai"]},"note":{"type":"string"},"status":{"type":"string"},"wait":{"type":"string","enum":["on_human","on_dependency","on_external"]},"actor":{"type":"string"},"project":{"type":"string"}}), json!(["ref","to"])) },
         { "name": "haven_complete_item", "description": "Mark an item done: record `evidence` as an artifact (default role delivery), set status=done, and return the items/gates this unblocked (newly dispatchable, as compact items). Warns if no acceptance (done_looks_like) was set. The reliable 'I finished this' path — prefer over a bare status update.",
           "inputSchema": obj(json!({"ref":{"type":"string"},"evidence":{"type":"string"},"artifact_role":{"type":"string"},"by":{"type":"string"},"project":{"type":"string"}}), json!(["ref"])) },
-        { "name": "haven_set_extref", "description": "Record (upsert) an item-level external reference — the handoff LOCATOR for work executing in an external PM/dev system (Jira/Linear/GitHub) — at items.metadata.external_refs[]. Distinct from artifact xref (haven_xref, content provenance). Upserts by (store,target). Flips the item to status=in_progress by default (active external execution); pass `in_progress:false` to record the locator without changing status. Leaves owner + wait_state UNTOUCHED — this is NOT the ai↔human handoff. `store`+`target` required; `url`/`status`/`execution_canonical`/`note` optional. Returns the updated item. Per-call `project`.",
-          "inputSchema": obj(json!({"ref":{"type":"string"},"store":{"type":"string"},"target":{"type":"string"},"url":{"type":"string"},"status":{"type":"string"},"execution_canonical":{"type":"boolean"},"note":{"type":"string"},"in_progress":{"type":"boolean"},"project":{"type":"string"}}), json!(["ref","store","target"])) },
+        { "name": "haven_set_extref", "description": "Record (upsert) an item-level external reference — the handoff LOCATOR for work executing in an external PM/dev system (Jira/Linear/GitHub) — at items.metadata.external_refs[]. Distinct from artifact xref (haven_xref, content provenance). Upserts by (store,target). Flips the item to status=in_progress by default (active external execution); pass `in_progress:false` to record the locator without changing status. Leaves owner + wait_state UNTOUCHED — this is NOT the ai↔human handoff. `store`+`target` required; `url`/`status`/`execution_canonical`/`receipt` (a free-text handoff record) optional. Returns the updated item. Per-call `project`.",
+          "inputSchema": obj(json!({"ref":{"type":"string"},"store":{"type":"string"},"target":{"type":"string"},"url":{"type":"string"},"status":{"type":"string"},"execution_canonical":{"type":"boolean"},"receipt":{"type":"string"},"in_progress":{"type":"boolean"},"project":{"type":"string"}}), json!(["ref","store","target"])) },
         { "name": "haven_rm_extref", "description": "Remove item-level external reference(s) on an item matching `target` (and optionally `store`) from items.metadata.external_refs[]. Returns the updated item. Per-call `project`.",
           "inputSchema": obj(json!({"ref":{"type":"string"},"target":{"type":"string"},"store":{"type":"string"},"project":{"type":"string"}}), json!(["ref","target"])) },
         { "name": "haven_find_extref", "description": "Reverse lookup for reconciliation: every item in the project carrying an external reference whose `target` matches (and optionally `store`) — find the Haven item from an external id (e.g. saw PROJ-123 Done externally). Read-only, compact items. Per-call `project`.",
@@ -3644,7 +3644,7 @@ mod tests {
             url: None,
             status: None,
             execution_canonical: false,
-            note: None,
+            receipt: None,
         }
     }
 

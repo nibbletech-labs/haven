@@ -652,9 +652,9 @@ struct ExtrefAddArgs {
     /// Mark the external system as canonical for execution (vs a mirror).
     #[arg(long)]
     canonical: bool,
-    /// Optional human-readable receipt note kept on the external reference.
+    /// Optional human-readable receipt for this handoff, kept on the external reference.
     #[arg(long)]
-    note: Option<String>,
+    receipt: Option<String>,
     /// Record the reference WITHOUT flipping the item to in_progress (by default,
     /// `extref add` marks the item in_progress for active external execution).
     #[arg(long = "no-in-progress")]
@@ -3045,7 +3045,7 @@ fn cmd_extref(project: Option<&str>, s: &Store, cmd: &ExtrefCmd) -> Result<Outpu
                 url: a.url.clone(),
                 status: a.status.clone(),
                 execution_canonical: a.canonical,
-                note: a.note.clone(),
+                receipt: a.receipt.clone(),
             };
             Ok(Output::Item(s.add_external_ref(
                 project,

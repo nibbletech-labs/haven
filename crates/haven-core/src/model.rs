@@ -369,9 +369,11 @@ pub struct ExternalRef {
     /// mirror). Defaults `false`.
     #[serde(default, skip_serializing_if = "is_false")]
     pub execution_canonical: bool,
-    /// Optional human-readable receipt note kept alongside the structured locator.
+    /// Optional human-readable receipt for this handoff — a free-text record kept
+    /// alongside the structured locator (named `receipt`, not `note`, to avoid the
+    /// item-level `haven note` / handoff-note concepts).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub note: Option<String>,
+    pub receipt: Option<String>,
 }
 
 /// One outbound xref in a [`XrefReport`], carrying the owning artifact's identity
