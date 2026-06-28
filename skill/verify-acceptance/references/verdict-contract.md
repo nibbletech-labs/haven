@@ -1,6 +1,6 @@
 # Verdict contract — three verdicts, deterministic-only counting
 
-`verify` returns exactly **one of three** verdicts, each with **evidence**. The yardstick
+`verify-acceptance` returns exactly **one of three** verdicts, each with **evidence**. The yardstick
 is **always the target's LIVE `done_looks_like`** (read per invocation via `haven_graph {include_acceptance:true}` or `haven_get_item`,
 never a frozen pack copy) plus any inherited **shared-requirements** from the container
 context-pack. Three verdicts only — keep the gate crisp.

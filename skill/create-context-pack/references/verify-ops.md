@@ -160,7 +160,7 @@ full rationale live in `references/pack-template.md` under *Per-item verificatio
 approach*). The tag is **operational**: it tells the downstream verify step which path the
 member falls into, so write it into the member's section-4 reference, not just in passing.
 
-| Tag | How the verify step (the `verify` skill / `orchestrate-run`'s gate) checks it |
+| Tag | How the verify step (the `verify-acceptance` skill / `orchestrate-run`'s gate) checks it |
 |-----|------------------------------------------------------------------------------|
 | **unit** | Deterministic — **run directly** as part of the build+lint+test suite. |
 | **integration** | Deterministic — **run directly** (suite / harness). |
@@ -169,7 +169,7 @@ member falls into, so write it into the member's section-4 reference, not just i
 | **manual** | **Human** — surface as NEEDS-HUMAN; the deterministic gate cannot self-clear it. |
 
 The three execution paths are **direct-run** (unit / integration / automated e2e — the
-`verify` skill's deterministic suite), **spawn-tester** (visual / non-automatable e2e),
+`verify-acceptance` skill's deterministic suite), **spawn-tester** (visual / non-automatable e2e),
 and **human** (manual → NEEDS-HUMAN). Tagging at spec time is what lets the verifier route
 each member without re-deriving how to check it. The canonical acceptance the verify step
 judges against is still the member's live `done_looks_like` — the tag governs the *method*,

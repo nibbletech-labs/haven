@@ -1,0 +1,14 @@
+name: verify-acceptance
+agent: codex
+skill: verify-acceptance
+mcp:
+  server: haven
+  command: haven
+  args:
+    - mcp
+discovery:
+  agents_md: AGENTS.md
+  skill_paths:
+    - .agents/skills/verify-acceptance
+    - ~/.agents/skills/verify-acceptance
+    - /etc/codex/skills/verify-acceptance

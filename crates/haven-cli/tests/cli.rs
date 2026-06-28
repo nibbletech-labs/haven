@@ -297,19 +297,19 @@ fn skill_install_and_setup_write_the_snapshot() {
         .unwrap()
         .contains("name: orchestrate-run"));
 
-    // …and the fifth skill, verify.
-    assert!(out["installed"]["claude_verify"]
+    // …and the fifth skill, verify-acceptance.
+    assert!(out["installed"]["claude_verify-acceptance"]
         .as_str()
         .unwrap()
-        .ends_with("skills/verify"));
-    let verify_dir = h.home.join(".claude/skills/verify");
+        .ends_with("skills/verify-acceptance"));
+    let verify_dir = h.home.join(".claude/skills/verify-acceptance");
     assert!(verify_dir.join("SKILL.md").exists());
     assert!(verify_dir.join("references/verdict-contract.md").exists());
     assert!(verify_dir.join("references/verify-ops.md").exists());
     assert!(verify_dir.join("agents/openai.yaml").exists());
     assert!(std::fs::read_to_string(verify_dir.join("SKILL.md"))
         .unwrap()
-        .contains("name: verify"));
+        .contains("name: verify-acceptance"));
 
     let codex = h.json(&["skill", "install", "--agent", "codex"]);
     assert!(codex["installed"]["codex_haven"]
@@ -328,10 +328,10 @@ fn skill_install_and_setup_write_the_snapshot() {
         .as_str()
         .unwrap()
         .ends_with("skills/orchestrate-run"));
-    assert!(codex["installed"]["codex_verify"]
+    assert!(codex["installed"]["codex_verify-acceptance"]
         .as_str()
         .unwrap()
-        .ends_with("skills/verify"));
+        .ends_with("skills/verify-acceptance"));
     assert!(h.home.join(".agents/skills/haven/SKILL.md").exists());
     assert!(h
         .home
@@ -345,7 +345,10 @@ fn skill_install_and_setup_write_the_snapshot() {
         .home
         .join(".agents/skills/orchestrate-run/SKILL.md")
         .exists());
-    assert!(h.home.join(".agents/skills/verify/SKILL.md").exists());
+    assert!(h
+        .home
+        .join(".agents/skills/verify-acceptance/SKILL.md")
+        .exists());
     // Skill *content* validity (description cap, frontmatter, name/composition)
     // and exhaustive coverage are checked by `every_shipped_skill_is_valid_and_covered`
     // (HV-204); this test only asserts the install mechanics land files correctly.
@@ -835,7 +838,7 @@ fn doctor_reports_install_health() {
         "warn"
     );
     assert_eq!(status_of(&before, "claude_skill_orchestrate-run"), "warn");
-    assert_eq!(status_of(&before, "claude_skill_verify"), "warn");
+    assert_eq!(status_of(&before, "claude_skill_verify-acceptance"), "warn");
     assert_eq!(status_of(&before, "codex_mcp"), "warn");
     assert_eq!(status_of(&before, "codex_skill_haven"), "warn");
     assert_eq!(status_of(&before, "codex_skill_orchestrate-plan"), "warn");
@@ -844,7 +847,7 @@ fn doctor_reports_install_health() {
         "warn"
     );
     assert_eq!(status_of(&before, "codex_skill_orchestrate-run"), "warn");
-    assert_eq!(status_of(&before, "codex_skill_verify"), "warn");
+    assert_eq!(status_of(&before, "codex_skill_verify-acceptance"), "warn");
     assert_eq!(status_of(&before, "agents_md"), "skip");
 
     // After setup, MCP + skill are green. Put the built binary on $PATH so the
@@ -869,13 +872,13 @@ fn doctor_reports_install_health() {
     assert_eq!(status_of(&after, "claude_skill_orchestrate-plan"), "ok");
     assert_eq!(status_of(&after, "claude_skill_create-context-pack"), "ok");
     assert_eq!(status_of(&after, "claude_skill_orchestrate-run"), "ok");
-    assert_eq!(status_of(&after, "claude_skill_verify"), "ok");
+    assert_eq!(status_of(&after, "claude_skill_verify-acceptance"), "ok");
     assert_eq!(status_of(&after, "codex_mcp"), "ok");
     assert_eq!(status_of(&after, "codex_skill_haven"), "ok");
     assert_eq!(status_of(&after, "codex_skill_orchestrate-plan"), "ok");
     assert_eq!(status_of(&after, "codex_skill_create-context-pack"), "ok");
     assert_eq!(status_of(&after, "codex_skill_orchestrate-run"), "ok");
-    assert_eq!(status_of(&after, "codex_skill_verify"), "ok");
+    assert_eq!(status_of(&after, "codex_skill_verify-acceptance"), "ok");
     assert_eq!(status_of(&after, "agents_md"), "skip");
     assert_eq!(status_of(&after, "path"), "ok");
     assert_eq!(

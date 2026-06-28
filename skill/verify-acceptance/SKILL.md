@@ -1,5 +1,5 @@
 ---
-name: verify
+name: verify-acceptance
 description: >-
   Verify that a Haven item actually meets its acceptance — give it a target
   ref (a leaf, or a container as a rollup) and it returns a PASS / NEEDS-HUMAN
@@ -17,18 +17,18 @@ description: >-
   graph (`orchestrate-run`).
 ---
 
-# verify — the standalone acceptance-verifier (the executor's step-7 gate, lifted out)
+# verify-acceptance — the standalone acceptance-verifier (the executor's step-7 gate, lifted out)
 
 Give it a **target ref**; it returns **PASS / NEEDS-HUMAN / FAIL + evidence**, judged
 against the item's **live `done_looks_like`**. It clears the **human-as-verifier
 bottleneck**: today items pile up on `wait_state on_human` because nothing but a person
-can confirm acceptance is met. `verify` is that confirmation, made invokable — and
+can confirm acceptance is met. `verify-acceptance` is that confirmation, made invokable — and
 (dialed on, for a leaf) it can complete the leaf itself so verification stops gating on
 your attention.
 
 ## Compose, don't duplicate — one verifier, two callers
 
-`verify` **is** the fresh-agent verifier `orchestrate-run` spawns at step 7 — *not a
+`verify-acceptance` **is** the fresh-agent verifier `orchestrate-run` spawns at step 7 — *not a
 second judge*. The contract used to live inline in
 `orchestrate-run/references/dispatch-policy.md` + `tick-ops.md`; it now lives **here**,
 with exactly two callers:
@@ -40,13 +40,13 @@ One verifier, one judgment, one independence guarantee. The skill is **the singl
 judgment only** — it does **not** own re-invocation, the merge, or strike-counting.
 Inside the executor those stay where they belong: `orchestrate-run` owns *when*, *which
 worktree*, and *how many times* (the mandatory twice-run post-rebase re-gate, the
-serialized merge lock, the N-strike circuit breaker). `verify` just returns a verdict.
+serialized merge lock, the N-strike circuit breaker). `verify-acceptance` just returns a verdict.
 
 ## Where it sits (the executor family — meet only at the graph)
 
 `orchestrate-plan` (decompose a goal) → `create-context-pack` (spec a group) → native
 **plan mode** (build + the human go) → `orchestrate-run` (dispatch/gate/merge/loop). The
-**gate** in that pipeline is this skill; `verify` lifts it out so the same judgment is
+**gate** in that pipeline is this skill; `verify-acceptance` lifts it out so the same judgment is
 callable against any item, any time, by anyone.
 
 ## Operating rules (inherit from the `haven` skill)
@@ -154,9 +154,9 @@ the verdict). But it trades the human gate, so it is **earned, not assumed**:
 
 ## Convergence / fresh-session handoff
 
-`verify` is **stateless** — its inputs are the live graph and the diff, so a cold session
+`verify-acceptance` is **stateless** — its inputs are the live graph and the diff, so a cold session
 just re-runs the flow; re-running is idempotent (Posture A overwrites its own `verdict.md`
-with `--replace`). v1 ships a manual resume: `/verify <ref>`.
+with `--replace`). v1 ships a manual resume: `/verify-acceptance <ref>`.
 
 ## Deferred / not in this skill
 

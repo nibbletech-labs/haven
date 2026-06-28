@@ -4,7 +4,7 @@ Read this when you're about to start a substantive build, review a diff in a wor
 merge one back — the **manual, human-driven** counterpart of the autonomous git runbook. The
 autonomous executor's run-directory, lock, and RECOVER mechanics live in
 `skill/orchestrate-run/references/worktree-merge.md`; this file is the **manual practice**, and
-the two share one verify gate (`skill/verify`) — neither restates the other. It ships with the
+the two share one verify gate (`skill/verify-acceptance`) — neither restates the other. It ships with the
 `haven` skill because it's the by-hand discipline for building a batch the `orchestrate-run`
 executor would otherwise run on its own.
 
@@ -53,7 +53,7 @@ The default is **AI-verify-then-merge, proactively.** If the check is reasonable
 — build / lint / test / typecheck, a merge-base diff-review against the contract (above), a
 dogfood the AI can actually run — do it and merge; don't leave finished work stranded on a branch.
 
-The gate **is** the `verify` skill's **PASS / NEEDS-HUMAN / FAIL** verdict. See `skill/verify`
+The gate **is** the `verify-acceptance` skill's **PASS / NEEDS-HUMAN / FAIL** verdict. See `skill/verify-acceptance`
 (`SKILL.md` + `references/verdict-contract.md`) for the contract — **do not restate it here.** Map
 the verdict to a manual action:
 
@@ -75,7 +75,7 @@ The last two both pause, but for different reasons by different routes — verif
 your-own-judgment — so keep them distinct; don't collapse them onto one verdict.
 
 **The gate is independent of the builder.** The verifier is never the build agent reviewing its
-own work — that holds even when a human is the verifier (see `skill/verify` `SKILL.md`). The
+own work — that holds even when a human is the verifier (see `skill/verify-acceptance` `SKILL.md`). The
 **autonomous** version of this same gate is `skill/orchestrate-run/references/dispatch-policy.md`
 (§GATE) — it reaches for the deterministic verifier precisely *because no human is in the loop*;
 this file is the human-in-the-loop counterpart of the same gate, not a subordinate of it.
@@ -93,5 +93,5 @@ this file is the human-in-the-loop counterpart of the same gate, not a subordina
   won't clear on its own.
 - **Removing the worktree before a paused human check has happened.** The work has to stay put for
   them to verify it.
-- **Restating the `verify` verdict definitions, or the autonomous lock→rebase→re-gate→ff sequence,
+- **Restating the `verify-acceptance` verdict definitions, or the autonomous lock→rebase→re-gate→ff sequence,
   here.** Point at the contract and the runbook; don't copy them.

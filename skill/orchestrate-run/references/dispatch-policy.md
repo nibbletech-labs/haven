@@ -31,16 +31,16 @@ effort on the first retry and bump on the second.
 
 ## GATE — how a batch is judged before merge
 
-- **Unattended (default for autonomous runs): compose the `verify` skill.** The gate **is** the
-  standalone `verify` skill (Mode 1) — a fresh verifier agent given **only** the leaf's
+- **Unattended (default for autonomous runs): compose the `verify-acceptance` skill.** The gate **is** the
+  standalone `verify-acceptance` skill (Mode 1) — a fresh verifier agent given **only** the leaf's
   `done_looks_like` + the pack's shared-requirements + the diff (never the build agent's reasoning
   or worktree narrative), running `build + lint + test` (exit-0) + an independent acceptance
-  judgment, and returning a **PASS / NEEDS-HUMAN / FAIL** verdict + evidence. **Read `skill/verify`
+  judgment, and returning a **PASS / NEEDS-HUMAN / FAIL** verdict + evidence. **Read `skill/verify-acceptance`
   (`SKILL.md` + `references/verdict-contract.md` + `references/evaluation-lens.md`) for the contract
   and FORWARD it into the verifier's prompt** — the verifier is a spawned subagent that inherits no
   skill (§ Dispatch-prompt quality below), so naming the skill reaches nothing; *"do not restate it
   here"* means don't duplicate the contract in **this** doc, **not** withhold it from the verifier.
-  The executor **consumes** the verdict — it forwards `verify`'s contract verbatim and never
+  The executor **consumes** the verdict — it forwards `verify-acceptance`'s contract verbatim and never
   re-implements the judgment. Only **PASS** merges; a
   **FAIL** keeps the batch in the worktree → failure path (STRIKES below); a **NEEDS-HUMAN**
   escalates straight to `handoff` (ambiguity won't clear on a blind retry). The verifier's

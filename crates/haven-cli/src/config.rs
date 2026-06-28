@@ -232,23 +232,26 @@ const ORCHESTRATE_RUN_SKILL_FILES: &[(&str, &str)] = &[
     ),
 ];
 
-const VERIFY_SKILL_FILES: &[(&str, &str)] = &[
-    ("SKILL.md", include_str!("../../../skill/verify/SKILL.md")),
+const VERIFY_ACCEPTANCE_SKILL_FILES: &[(&str, &str)] = &[
+    (
+        "SKILL.md",
+        include_str!("../../../skill/verify-acceptance/SKILL.md"),
+    ),
     (
         "references/verdict-contract.md",
-        include_str!("../../../skill/verify/references/verdict-contract.md"),
+        include_str!("../../../skill/verify-acceptance/references/verdict-contract.md"),
     ),
     (
         "references/verify-ops.md",
-        include_str!("../../../skill/verify/references/verify-ops.md"),
+        include_str!("../../../skill/verify-acceptance/references/verify-ops.md"),
     ),
     (
         "references/evaluation-lens.md",
-        include_str!("../../../skill/verify/references/evaluation-lens.md"),
+        include_str!("../../../skill/verify-acceptance/references/evaluation-lens.md"),
     ),
     (
         "agents/openai.yaml",
-        include_str!("../../../skill/verify/agents/openai.yaml"),
+        include_str!("../../../skill/verify-acceptance/agents/openai.yaml"),
     ),
 ];
 
@@ -273,8 +276,8 @@ const SKILL_REGISTRY: &[Skill] = &[
         files: ORCHESTRATE_RUN_SKILL_FILES,
     },
     Skill {
-        name: "verify",
-        files: VERIFY_SKILL_FILES,
+        name: "verify-acceptance",
+        files: VERIFY_ACCEPTANCE_SKILL_FILES,
     },
 ];
 

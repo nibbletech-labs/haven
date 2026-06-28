@@ -154,11 +154,11 @@ human-gated knowledge promotion — is in `references/executor-discipline.md`.
    + the pack's shared requirements + the diff — **not** the build agent's reasoning — which
    runs `build + lint + test` (exit-0) and judges acceptance, returning pass/fail + evidence.
    A same-context reviewer is structurally blind; the verifier's independence is the point.
-   **The verifier is a spawned subagent and does NOT inherit the `verify` skill** — so
-   "compose `verify`" means the executor **reads `skill/verify` and FORWARDS its contract into
+   **The verifier is a spawned subagent and does NOT inherit the `verify-acceptance` skill** — so
+   "compose `verify-acceptance`" means the executor **reads `skill/verify-acceptance` and FORWARDS its contract into
    the verifier's prompt**: the PASS / NEEDS-HUMAN / FAIL definitions
-   (`verify/references/verdict-contract.md`), the independence rule, and the **exhaustive
-   every-acceptance-clause walk** + lens (`verify/references/evaluation-lens.md`). Naming the
+   (`verify-acceptance/references/verdict-contract.md`), the independence rule, and the **exhaustive
+   every-acceptance-clause walk** + lens (`verify-acceptance/references/evaluation-lens.md`). Naming the
    skill reaches nothing — the spawned agent only knows what its prompt carries; you forward the
    contract, you don't re-implement the judgment. *Attended:* native plan-mode human approval. A
    fail stays in the worktree — nothing merged, siblings untouched → failure path (§ below).

@@ -1,7 +1,7 @@
 # Verify-ops — the exact CLI and MCP call for each flow step
 
 The canonical argument reference is the `haven` skill's `references/surface-map.md`
-(CLI⇄MCP differences). This file is `verify`'s per-step cheat-sheet. `<P>` = the project key.
+(CLI⇄MCP differences). This file is `verify-acceptance`'s per-step cheat-sheet. `<P>` = the project key.
 
 > **Two surfaces, one contract.** Locally use the `haven` CLI; remotely use the `haven_*`
 > MCP tools. **Over MCP there is no sticky session — pass `project` on every call.**
@@ -72,4 +72,4 @@ Returns `unblocked[]` (the items this completion freed):
 
 > Inside `orchestrate-run`, the executor owns completion (step 9) and the N-strike ceiling;
 > this skill returns the verdict and the executor consumes it. Ad hoc, the dial above
-> decides whether `verify` itself completes or simply records the verdict.
+> decides whether `verify-acceptance` itself completes or simply records the verdict.

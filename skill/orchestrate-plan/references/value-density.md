@@ -82,7 +82,7 @@ fires sends the node back to split, defer, or re-scope rather than seal:
 
 ## The Gherkin-readiness bar — is `done_looks_like` specific enough?
 
-A leaf's `done_looks_like` must be specific enough that a QA agent (or the `verify`
+A leaf's `done_looks_like` must be specific enough that a QA agent (or the `verify-acceptance`
 skill) could write Given/When/Then scenarios from it **alone**, without asking what
 "done" means.
 

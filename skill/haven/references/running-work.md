@@ -4,12 +4,12 @@ There is **one real fork**: hand an already-planned graph to **`orchestrate-run`
 autonomous executor), or **build it yourself** directly. Everything else — plan first or not,
 use native plan mode on a single feature or not, verify or not — is free-form composition on the
 *yourself* side, not a separate mode. The supporting skills (`orchestrate-plan`,
-`create-context-pack`, `verify`) compose into **either** side.
+`create-context-pack`, `verify-acceptance`) compose into **either** side.
 
 ## The fork
 
 - **Direct** — you (the main agent) build it, in this thread. Optionally decompose first
-  (`orchestrate-plan`), spec a batch (`create-context-pack`), and check the result (`verify`).
+  (`orchestrate-plan`), spec a batch (`create-context-pack`), and check the result (`verify-acceptance`).
   **Best for:** one task or a handful; you want the highest quality and your own eyes on it; the
   work fits the main context. **Enter:** just do the work; pull in the planning/spec/verify skills
   as needed.
@@ -35,9 +35,9 @@ direct is usually the better call.
   effort** as the orchestrating session — no separate dial, no silent downgrade (**HV-167**).
 - **Two different verifications — don't conflate them:**
   - **Code** — `build + lint + test` green, and "does the diff meet `done_looks_like`." That's the
-    `verify` skill (Mode 1), and it's the executor's per-leaf gate. The AI does this.
+    `verify-acceptance` skill (Mode 1), and it's the executor's per-leaf gate. The AI does this.
   - **Functionality** — does the built thing actually *work* in use (front-end / runtime). That's a
-    **human** check today (you verify before it's trusted to land). The AI version is `verify`
+    **human** check today (you verify before it's trusted to land). The AI version is `verify-acceptance`
     **Mode 2** (browser/runtime QA) — not built yet (**HV-139**); **HV-100** is the trust-ramp for
     when it can stand in. The executor gates **code**, not functionality — functionality is still
     yours.
