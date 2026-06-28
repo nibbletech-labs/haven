@@ -1,17 +1,13 @@
 <!-- HAVEN:BEGIN -->
 ## Haven
 
-Haven is the canonical project work graph. Use `haven` CLI commands locally, or
-the `haven_*` MCP tools when available. Keep structure in Haven: do not hand-edit
-`backlog.md`; it is a generated projection.
+Haven is the canonical project work graph. Use `haven` CLI commands locally, or the `haven_*` MCP tools when available. Keep structure in Haven: do not hand-edit `backlog.md`; it is a generated projection.
 
 Discovery:
 - Canonical graph/content lives under `~/.haven`.
 - Repo-local `_haven/` is a disposable visible workspace/projection when present.
-- Codex MCP config is `~/.codex/config.toml` or trusted `.codex/config.toml`:
-  `[mcp_servers.haven]` with `command = "haven"` and `args = ["mcp"]`.
-- Codex/Open Agent Skills are read from `.agents/skills`, `~/.agents/skills`, or
-  `/etc/codex/skills`; Claude skills live under `~/.claude/skills`.
+- Codex MCP config is `~/.codex/config.toml` or trusted `.codex/config.toml`: `[mcp_servers.haven]` with `command = "haven"` and `args = ["mcp"]`.
+- Codex/Open Agent Skills are read from `.agents/skills`, `~/.agents/skills`, or `/etc/codex/skills`; Claude skills live under `~/.claude/skills`.
 
 Core local verbs:
 - `haven project list` / `haven project use <key>` to select a backlog.
