@@ -1054,17 +1054,188 @@ fn link_creates_visible_workspace_projection_and_local_git_exclude() {
         "--status",
         "ready",
         "--done-looks-like",
-        "visible in Haven/backlog.md",
+        "visible in _haven/backlog.md",
+    ]);
+    h.json(&["item", "add", "Demo docs", "--type", "anchor"]);
+    let src = h.home.join("doc.md");
+    std::fs::write(&src, b"# Demo docs\n").unwrap();
+    h.json(&[
+        "artifact",
+        "add",
+        "DM-2",
+        "--role",
+        "vision",
+        "--file",
+        src.to_str().unwrap(),
     ]);
 
     let out = h.json(&["link"]);
-    assert!(out["workspace"].as_str().unwrap().ends_with("/Haven"));
-    assert!(h.home.join("Haven/README.md").exists());
-    assert!(h.home.join("Haven/docs").is_dir());
-    let backlog = std::fs::read_to_string(h.home.join("Haven/backlog.md")).unwrap();
+    assert!(out["workspace"].as_str().unwrap().ends_with("/_haven"));
+    assert!(out["items"].as_str().unwrap().ends_with("/_haven/items"));
+    assert!(out["docs"].as_str().unwrap().ends_with("/_haven/docs"));
+    assert!(h.home.join("_haven/README.md").exists());
+    assert!(h.home.join("_haven/docs").is_dir());
+    assert!(h.home.join("_haven/items/DM-2/doc.md").exists());
+    assert!(h.home.join("_haven/docs/DM-2/doc.md").exists());
+    let backlog = std::fs::read_to_string(h.home.join("_haven/backlog.md")).unwrap();
     assert!(backlog.contains("Codex can read the projection"));
     let exclude = std::fs::read_to_string(h.home.join(".git/info/exclude")).unwrap();
-    assert!(exclude.lines().any(|line| line.trim() == "/Haven/"));
+    assert!(exclude.lines().any(|line| line.trim() == "/_haven/"));
+}
+
+#[test]
+fn link_upgrades_old_workspace_projection_and_is_idempotent() {
+    let h = Haven::new();
+    std::fs::create_dir_all(h.home.join(".git/info")).unwrap();
+    h.ok(&[
+        "setup",
+        "--project-key",
+        "demo",
+        "--project-title",
+        "Demo",
+        "--prefix",
+        "DM",
+    ]);
+    h.json(&["item", "add", "Demo docs", "--type", "anchor"]);
+    let src = h.home.join("doc.md");
+    std::fs::write(&src, b"# Demo docs\n").unwrap();
+    h.json(&[
+        "artifact",
+        "add",
+        "DM-1",
+        "--role",
+        "vision",
+        "--file",
+        src.to_str().unwrap(),
+    ]);
+
+    let workspace = h.home.join("_haven");
+    std::fs::create_dir_all(workspace.join("docs")).unwrap();
+    std::fs::write(
+        workspace.join("README.md"),
+        b"Haven workspace projection. Canonical graph/content lives under ~/.haven.\n",
+    )
+    .unwrap();
+    std::fs::write(workspace.join("backlog.md"), b"old backlog\n").unwrap();
+    std::fs::write(workspace.join("docs/stale.md"), b"stale\n").unwrap();
+
+    h.json(&["link"]);
+    h.json(&["link"]);
+
+    assert!(h.home.join("_haven/items/DM-1/doc.md").exists());
+    assert!(h.home.join("_haven/docs/DM-1/doc.md").exists());
+    assert!(!h.home.join("_haven/docs/stale.md").exists());
+
+    let exclude = std::fs::read_to_string(h.home.join(".git/info/exclude")).unwrap();
+    assert_eq!(
+        exclude
+            .lines()
+            .filter(|line| line.trim() == "/_haven/")
+            .count(),
+        1
+    );
+    assert_eq!(
+        exclude
+            .lines()
+            .filter(|line| line.trim() == "/.haven-project")
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn link_refuses_to_clobber_non_projection_workspace() {
+    let h = Haven::new();
+    h.ok(&[
+        "setup",
+        "--project-key",
+        "demo",
+        "--project-title",
+        "Demo",
+        "--prefix",
+        "DM",
+    ]);
+    std::fs::create_dir_all(h.home.join("_haven/docs")).unwrap();
+    std::fs::write(h.home.join("_haven/docs/keep.md"), b"do not delete\n").unwrap();
+
+    let err = h.fail(&["link"]);
+    assert_eq!(err["error"]["code"], "invalid");
+    assert!(err["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("refusing to modify"));
+    assert!(h.home.join("_haven/docs/keep.md").exists());
+}
+
+#[test]
+fn unlink_removes_local_projection_without_touching_canonical_content() {
+    let h = Haven::new();
+    std::fs::create_dir_all(h.home.join(".git/info")).unwrap();
+    h.ok(&[
+        "setup",
+        "--project-key",
+        "demo",
+        "--project-title",
+        "Demo",
+        "--prefix",
+        "DM",
+    ]);
+    h.json(&["item", "add", "Demo docs", "--type", "anchor"]);
+    h.json(&["link"]);
+
+    let canonical_backlog = h.home.join("demo/backlog.md");
+    assert!(canonical_backlog.exists());
+    assert!(h.home.join("_haven").exists());
+    assert!(h.home.join(".haven-project").exists());
+
+    let out = h.json(&["unlink"]);
+    assert_eq!(out["removed_workspace"], true);
+    assert_eq!(out["removed_binding"], true);
+    assert!(!h.home.join("_haven").exists());
+    assert!(!h.home.join(".haven-project").exists());
+    assert!(canonical_backlog.exists());
+
+    let exclude = std::fs::read_to_string(h.home.join(".git/info/exclude")).unwrap();
+    assert!(!exclude.lines().any(|line| line.trim() == "/_haven/"));
+    assert!(!exclude.lines().any(|line| line.trim() == "/.haven-project"));
+
+    let out = h.json(&["unlink"]);
+    assert_eq!(out["removed_workspace"], false);
+    assert_eq!(out["removed_binding"], false);
+}
+
+#[test]
+fn unlink_discovers_custom_named_projection_without_name_arg() {
+    let h = Haven::new();
+    std::fs::create_dir_all(h.home.join(".git/info")).unwrap();
+    h.ok(&[
+        "setup",
+        "--project-key",
+        "demo",
+        "--project-title",
+        "Demo",
+        "--prefix",
+        "DM",
+    ]);
+    // Link into a non-default workspace name.
+    let linked = h.json(&["link", "--name", "Workspace"]);
+    assert!(linked["workspace"]
+        .as_str()
+        .unwrap()
+        .ends_with("/Workspace"));
+    assert!(h.home.join("Workspace").exists());
+    let exclude = std::fs::read_to_string(h.home.join(".git/info/exclude")).unwrap();
+    assert!(exclude.lines().any(|line| line.trim() == "/Workspace/"));
+
+    // `unlink` with no --name still discovers it via the projection marker,
+    // removes it, and clears *its* git-exclude entry (not a stale /_haven/).
+    let out = h.json(&["unlink"]);
+    assert_eq!(out["removed_workspace"], true);
+    assert!(out["workspace"].as_str().unwrap().ends_with("/Workspace"));
+    assert!(!h.home.join("Workspace").exists());
+    let exclude = std::fs::read_to_string(h.home.join(".git/info/exclude")).unwrap();
+    assert!(!exclude.lines().any(|line| line.trim() == "/Workspace/"));
+    assert!(!exclude.lines().any(|line| line.trim() == "/.haven-project"));
 }
 
 #[test]
@@ -1693,7 +1864,7 @@ fn repo_binding_gates_writes_and_warns_reads_on_project_mismatch() {
     h.json(&[
         "project", "add", "--key", "other", "--title", "Other", "--prefix", "OT",
     ]);
-    let linked = h.json(&["link", "-p", "haven"]);
+    let linked = h.json(&["link", "-p", "haven", "--name", "Workspace"]);
     assert!(linked["binding"]
         .as_str()
         .unwrap()

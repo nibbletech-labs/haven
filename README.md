@@ -40,7 +40,7 @@ Haven separates the shape of the work from the documents around it:
 - Specs, research, notes, and other artifacts live as files under `~/.haven/`.
 - Project docs attach to `anchor` items and are discoverable with `haven docs`
   or `haven_docs`.
-- Repo-local `Haven/` folders are just visible workspaces. The durable data
+- Repo-local `_haven/` folders are just visible workspaces. The durable data
   stays under `~/.haven/`.
 
 Your editor, shell, agents, and future apps are clients of Haven. Haven does not
@@ -180,10 +180,16 @@ To add a human- and agent-readable project entry point inside a repo:
 haven link
 ```
 
-This creates a visible `Haven/` workspace containing a generated `backlog.md`
-view and room for docs. The real graph and content remain under `~/.haven/`, so
-the `Haven/` directory can be regenerated. When run inside a Git repo, Haven adds
-`/Haven/` to `.git/info/exclude`.
+This creates a visible `_haven/` workspace containing a generated open
+`backlog.md` view, an `items/` alias to the canonical content tree, and `docs/`
+aliases for living-doc anchor item folders. The real graph and content remain
+under `~/.haven/`, so the `_haven/` directory can be regenerated. When run inside
+a Git repo, Haven adds `/_haven/` to `.git/info/exclude`.
+
+Re-running `haven link` refreshes the projection in place, including upgrading
+older empty projection docs folders. `haven unlink` removes only the repo-local
+projection, `.haven-project`, and local git-exclude entries; it does not delete
+canonical graph/content under `~/.haven/`.
 
 Do not hand-edit `backlog.md`; it is generated from Haven's store.
 

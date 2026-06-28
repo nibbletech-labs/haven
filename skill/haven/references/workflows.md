@@ -478,9 +478,12 @@ path?*
 - **Grey zone defaults to Haven.** A doc an agent uses mid-task but no script
   reads (a house-style guide, a prompt scrapbook) goes in Haven; repo docs are
   for what a stranger cloning the repo needs to build and understand the code.
-- **Need it visible in-tree?** `haven link` projects a git-excluded `Haven/`
-  folder into the repo working tree — docs sit beside the code without being
-  committed.
+- **Need it visible in-tree?** `haven link` projects a git-excluded `_haven/`
+  folder into the repo working tree — `items/` aliases the canonical content
+  tree and `docs/` aliases living-doc anchor folders, so docs sit beside the
+  code without being committed. Re-run `haven link` to refresh/upgrade the
+  projection; use `haven unlink` to remove the repo-local projection without
+  touching canonical content.
 - **Doc backs one item?** Attach it to that item, not an anchor. Anchors hold
   knowledge that outlives any single item.
 

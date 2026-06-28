@@ -334,7 +334,7 @@ dispatch path: for "what should I work on?", use `dispatch` or
   traceability, never as the headline or the whole message. Keep it short and undense.
 - **Let `backlog.md` regenerate** — it re-renders after every mutation; never
   hand-edit it.
-- **Repo-local `Haven/` is a projection.** It is a visible alias for humans and
+- **Repo-local `_haven/` is a projection.** It is a visible alias for humans and
   agents; canonical graph/content remains under `~/.haven`.
 - **Always give a real `--rationale`** on evolve/archive/reopen — lineage exists to
   reconstruct intent ("spans two owners, splitting for independent dispatch", not

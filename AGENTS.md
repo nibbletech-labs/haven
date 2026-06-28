@@ -7,7 +7,7 @@ the `haven_*` MCP tools when available. Keep structure in Haven: do not hand-edi
 
 Discovery:
 - Canonical graph/content lives under `~/.haven`.
-- Repo-local `Haven/` is a disposable visible workspace/projection when present.
+- Repo-local `_haven/` is a disposable visible workspace/projection when present.
 - Codex MCP config is `~/.codex/config.toml` or trusted `.codex/config.toml`:
   `[mcp_servers.haven]` with `command = "haven"` and `args = ["mcp"]`.
 - Codex/Open Agent Skills are read from `.agents/skills`, `~/.agents/skills`, or

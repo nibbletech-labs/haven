@@ -191,11 +191,17 @@ enum Command {
     Note { reference: String, text: String },
     /// (Re)write the project's backlog.md projection.
     Render,
-    /// Create a visible repo-local Haven/ workspace projection.
+    /// Create a visible repo-local _haven/ workspace projection.
     Link {
         /// Visible workspace directory to create in the current repo.
-        #[arg(long, default_value = "Haven")]
+        #[arg(long, default_value = "_haven")]
         name: PathBuf,
+    },
+    /// Remove a repo-local _haven/ workspace projection.
+    Unlink {
+        /// Visible workspace directory to remove (defaults to the linked projection).
+        #[arg(long)]
+        name: Option<PathBuf>,
     },
     /// Install the embedded skill snapshot.
     Skill {
@@ -1047,6 +1053,7 @@ fn guard_kind(cmd: &Command) -> GuardKind {
         | Command::Config { .. }
         | Command::Project { .. }
         | Command::Link { .. }
+        | Command::Unlink { .. }
         | Command::Skill { .. }
         | Command::Slf { .. }
         | Command::Mcp
@@ -1295,6 +1302,7 @@ fn run(cli: &Cli) -> Result<Output> {
             ))
         }
         Command::Link { name } => cmd_link(project, name),
+        Command::Unlink { name } => cmd_unlink(name.as_deref()),
         Command::Skill { cmd } => cmd_skill(cmd),
         Command::Slf { cmd } => cmd_self(cmd),
         Command::Mcp => {
@@ -2077,9 +2085,24 @@ fn cmd_link(project: Option<&str>, name: &std::path::Path) -> Result<Output> {
         "workspace": linked.workspace.display().to_string(),
         "backlog": linked.backlog.display().to_string(),
         "canonical_backlog": linked.canonical_backlog.display().to_string(),
+        "items": linked.items.display().to_string(),
+        "canonical_items": linked.canonical_items.display().to_string(),
+        "docs": linked.docs.display().to_string(),
         "git_exclude": linked.git_exclude.map(|p| p.display().to_string()),
         "binding": linked.binding.display().to_string(),
         "note": "canonical graph/content remains under ~/.haven; this workspace is disposable",
+    })))
+}
+
+fn cmd_unlink(name: Option<&std::path::Path>) -> Result<Output> {
+    let unlinked = config::unlink_workspace(name)?;
+    Ok(Output::Json(serde_json::json!({
+        "workspace": unlinked.workspace.display().to_string(),
+        "removed_workspace": unlinked.removed_workspace,
+        "binding": unlinked.binding.display().to_string(),
+        "removed_binding": unlinked.removed_binding,
+        "git_exclude": unlinked.git_exclude.map(|p| p.display().to_string()),
+        "note": "canonical graph/content under ~/.haven was not changed",
     })))
 }
 

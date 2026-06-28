@@ -48,7 +48,7 @@ values error.
 haven setup [--agent all|claude|codex] [--no-skill] | init | status [<key>] | doctor
                                                     # `status <key>` resolves like `-p <key>`
 haven config get <key> | set <key> <value>
-haven link [--name Haven]  # visible repo-local workspace/projection; canonical state stays in ~/.haven
+haven link [--name _haven] | unlink [--name <dir>]   # repo-local projection only (unlink discovers the dir if unnamed); canonical state stays in ~/.haven
 
 # Projects
 haven project add --key <k> --title <t> [--prefix HV] [--description …]
@@ -305,9 +305,15 @@ Codex/Open Agent Skills are discovered from `.agents/skills`,
 snapshot to `~/.agents/skills/haven` by default. Codex does not read
 `~/.claude/skills`.
 
-`haven link` creates a visible repo-local `Haven/` workspace with `backlog.md`
-linked/copied from the canonical generated projection under `~/.haven`. Treat
-`Haven/` as disposable; structure still changes only through Haven tools.
+`haven link` creates a visible repo-local `_haven/` workspace with `backlog.md`
+linked/copied from the canonical generated projection under `~/.haven`, `items/`
+aliased to the canonical content tree, and `docs/` populated with aliases to
+living-doc anchor item folders. Treat `_haven/` as disposable; structure still
+changes only through Haven tools.
+
+Re-running `haven link` refreshes and upgrades the projection in place. Use
+`haven unlink` to remove only the repo-local projection/binding/git-exclude
+entries; canonical content under `~/.haven` remains intact.
 
 If a remote client genuinely needs to create projects or re-rank, that's a gap to
 raise against the binary — don't fake it through other tools.

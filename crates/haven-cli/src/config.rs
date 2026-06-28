@@ -629,7 +629,7 @@ the `haven_*` MCP tools when available. Keep structure in Haven: do not hand-edi
 
 Discovery:
 - Canonical graph/content lives under `~/.haven`.
-- Repo-local `Haven/` is a disposable visible workspace/projection when present.
+- Repo-local `_haven/` is a disposable visible workspace/projection when present.
 - Codex MCP config is `~/.codex/config.toml` or trusted `.codex/config.toml`:
   `[mcp_servers.haven]` with `command = "haven"` and `args = ["mcp"]`.
 - Codex/Open Agent Skills are read from `.agents/skills`, `~/.agents/skills`, or
@@ -704,13 +704,31 @@ pub struct LinkResult {
     pub workspace: PathBuf,
     pub backlog: PathBuf,
     pub canonical_backlog: PathBuf,
+    pub items: PathBuf,
+    pub canonical_items: PathBuf,
+    pub docs: PathBuf,
     pub git_exclude: Option<PathBuf>,
     pub binding: PathBuf,
+}
+
+pub struct UnlinkResult {
+    pub workspace: PathBuf,
+    pub removed_workspace: bool,
+    pub binding: PathBuf,
+    pub removed_binding: bool,
+    pub git_exclude: Option<PathBuf>,
 }
 
 /// The repo-local binding marker `haven link` writes (and [`repo_binding`] reads):
 /// a one-line file naming the project this repo is bound to.
 pub const BINDING_FILE: &str = ".haven-project";
+
+/// Default visible-workspace directory name for `haven link`/`unlink`.
+const DEFAULT_WORKSPACE: &str = "_haven";
+
+/// Marker line written into a projection's `README.md`. `link`/`unlink` use it to
+/// recognise (and refuse to clobber) a Haven projection.
+const PROJECTION_MARKER: &str = "Haven workspace projection";
 
 pub fn link_workspace(store: &Store, project: Option<&str>, name: &Path) -> Result<LinkResult> {
     let canonical_backlog = store.render(project)?;
@@ -725,13 +743,21 @@ pub fn link_workspace(store: &Store, project: Option<&str>, name: &Path) -> Resu
     };
     let root = std::env::current_dir()?;
     let workspace = root.join(name);
-    std::fs::create_dir_all(workspace.join("docs"))?;
+    prepare_projection_workspace(&workspace)?;
+    std::fs::create_dir_all(&workspace)?;
     std::fs::write(
         workspace.join("README.md"),
-        "Haven workspace projection. Canonical graph/content lives under ~/.haven.\n",
+        "Haven workspace projection. Canonical graph/content lives under ~/.haven.\n\
+         `backlog.md` is generated; `items/` and `docs/` alias canonical content.\n",
     )?;
     let backlog = workspace.join("backlog.md");
     replace_backlog_alias(&canonical_backlog, &backlog)?;
+    let canonical_items = store.content_root().join(&key).join("items");
+    std::fs::create_dir_all(&canonical_items)?;
+    let items = workspace.join("items");
+    replace_path_alias(&canonical_items, &items)?;
+    let docs = workspace.join("docs");
+    rebuild_docs_projection(store, &key, &docs)?;
     // Bind this repo to the project so CLI writes run here can't silently mis-file
     // into a different (e.g. concurrently-flipped) current project — HV-147.
     let binding = root.join(BINDING_FILE);
@@ -742,9 +768,89 @@ pub fn link_workspace(store: &Store, project: Option<&str>, name: &Path) -> Resu
         workspace,
         backlog,
         canonical_backlog,
+        items,
+        canonical_items,
+        docs,
         git_exclude,
         binding,
     })
+}
+
+pub fn unlink_workspace(name: Option<&Path>) -> Result<UnlinkResult> {
+    let root = std::env::current_dir()?;
+    let workspace = match name {
+        Some(n) => root.join(n),
+        // No explicit name: prefer the default, else discover the lone projection
+        // dir, so a workspace created with `link --name X` still unlinks cleanly
+        // (and clears *its* git-exclude entry) without re-passing the name.
+        None => discover_projection_workspace(&root)?,
+    };
+    let removed_workspace = if std::fs::symlink_metadata(&workspace).is_ok() {
+        ensure_projection_workspace(&workspace)?;
+        remove_existing_path(&workspace)?;
+        true
+    } else {
+        false
+    };
+
+    let binding = root.join(BINDING_FILE);
+    let removed_binding = if std::fs::symlink_metadata(&binding).is_ok() {
+        std::fs::remove_file(&binding)?;
+        true
+    } else {
+        false
+    };
+
+    let git_exclude = remove_git_exclude_entries(&[
+        format!(
+            "/{}/",
+            workspace
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or(DEFAULT_WORKSPACE)
+        ),
+        format!("/{BINDING_FILE}"),
+    ])?;
+
+    Ok(UnlinkResult {
+        workspace,
+        removed_workspace,
+        binding,
+        removed_binding,
+        git_exclude,
+    })
+}
+
+/// Resolve which workspace `unlink` targets when no `--name` is given: the
+/// default `_haven` when it's a projection, otherwise the *sole* repo-local
+/// directory carrying the projection marker (so a `link --name X` round-trips
+/// without re-passing the name). Falls back to `_haven` when nothing — or more
+/// than one candidate — is found, leaving the ambiguous case to an explicit
+/// `--name` rather than guessing which to delete.
+fn discover_projection_workspace(root: &Path) -> Result<PathBuf> {
+    let default = root.join(DEFAULT_WORKSPACE);
+    if is_projection_dir(&default) {
+        return Ok(default);
+    }
+    let mut found: Option<PathBuf> = None;
+    for entry in std::fs::read_dir(root)? {
+        let path = entry?.path();
+        if is_projection_dir(&path) {
+            if found.is_some() {
+                return Ok(default); // ambiguous — require an explicit --name
+            }
+            found = Some(path);
+        }
+    }
+    Ok(found.unwrap_or(default))
+}
+
+/// True when `path` is a directory carrying the `link` projection marker.
+fn is_projection_dir(path: &Path) -> bool {
+    path.is_dir()
+        && std::fs::read_to_string(path.join("README.md"))
+            .map(|s| s.contains(PROJECTION_MARKER))
+            .unwrap_or(false)
 }
 
 /// The project this repo is bound to, if any: the first [`BINDING_FILE`] found
@@ -768,32 +874,110 @@ pub fn repo_binding() -> Result<Option<String>> {
 }
 
 fn replace_backlog_alias(canonical: &Path, link: &Path) -> Result<()> {
-    if link.exists() || std::fs::symlink_metadata(link).is_ok() {
-        let meta = std::fs::symlink_metadata(link)?;
-        if meta.is_dir() && !meta.file_type().is_symlink() {
-            return Err(HavenError::Invalid(format!(
-                "{} is a directory; cannot replace with backlog projection",
-                link.display()
-            )));
+    replace_path_alias(canonical, link)
+}
+
+fn rebuild_docs_projection(store: &Store, project_key: &str, docs: &Path) -> Result<()> {
+    if std::fs::symlink_metadata(docs).is_ok() {
+        remove_existing_path(docs)?;
+    }
+    std::fs::create_dir_all(docs)?;
+    for anchor in store.docs(Some(project_key))? {
+        let target = store
+            .content_root()
+            .join(project_key)
+            .join("items")
+            .join(&anchor.item.reference);
+        if target.is_dir() {
+            replace_path_alias(&target, &docs.join(&anchor.item.reference))?;
         }
-        std::fs::remove_file(link)?;
+    }
+    Ok(())
+}
+
+fn replace_path_alias(canonical: &Path, link: &Path) -> Result<()> {
+    if link.exists() || std::fs::symlink_metadata(link).is_ok() {
+        remove_existing_path(link)?;
     }
     #[cfg(unix)]
     {
         std::os::unix::fs::symlink(canonical, link)?;
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
     {
-        std::fs::copy(canonical, link)?;
+        let meta = std::fs::metadata(canonical)?;
+        if meta.is_dir() {
+            std::os::windows::fs::symlink_dir(canonical, link)?;
+        } else {
+            std::os::windows::fs::symlink_file(canonical, link)?;
+        }
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let meta = std::fs::metadata(canonical)?;
+        if meta.is_dir() {
+            std::fs::create_dir_all(link)?;
+        } else {
+            std::fs::copy(canonical, link)?;
+        }
     }
     Ok(())
+}
+
+fn remove_existing_path(path: &Path) -> Result<()> {
+    let meta = std::fs::symlink_metadata(path)?;
+    if meta.is_dir() && !meta.file_type().is_symlink() {
+        std::fs::remove_dir_all(path)?;
+    } else {
+        std::fs::remove_file(path)?;
+    }
+    Ok(())
+}
+
+fn prepare_projection_workspace(workspace: &Path) -> Result<()> {
+    let Ok(meta) = std::fs::symlink_metadata(workspace) else {
+        return Ok(());
+    };
+    if !meta.is_dir() || meta.file_type().is_symlink() {
+        return Err(HavenError::Invalid(format!(
+            "{} exists but is not a directory; refusing to replace it with a Haven projection",
+            workspace.display()
+        )));
+    }
+    let readme = workspace.join("README.md");
+    if readme.is_file() {
+        ensure_projection_workspace(workspace)?;
+        return Ok(());
+    }
+    for entry in std::fs::read_dir(workspace)? {
+        let entry = entry?;
+        if entry.file_name() != ".DS_Store" {
+            return Err(HavenError::Invalid(format!(
+                "{} exists and does not look like a Haven projection; refusing to modify it",
+                workspace.display()
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn ensure_projection_workspace(workspace: &Path) -> Result<()> {
+    let readme = workspace.join("README.md");
+    let marker = std::fs::read_to_string(&readme).unwrap_or_default();
+    if marker.contains(PROJECTION_MARKER) {
+        return Ok(());
+    }
+    Err(HavenError::Invalid(format!(
+        "{} does not look like a Haven projection; refusing to remove it",
+        workspace.display()
+    )))
 }
 
 fn exclude_workspace_from_git(workspace: &Path) -> Result<Option<PathBuf>> {
     let name = workspace
         .file_name()
         .and_then(|s| s.to_str())
-        .unwrap_or("Haven");
+        .unwrap_or(DEFAULT_WORKSPACE);
     append_git_exclude(&format!("/{name}/"))
 }
 
@@ -816,6 +1000,30 @@ fn append_git_exclude(entry: &str) -> Result<Option<PathBuf>> {
         raw.push('\n');
         std::fs::write(&exclude, raw)?;
     }
+    Ok(Some(exclude))
+}
+
+fn remove_git_exclude_entries(entries: &[String]) -> Result<Option<PathBuf>> {
+    let Some(git_dir) = find_git_dir(std::env::current_dir()?) else {
+        return Ok(None);
+    };
+    let exclude = git_dir.join("info").join("exclude");
+    if !exclude.exists() {
+        return Ok(Some(exclude));
+    }
+    let raw = std::fs::read_to_string(&exclude).unwrap_or_default();
+    let filtered: Vec<&str> = raw
+        .lines()
+        .filter(|line| {
+            let trimmed = line.trim();
+            !entries.iter().any(|entry| entry == trimmed)
+        })
+        .collect();
+    let mut next = filtered.join("\n");
+    if !next.is_empty() {
+        next.push('\n');
+    }
+    std::fs::write(&exclude, next)?;
     Ok(Some(exclude))
 }
 
