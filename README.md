@@ -9,6 +9,11 @@ iterations, and used every day.
 stdio MCP server your AI agents talk to. **Not here yet:** multi-user support, any
 cloud or remote sync, and a UI — all on the priority list, just not in this release.
 
+Single-user doesn't mean siloed. When work belongs in your team's tools, your AI can
+**hand an item off to Jira, Linear, or GitHub** — creating the ticket there, recording
+where it's running, and reconciling status back into Haven — with no integration to
+wire up. More in [Using Haven](USING-HAVEN.md#hand-work-off-to-your-teams-tools).
+
 It keeps track of what needs doing, who owns it, what's blocked, what changed, and
 what's ready to pick up next — useful when a flat TODO list isn't enough:
 

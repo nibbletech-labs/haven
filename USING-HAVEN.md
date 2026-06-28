@@ -101,3 +101,27 @@ whatever replaced it, so links never go dead.
 
 The literal CLI commands and their `haven_*` MCP equivalents, if you ever want them,
 are in the bundled skill's [`surface-map.md`](skill/haven/references/surface-map.md).
+
+## Hand work off to your team's tools
+
+Haven is local and single-user, but your work often has to live where your team can
+see it — a Jira board, a Linear cycle, a GitHub issue. You don't have to set up an
+integration for that. If your AI already has access to those tools (most do, through
+their own connectors), it can be the bridge.
+
+Ask it to *"hand HV-12 off to Jira"* and it will create or update the ticket over
+there, then record a structured **external reference** on the Haven item — which
+system, which ticket, the link — and mark the item **in progress**, because it's now
+actively being worked, just somewhere else. The item stays yours; Haven simply knows
+where it went and keeps a short receipt of the handoff.
+
+Later, *"is PROJ-9 done?"* lets it walk back the other way — find the Haven item from
+the external ticket id and reconcile: update the status, or complete the item with the
+external result as evidence. Whether an external "Done" closes the Haven item
+automatically or just lands on a review list for you is your call, not a rule Haven
+enforces.
+
+What this is **not** is a native integration. Haven holds no connection to Jira or
+GitHub and checks nothing on their side — your AI is the integration point, working
+under your setup. So there's nothing to configure, and it fits whatever tools your
+team already uses.
