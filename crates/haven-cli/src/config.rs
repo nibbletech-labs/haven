@@ -158,6 +158,10 @@ const HAVEN_SKILL_FILES: &[(&str, &str)] = &[
         include_str!("../../../skill/haven/references/parallel-dev.md"),
     ),
     (
+        "references/external-handoff.md",
+        include_str!("../../../skill/haven/references/external-handoff.md"),
+    ),
+    (
         "agents/openai.yaml",
         include_str!("../../../skill/haven/agents/openai.yaml"),
     ),

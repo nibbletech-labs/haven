@@ -280,6 +280,12 @@ Before you dispatch a build, decide **how** it should run — inline vs solo pla
 flow-gate for picking one (recommend or ask, don't default silently) are in
 **`references/running-work.md`**.
 
+When you're handing an item off to an **external PM/dev system** (Jira/Linear/GitHub) — recording
+where it's executing and reconciling it back into Haven — read **`references/external-handoff.md`**:
+the item-by-item `extref` workflow, the `external_refs` receipt convention, and the
+`in_progress` / `wait=on_external` / completion-by-policy model. (A *different axis* from the
+ai↔human handoff in workflow 8 — it keeps ownership and goes `in_progress`, no native integration.)
+
 ## MCP quick reference (concrete payloads)
 
 Over MCP, pass `project` on every call. The common ops:

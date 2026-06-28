@@ -342,6 +342,10 @@ haven item handoff HV-7 --to ai        # hand back: clears the wait, unblocks it
   owner flip and wait-state happen together with the note.
 - A handed-off, waiting item correctly **drops out of `next`** — that's the system
   working. (Prefer a real dependency edge over `on_dependency` for blockers.)
+- **External-system handoff is a different axis.** Handing an item to Jira/Linear/
+  GitHub (not to a *person*) keeps its ownership and sets it `in_progress`, recording
+  an `external_refs` locator on the item — use `haven item extref add`, **not** this
+  verb. See `references/external-handoff.md`.
 
 ## 9. Complete
 
