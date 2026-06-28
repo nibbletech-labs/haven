@@ -1,260 +1,95 @@
 # Haven
 
-Haven is a local-first backlog for work that spans humans, AI agents, and real
-life.
+Haven is a local-first backlog management tool that spans humans, AI agents, and real life.
 
-It keeps track of what needs doing, who owns it, what is blocked, what changed,
-and what is ready to pick up next. You can use it from the `haven` CLI, through
-an MCP server in tools like Codex and Claude, or later through synced apps.
+It's the tool I run my own work through, built over months and many
+iterations, and used every day.
 
-Haven is useful when a normal TODO list is too flat:
+**Today it's local-first and single-user**, driven from the `haven` CLI and a
+stdio MCP server your AI agents talk to. **Not here yet:** multi-user support, any
+cloud or remote sync, and a UI — all on the priority list, just not in this release.
+
+It keeps track of what needs doing, who owns it, what's blocked, what changed, and
+what's ready to pick up next — useful when a flat TODO list isn't enough:
 
 - Work can depend on other work.
 - A task can wait on a person, an agent, another task, or an outside event.
-- Decisions, specs, research, and evidence can stay attached to the work they
-  belong to.
+- Decisions, specs, research, and evidence stay attached to the work they belong to.
 - Agents can ask for the next ready item instead of guessing from stale notes.
-- Finished work can include proof, so handoffs do not rely on memory.
+- Finished work can carry proof, so handoffs don't rely on memory.
 
-Under the hood, Haven is one `haven` binary with a local SQLite store, a CLI, and
-a stdio MCP server. Public installs are local-first; Cloud Sync is unfinished
-private preview and its commands stay hidden unless
-`HAVEN_CLOUD_SYNC_PREVIEW=1` is explicitly set.
+Under the hood, Haven models your work as a **graph**: nodes are individual work
+items or the containers that group them, connected by dependency, decomposition, and
+grouping edges. [`DATA-MODEL.md`](DATA-MODEL.md) covers exactly what's stored.
 
-```sh
-haven setup --project-key my-work --project-title "My Work" --prefix MW
-haven item add "Draft the spec" --status ready --commit --assign ai \
-  --done-looks-like "approved by review"
-haven next                          # show ready, unblocked work
-haven dispatch --owner ai --limit 5 # next candidates + targeted context
-haven item get MW-1 --include edges,artifacts,lineage
-haven item assign MW-1 --to human
-haven docs                          # project vision, architecture, and spec anchors
-```
+## What you get
 
-## How It Fits Together
+One `haven` binary that is both a **CLI** and a **stdio MCP server**, plus a suite
+of **skills** that teach your AI agents how to use it. Running `haven setup`:
 
-Haven separates the shape of the work from the documents around it:
+- **installs the skills into your user skills folder** (`~/.claude/skills`,
+  `~/.agents/skills`), so every new Claude or Codex session — in any repo — already
+  knows Haven, and a binary upgrade refreshes them automatically;
+- **registers the `haven` MCP server** for Claude and Codex, so agents can act on
+  the backlog; and
+- keeps all your data **local** under `~/.haven`.
 
-- The work graph lives in local SQLite and is exposed through the CLI and MCP.
-- Specs, research, notes, and other artifacts live as files under `~/.haven/`.
-- Project docs attach to `anchor` items and are discoverable with `haven docs`
-  or `haven_docs`.
-- Repo-local `_haven/` folders are just visible workspaces. The durable data
-  stays under `~/.haven/`.
+So in practice you don't type commands — you drive Haven by talking to your agent:
+"add this to the backlog", "what's next?", "break this down", "run the build". See
+**[Using Haven through your AI](USING-HAVEN.md)** for the plain-language asks and the
+kinds of work the agent does on your behalf.
 
-Your editor, shell, agents, and future apps are clients of Haven. Haven does not
-depend on any one of them.
+## Quick start
 
-## Install
-
-### Supported Platforms
-
-| Platform | Prebuilt binary | Homebrew tap | Install script | From source |
-| --- | --- | --- | --- | --- |
-| macOS Apple Silicon | Yes | Yes | Yes | Yes |
-| macOS Intel | Yes | Yes | Yes | Yes |
-| Linux ARM64 | Yes | Yes | Yes | Yes |
-| Linux x64 | Yes | Yes | Yes | Yes |
-| Windows | No | No | No | Not supported yet |
-
-Prebuilt Linux binaries are static musl builds. Platforms without a prebuilt
-binary fall back to source builds when the install script can find a Rust
-toolchain.
-
-**Homebrew:**
+Install the binary — on **macOS** (Homebrew):
 
 ```sh
 brew install nibbletech-labs/tap/haven
-haven setup --project-key my-work --project-title "My Work" --prefix MW
-haven item add "First item"
-haven doctor       # verify the install
 ```
 
-**Install script** (downloads a prebuilt binary — no Rust toolchain; macOS
-arm64/x64, Linux arm64/x64):
+On **Linux** (prebuilt binary, no toolchain needed):
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/nibbletech-labs/haven/main/packaging/install.sh | sh
 ```
 
-It downloads the matching release tarball, verifies its sha256, and installs to
-the first writable of `$HAVEN_BIN_DIR`, `/usr/local/bin`, `~/.local/bin`. Pin a
-version with `HAVEN_VERSION=v0.1.4`. On a platform without a prebuilt binary it
-falls back to building from source (needs cargo); force that with
-`--from-source` or `HAVEN_BUILD_FROM_SOURCE=1`.
-
-**From source:**
+Then wire up your agents and check the install:
 
 ```sh
-git clone https://github.com/nibbletech-labs/haven && cd haven
-cargo build --release
-./target/release/haven setup --project-key my-work --project-title "My Work" --prefix MW
+haven setup
+haven doctor
 ```
 
-> **macOS Gatekeeper:** binaries from `brew` or `curl` run from a terminal are
-> not quarantined. If you download a release tarball with a browser and macOS
-> refuses to run it ("cannot verify the developer"), clear the quarantine flag
-> once: `xattr -d com.apple.quarantine "$(which haven)"`.
+`haven setup` installs the skills and registers the MCP server — it doesn't create
+a project, and there's no default. From here you don't run anything else: just talk
+to your AI. Ask it to "add this to the backlog" and it creates your first project
+and starts tracking — see **[Using Haven through your AI](USING-HAVEN.md)**. (You
+can also name a project up front yourself; that and other setup details are in
+**[INSTALL.md](INSTALL.md)**, along with other platforms, building from source,
+agent configuration, and updating.)
 
-`haven setup` is safe to run more than once. It creates `~/.haven`, runs
-migrations, registers the `haven` MCP server for Claude and Codex, installs the
-bundled skill into agent-readable skill paths, and creates/selects a default
-first project (`haven`, titled `Haven`, refs prefixed `HV`) when no current
-project exists. Pass `--project-key`, `--project-title`, and `--prefix` to choose
-your own first project. It does not write files into the current directory unless
-you opt in with `--agents-md`, which writes or refreshes the Haven stanza in the
-current repo's `AGENTS.md`.
+## How it fits together
 
-## Projects
+Haven separates the shape of the work from the documents around it:
 
-Every item belongs to a Haven project. A project gives the backlog a namespace
-and an item ref prefix, so a project with `--prefix MW` will create refs such as
-`MW-1`, `MW-2`, and so on.
+- The work graph lives in local SQLite, exposed through the CLI and MCP.
+- Specs, research, notes, and other artifacts live as files under `~/.haven/`.
+- Project docs attach to `anchor` items and surface with `haven docs`.
+- Repo-local `_haven/` folders are just visible workspaces; the durable data stays
+  under `~/.haven/`.
 
-`haven setup` creates and selects a project for you. If you do not pass project
-details, it creates/selects a default project named `haven` with `HV` refs. For
-real work, it is usually clearer to name the project up front:
+Your editor, shell, agents, and future apps are clients of Haven — it doesn't depend
+on any one of them.
 
-```sh
-haven setup --project-key my-work --project-title "My Work" --prefix MW
-```
+## Learn more
 
-Later commands use the current project by default. You can switch projects or
-target one command explicitly:
-
-```sh
-haven project add --key website --title "Website" --prefix WEB
-haven project use website
-haven item add "Draft homepage copy"     # creates WEB-1
-haven --project my-work item list        # read another project without switching
-```
-
-Use `haven doctor` to check whether the local pieces are wired correctly.
-
-## Updating
-
-```sh
-haven self update --check     # report current vs latest, change nothing
-haven self update             # apply the right update for how haven was installed
-```
-
-`haven self update` is install-method aware. For an `install.sh` install it
-downloads the latest prebuilt binary, verifies its sha256, and atomically swaps
-it in place (`--binary` forces this for an unrecognized install location). For a
-Homebrew install, `haven self update --run` runs `brew upgrade` for you. A dev
-symlink just needs a rebuild. Use `--tag v0.1.1-rc.1` to install a specific
-release (e.g. to try a pre-release).
-
-## Agent Setup
-
-`haven setup` wires the default local integrations, but you can target one agent
-when that is all you need:
-
-```sh
-haven setup --agent codex
-haven setup --agent claude
-haven skill install --agent codex
-haven setup --agents-md   # opt in to repo-local AGENTS.md discovery
-```
-
-Codex reads MCP servers from `~/.codex/config.toml` or trusted project
-`.codex/config.toml`. Haven writes this stanza for Codex:
-
-```toml
-[mcp_servers.haven]
-command = "haven"
-args = ["mcp"]
-```
-
-Codex/Open Agent Skills are installed to `~/.agents/skills/haven` by default.
-Codex can read `.agents/skills`, `~/.agents/skills`, and `/etc/codex/skills`.
-Claude keeps using `~/.claude/skills/haven`; Codex does not read that Claude
-path.
-
-## Repo Workspace
-
-To add a human- and agent-readable project entry point inside a repo:
-
-```sh
-haven link
-```
-
-This creates a visible `_haven/` workspace containing a generated open
-`backlog.md` view, an `items/` alias to the canonical content tree, and `docs/`
-aliases for living-doc anchor item folders. The real graph and content remain
-under `~/.haven/`, so the `_haven/` directory can be regenerated. When run inside
-a Git repo, Haven adds `/_haven/` to `.git/info/exclude`.
-
-Re-running `haven link` refreshes the projection in place, including upgrading
-older empty projection docs folders. `haven unlink` removes only the repo-local
-projection, `.haven-project`, and local git-exclude entries; it does not delete
-canonical graph/content under `~/.haven/`.
-
-Do not hand-edit `backlog.md`; it is generated from Haven's store.
-
-## Develop
-
-Haven is a Rust workspace with one shipped binary:
-
-- `crates/haven-core` - the shared store, data model, and ordering logic
-- `crates/haven-cli` - the `haven` command
-- `crates/haven-mcp` - the stdio JSON-RPC MCP server
-- `crates/haven-sync` and `crates/haven-auth` - preview-gated sync and auth internals
-- `migrations/` - local SQLite schema
-- `supabase/` - preview-gated remote mirror schema and policies
-
-```sh
-cargo test --workspace
-cargo clippy --workspace --all-targets
-cargo fmt --check
-```
-
-For a development install that follows your local builds, symlink the binary
-onto your PATH:
-
-```sh
-cargo build --release
-./target/release/haven self install --link   # ~/.local/bin/haven -> target/release/haven
-```
-
-After that, rebuilds are picked up automatically. Without `--link`,
-`haven self install` copies the binary instead. `haven doctor` verifies the
-local wiring.
-
-## Status
-
-The local workflow runs end to end on one machine: items, dependency layers,
-handoffs, lineage, `haven next`/`haven dispatch`, full-text search, artifacts, the generated
-`backlog.md` view, and the MCP server.
-
-Cloud Sync is not part of the public local-first release yet. It remains an
-unfinished private preview; the `auth`/`sync` commands are hidden and require
-`HAVEN_CLOUD_SYNC_PREVIEW=1`.
-
-## Running the Work — and How to Ask for It
-
-Haven work runs one of two ways: you **build it directly**, or you hand a planned graph to the
-**autonomous executor** (`orchestrate-run`). The planning / spec / verify skills compose into
-either. The full picture — when to pick which, and the code-vs-functionality verification split —
-is the bundled skill's `references/running-work.md`.
-
-- **Direct** — the agent builds it in one thread (optionally decomposing and speccing first).
-  Highest quality and your direct oversight; best for a task or a handful.
-
-  > "just fix X" · "add Y" · "plan this change, then build it"
-  > "break the whole `<product>` into a Haven work-graph" — decompose first (`orchestrate-plan`)
-  > "create a context pack for HV-3 and HV-4" — spec a batch (`create-context-pack`)
-
-- **Executor** — `orchestrate-run`: the session becomes a conductor that, per leaf, builds in a
-  git worktree, gates it with a separate fresh verifier, merges to `main`, and loops the ready
-  frontier. Best for many leaves where an inline build would blow the context.
-
-  > "run the build" · "execute the plan" · "work the ready frontier autonomously"
-
-  **Serial today** — it builds **one leaf at a time**; parallel fan-out is built but gated off
-  (HV-85). For a small job, direct is usually the better-quality choice.
+- **[USING-HAVEN.md](USING-HAVEN.md)** — how you drive it all by talking to your AI:
+  the skills, and the kinds of actions they perform.
+- **[DATA-MODEL.md](DATA-MODEL.md)** — what's actually stored: items, edges,
+  acceptance criteria, and the documents you can attach.
+- **[INSTALL.md](INSTALL.md)** — install options, agent setup, updating, the repo
+  workspace, and developing Haven.
 
 ## License
 
-MIT - see [`LICENSE`](LICENSE).
+MIT — see [`LICENSE`](LICENSE).
