@@ -19,10 +19,10 @@ use std::time::Instant;
 use haven_core::{
     telemetry::{self, TelemetryLine},
     Artifact, ArtifactKind, ArtifactRole, ArtifactSelector, CompleteInput, ContextPack, DueUpdate,
-    EdgeKind, Edges, HandoffInput, HavenError, ImportItem, Include, Item, ItemFilter, ItemUpdate,
-    LineageDirection, LineageEvent, NewArtifact, NewItem, NodeType, OwnerKind, OwnerRollup, Result,
-    RollupState, StaleRef, Status, Store, WaitState, WaitUpdate, DEFAULT_DISPATCH_LIMIT,
-    DEFAULT_NEXT_LIMIT,
+    EdgeKind, Edges, ExternalRef, HandoffInput, HavenError, ImportItem, Include, Item, ItemFilter,
+    ItemUpdate, LineageDirection, LineageEvent, NewArtifact, NewItem, NodeType, OwnerKind,
+    OwnerRollup, Result, RollupState, StaleRef, Status, Store, WaitState, WaitUpdate,
+    DEFAULT_DISPATCH_LIMIT, DEFAULT_NEXT_LIMIT,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -568,6 +568,8 @@ fn is_mutating_tool(name: &str) -> bool {
             | "haven_handoff"
             | "haven_complete_item"
             | "haven_import"
+            | "haven_set_extref"
+            | "haven_rm_extref"
     )
 }
 
@@ -705,6 +707,42 @@ fn dispatch_tool(store: &Store, name: &str, a: &Value) -> Result<Value> {
         // backlinks, as one deterministic, sorted report. Read-only; same core
         // method as CLI `haven xref`.
         "haven_xref" => to_value(store.xref(project, req_str(a, "ref")?)?),
+        // Item-level external references (HV-226): the handoff *locator* surface,
+        // distinct from the artifact xref above. `set` upserts a ref by (store,
+        // target) and flips the item to in_progress unless in_progress:false (owner
+        // and wait_state untouched — NOT the ai↔human handoff). `find` is the reverse
+        // lookup from an external id back to its Haven item. Same core methods as CLI
+        // `haven item extref add/rm/find`.
+        "haven_set_extref" => {
+            let eref = ExternalRef {
+                store: req_str(a, "store")?.to_string(),
+                target: req_str(a, "target")?.to_string(),
+                url: opt_str(a, "url").map(String::from),
+                status: opt_str(a, "status").map(String::from),
+                execution_canonical: opt_bool(a, "execution_canonical").unwrap_or(false),
+                note: opt_str(a, "note").map(String::from),
+            };
+            let in_progress = opt_bool(a, "in_progress").unwrap_or(true);
+            let item = store.add_external_ref(project, req_str(a, "ref")?, eref, in_progress)?;
+            to_value(McpItem::full(&item))
+        }
+        "haven_rm_extref" => {
+            let item = store.remove_external_ref(
+                project,
+                req_str(a, "ref")?,
+                req_str(a, "target")?,
+                opt_str(a, "store"),
+            )?;
+            to_value(McpItem::full(&item))
+        }
+        "haven_find_extref" => {
+            let items = store.find_items_by_external_ref(
+                project,
+                req_str(a, "target")?,
+                opt_str(a, "store"),
+            )?;
+            to_value(items.iter().map(McpItem::compact).collect::<Vec<_>>())
+        }
         "haven_get_item" => {
             // HV-152: partial-accept — an invalid `include` rejects only the bad
             // key while honouring the valid ones (no whole-set short-circuit).
@@ -1085,9 +1123,11 @@ fn dispatch_tool(store: &Store, name: &str, a: &Value) -> Result<Value> {
                 from_owner: opt_str(a, "from").map(OwnerKind::parse).transpose()?,
                 to_owner: opt_str(a, "to").map(OwnerKind::parse).transpose()?,
                 created_by: opt_str(a, "by").map(String::from),
-                // No xref write flag yet — xref metadata is authored via the core
-                // NewArtifact path (the read verb + doctor only need read). HV-69.
-                metadata: None,
+                // HV-229: thread `metadata` (incl. the typed xref[] payload) from the
+                // public surface into the core, which validates it — mirrors
+                // haven_add_item. Closes the write gap so artifact xref is authorable
+                // via MCP, not only the in-process NewArtifact path.
+                metadata: a.get("metadata").cloned(),
                 replace: opt_bool(a, "replace").unwrap_or(false),
             };
             to_value(store.add_artifact(project, req_str(a, "ref")?, new)?)
@@ -1384,6 +1424,12 @@ fn tools_list() -> Value {
           "inputSchema": obj(json!({"ref":{"type":"string"},"to":{"type":"string","enum":["human","ai"]},"from":{"type":"string","enum":["human","ai"]},"note":{"type":"string"},"status":{"type":"string"},"wait":{"type":"string","enum":["on_human","on_dependency","on_external"]},"actor":{"type":"string"},"project":{"type":"string"}}), json!(["ref","to"])) },
         { "name": "haven_complete_item", "description": "Mark an item done: record `evidence` as an artifact (default role delivery), set status=done, and return the items/gates this unblocked (newly dispatchable, as compact items). Warns if no acceptance (done_looks_like) was set. The reliable 'I finished this' path — prefer over a bare status update.",
           "inputSchema": obj(json!({"ref":{"type":"string"},"evidence":{"type":"string"},"artifact_role":{"type":"string"},"by":{"type":"string"},"project":{"type":"string"}}), json!(["ref"])) },
+        { "name": "haven_set_extref", "description": "Record (upsert) an item-level external reference — the handoff LOCATOR for work executing in an external PM/dev system (Jira/Linear/GitHub) — at items.metadata.external_refs[]. Distinct from artifact xref (haven_xref, content provenance). Upserts by (store,target). Flips the item to status=in_progress by default (active external execution); pass `in_progress:false` to record the locator without changing status. Leaves owner + wait_state UNTOUCHED — this is NOT the ai↔human handoff. `store`+`target` required; `url`/`status`/`execution_canonical`/`note` optional. Returns the updated item. Per-call `project`.",
+          "inputSchema": obj(json!({"ref":{"type":"string"},"store":{"type":"string"},"target":{"type":"string"},"url":{"type":"string"},"status":{"type":"string"},"execution_canonical":{"type":"boolean"},"note":{"type":"string"},"in_progress":{"type":"boolean"},"project":{"type":"string"}}), json!(["ref","store","target"])) },
+        { "name": "haven_rm_extref", "description": "Remove item-level external reference(s) on an item matching `target` (and optionally `store`) from items.metadata.external_refs[]. Returns the updated item. Per-call `project`.",
+          "inputSchema": obj(json!({"ref":{"type":"string"},"target":{"type":"string"},"store":{"type":"string"},"project":{"type":"string"}}), json!(["ref","target"])) },
+        { "name": "haven_find_extref", "description": "Reverse lookup for reconciliation: every item in the project carrying an external reference whose `target` matches (and optionally `store`) — find the Haven item from an external id (e.g. saw PROJ-123 Done externally). Read-only, compact items. Per-call `project`.",
+          "inputSchema": obj(json!({"target":{"type":"string"},"store":{"type":"string"},"project":{"type":"string"}}), json!(["target"])) },
     ])
 }
 
@@ -1506,8 +1552,10 @@ mod tests {
         assert_eq!(out.len(), 2);
         assert_eq!(out[0]["result"]["serverInfo"]["name"], "haven");
         let tools = out[1]["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 34);
+        assert_eq!(tools.len(), 37);
         assert!(tools.iter().any(|t| t["name"] == "haven_claim"));
+        assert!(tools.iter().any(|t| t["name"] == "haven_set_extref"));
+        assert!(tools.iter().any(|t| t["name"] == "haven_find_extref"));
         assert!(tools.iter().any(|t| t["name"] == "haven_import"));
         assert!(tools.iter().any(|t| t["name"] == "haven_prime"));
         assert!(tools.iter().any(|t| t["name"] == "haven_inbox"));
@@ -3587,5 +3635,138 @@ mod tests {
             "new item omits existing"
         );
         assert_eq!(outcomes[1]["ref"], "HV-2");
+    }
+
+    fn eref(store: &str, target: &str) -> ExternalRef {
+        ExternalRef {
+            store: store.into(),
+            target: target.into(),
+            url: None,
+            status: None,
+            execution_canonical: false,
+            note: None,
+        }
+    }
+
+    #[test]
+    fn set_extref_writes_flips_in_progress_and_telemetry_ok() {
+        let s = store();
+        s.add_item(
+            None,
+            NewItem {
+                title: "ship".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let out = session(
+            &s,
+            &[
+                json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{
+                    "name":"haven_set_extref",
+                    "arguments":{"project":"haven","ref":"HV-1","store":"jira","target":"PROJ-9","url":"https://x/9"}
+                }}),
+            ],
+        );
+        let item = tool_payload(&out[0]);
+        assert_eq!(item["status"], "in_progress");
+        assert_eq!(item["metadata"]["external_refs"][0]["target"], "PROJ-9");
+        // McpItem shape: internal sync fields never ride over MCP.
+        assert!(item.get("public_id").is_none() && item.get("revision").is_none());
+        // The telemetry chokepoint records the call as ok.
+        let line = call_with_telemetry(
+            &s,
+            "haven_set_extref",
+            json!({"project":"haven","ref":"HV-1","store":"jira","target":"PROJ-9"}),
+        );
+        let v = parse_line(&line);
+        assert_eq!(v["tool"], "haven_set_extref");
+        assert_eq!(v["error_class"], "ok");
+    }
+
+    #[test]
+    fn find_extref_locates_item_by_target() {
+        let s = store();
+        for t in ["A", "B"] {
+            s.add_item(
+                None,
+                NewItem {
+                    title: t.into(),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        }
+        s.add_external_ref(None, "HV-2", eref("jira", "PROJ-7"), false)
+            .unwrap();
+        let out = session(
+            &s,
+            &[
+                json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{
+                    "name":"haven_find_extref","arguments":{"project":"haven","target":"PROJ-7"}
+                }}),
+            ],
+        );
+        let matches = tool_payload(&out[0]);
+        let arr = matches.as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["ref"], "HV-2");
+    }
+
+    #[test]
+    fn rm_extref_removes_the_locator() {
+        let s = store();
+        s.add_item(
+            None,
+            NewItem {
+                title: "ship".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        s.add_external_ref(None, "HV-1", eref("jira", "PROJ-9"), false)
+            .unwrap();
+        let out = session(
+            &s,
+            &[
+                json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{
+                    "name":"haven_rm_extref","arguments":{"project":"haven","ref":"HV-1","target":"PROJ-9"}
+                }}),
+            ],
+        );
+        let item = tool_payload(&out[0]);
+        let still_present = item["metadata"]["external_refs"]
+            .as_array()
+            .is_some_and(|a| !a.is_empty());
+        assert!(!still_present, "external ref should be gone: {item}");
+    }
+
+    #[test]
+    fn add_artifact_persists_xref_metadata_and_rejects_malformed() {
+        // HV-229: metadata.xref[] is now writable from the public MCP surface.
+        let s = store();
+        s.add_item(
+            None,
+            NewItem {
+                title: "spec".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let out = session(
+            &s,
+            &[
+                json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"haven_add_artifact","arguments":{
+                    "project":"haven","ref":"HV-1","role":"design","content":"doc","name":"d.md",
+                    "metadata":{"xref":[{"relation":"mirror","store":"github","target":"o/r#1"}]}}}}),
+                json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"haven_add_artifact","arguments":{
+                    "project":"haven","ref":"HV-1","role":"design","content":"x","name":"e.md",
+                    "metadata":{"xref":[{"relation":"bogus","store":"github","target":"o/r#2"}]}}}}),
+            ],
+        );
+        let art = tool_payload(&out[0]);
+        assert_eq!(art["metadata"]["xref"][0]["target"], "o/r#1");
+        // a malformed xref (unknown relation) is rejected on the public path.
+        assert_eq!(out[1]["result"]["isError"], true);
     }
 }

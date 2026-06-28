@@ -91,6 +91,71 @@ pub(crate) fn validate_xref_metadata(meta: &serde_json::Value) -> Result<()> {
     Ok(())
 }
 
+/// Validate the `metadata.external_refs` payload on the **item** write path
+/// (HV-226). The item-level sibling of [`validate_xref_metadata`]: rejects an entry
+/// missing a non-empty `store` or `target`. `url`/`status`/`note` are optional
+/// strings and `execution_canonical` an optional bool; `store` is a free value (an
+/// unrecognized store is only ever a doctor lint, mirroring [`RECOGNIZED_STORES`]
+/// for xref — never a write-time rejection). A metadata object with no
+/// `external_refs` key, or an empty array, is vacuously valid; the whole `metadata`
+/// must be a JSON object (or null).
+pub(crate) fn validate_external_refs(meta: &serde_json::Value) -> Result<()> {
+    if meta.is_null() {
+        return Ok(());
+    }
+    let obj = meta
+        .as_object()
+        .ok_or_else(|| HavenError::Invalid("item metadata must be a JSON object".into()))?;
+    let Some(refs) = obj.get("external_refs") else {
+        return Ok(());
+    };
+    let arr = refs.as_array().ok_or_else(|| {
+        HavenError::Invalid("metadata.external_refs must be an array of objects".into())
+    })?;
+    for (i, entry) in arr.iter().enumerate() {
+        let e = entry.as_object().ok_or_else(|| {
+            HavenError::Invalid(format!("metadata.external_refs[{i}] must be an object"))
+        })?;
+        // `store` — required non-empty string.
+        match e.get("store").and_then(|s| s.as_str()) {
+            Some(s) if !s.trim().is_empty() => {}
+            _ => {
+                return Err(HavenError::Invalid(format!(
+                    "metadata.external_refs[{i}] missing required non-empty `store`"
+                )))
+            }
+        }
+        // `target` — required non-empty string.
+        match e.get("target").and_then(|t| t.as_str()) {
+            Some(t) if !t.trim().is_empty() => {}
+            _ => {
+                return Err(HavenError::Invalid(format!(
+                    "metadata.external_refs[{i}] missing required non-empty `target`"
+                )))
+            }
+        }
+        // `url` / `status` / `note` — when present, must be strings.
+        for key in ["url", "status", "note"] {
+            if let Some(v) = e.get(key) {
+                if !v.is_string() {
+                    return Err(HavenError::Invalid(format!(
+                        "metadata.external_refs[{i}] `{key}` must be a string"
+                    )));
+                }
+            }
+        }
+        // `execution_canonical` — when present, must be a bool.
+        if let Some(c) = e.get("execution_canonical") {
+            if !c.is_boolean() {
+                return Err(HavenError::Invalid(format!(
+                    "metadata.external_refs[{i}] `execution_canonical` must be a boolean"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Whether `target` is shaped like a Haven ref for `prefix` — i.e. `<prefix>-<N>`
 /// with a positive integer (HV-69). Used to decide whether a target is *intended*
 /// as a Haven ref (existence-checked) vs an opaque cross-store locator

@@ -81,6 +81,13 @@ haven item complete <ref> [--evidence "…"] [--role delivery] [--by]
 haven item rank <ref> [--before <ref>] [--after <ref>] [--rationale "…"]
 haven item archive <ref>… [--rationale "…"]  # one or more refs (grooming)
 haven item reopen  <ref> [--rationale "…"]
+# Item-level external references (handoff locator for Jira/Linear/GitHub work — HV-226)
+haven item extref add  <ref> --store <s> --target <t> [--url] [--status] [--canonical] [--note "…"] [--no-in-progress]
+                                            # upsert by (store,target); flips item in_progress unless --no-in-progress;
+                                            # leaves owner/wait untouched (NOT the ai↔human handoff)
+haven item extref list <ref>
+haven item extref rm   <ref> --target <t> [--store <s>]
+haven item extref find       --target <t> [--store <s>]   # reverse lookup: which item carries this external id
 
 # Dispatch
 haven next [--owner human|ai] [--limit N]   # --owner = ASSIGNMENT filter (owner_kind = owner); unassigned (NULL) excluded
@@ -109,8 +116,10 @@ haven search "<query>" [--limit N]
 haven xref <ref>                # cross-store links: outbound xrefs + inbound backlinks (read-only)
 haven artifact add <ref> --role <role> [--file <path> | --content "…"] [--name <f>] [--replace]
                          [--kind] [--uri] [--title] [--excerpt] [--from] [--to] [--by]
+                         [--xref-relation <r> --xref-store <s> --xref-target <t> [--xref-canonical]]
                          # --name sets the destination filename (also for --file);
-                         # --replace overwrites an existing same-path artifact in place
+                         # --replace overwrites an existing same-path artifact in place;
+                         # --xref-* writes a typed metadata.xref[] entry (HV-229)
 haven artifact list <ref> [--role <role>]
 haven artifact get  <ref> [--role <role>] [--path <relpath>]
 haven artifact rm   <ref> (--role <r> | --name <f> | --id <pid>)   # remove row + file
@@ -128,7 +137,7 @@ haven mcp
 
 ## MCP tool catalogue
 
-34 tools, each taking an optional `project` and naming items by `ref` or
+37 tools, each taking an optional `project` and naming items by `ref` or
 `public_id`. Required args in **bold**.
 
 | Tool | Args |
@@ -153,7 +162,7 @@ haven mcp
 | `haven_graph` | `lineage?, all?, include_acceptance?, node_limit?, edge_limit?, lineage_limit?` — bounded MCP graph read (compact nodes + `{kind,from,to}` edges); each node carries a boolean `has_acceptance` flag (the sealed/unsealed signal) instead of the `done_looks_like` prose — pull the text per-node via `haven_get_item`, or pass `include_acceptance:true` to ride it on the nodes in one read (verify/dispatch); live nodes only unless `all`; defaults/hard caps are 100 nodes, 250 edges, 250 lineage links, and the response carries `totals`, `omitted`, `limits`, and `truncated` |
 | `haven_docs` | `project?` — live project-doc anchors and their artifacts |
 | `haven_get_artifact` | **`ref`**, `role?, path?` |
-| `haven_add_artifact` | **`ref`**, **`role`**, `kind?, content?, name?, replace?, path?, uri?, title?, from?, to?, by?` — `name` sets the destination filename (also for `path`); `replace?` overwrites a same-path artifact in place (default: collision is rejected) |
+| `haven_add_artifact` | **`ref`**, **`role`**, `kind?, content?, name?, replace?, path?, uri?, title?, from?, to?, by?, metadata?` — `name` sets the destination filename (also for `path`); `replace?` overwrites a same-path artifact in place (default: collision is rejected); `metadata?` carries the typed `xref[]` payload, validated on write (HV-229 — closed the public write gap) |
 | `haven_rm_artifact` | **`ref`**, one of `role?` \| `name?` \| `id?` — remove an artifact (row + backing file); an ambiguous `role` is refused |
 | `haven_mv_artifact` | **`ref`**, **`new_name`**, one of `role?` \| `name?` \| `id?` — rename the backing file (role/history preserved) |
 | `haven_status` | `project?` |
@@ -167,6 +176,9 @@ haven mcp
 | `haven_claim` | **`ref`**, `owner?` (`human`\|`ai`, default `ai`), `actor?` — atomically set owner + `in_progress` (compare-and-set); errors with a conflict if already claimed/in_progress. Frames `in_progress` as a soft claim |
 | `haven_handoff` | **`ref`**, **`to`** (`human`\|`ai`), `from?, note?, status?, wait?, actor?` — atomic baton-pass |
 | `haven_complete_item` | **`ref`**, `evidence?, artifact_role?, by?` — mark done, record evidence, report what it unblocked (as compact items) |
+| `haven_set_extref` | **`ref`**, **`store`**, **`target`**, `url?, status?, execution_canonical?, note?, in_progress?` — record (upsert by `(store,target)`) an item-level external reference at `items.metadata.external_refs[]`: the handoff LOCATOR for work executing in an external PM/dev system (Jira/Linear/GitHub), distinct from artifact `xref`. Flips the item to `in_progress` by default (`in_progress:false` to skip); leaves owner + wait_state untouched (NOT the ai↔human handoff). Returns the updated item |
+| `haven_rm_extref` | **`ref`**, **`target`**, `store?` — remove external reference(s) matching `target` (and optionally `store`) from the item |
+| `haven_find_extref` | **`target`**, `store?` — reverse lookup: items carrying an external ref with this `target` (reconcile an external id back to its Haven item); read-only, compact items |
 
 ### Item response shapes (compact vs full)
 
@@ -210,6 +222,7 @@ The collapses that catch people out:
 | `artifact rm` / `mv` | `haven_rm_artifact` / `haven_mv_artifact` |
 | `graph` | `haven_graph` |
 | `xref` | `haven_xref` |
+| `item extref add` / `rm` / `find` | `haven_set_extref` / `haven_rm_extref` / `haven_find_extref` (`item extref list` rides `haven_get_item`'s `metadata`) |
 | `docs` | `haven_docs` |
 | `project list` / `add` | `haven_list_projects` / `haven_add_project` |
 | `project list --include-archived` | `haven_list_projects {include_archived: true}` |

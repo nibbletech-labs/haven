@@ -2353,3 +2353,115 @@ fn cli_project_archive_reason_alias_accepted() {
     assert_eq!(arch["status"], "archived");
     assert_eq!(arch["archived_reason"], "alias works");
 }
+
+// ---- item-level external references (HV-226) + artifact xref write (HV-229) ---
+
+fn project_with_items(h: &Haven, n: usize) {
+    h.ok(&[
+        "project", "add", "--key", "haven", "--title", "Haven", "--prefix", "HV",
+    ]);
+    h.ok(&["project", "use", "haven"]);
+    for i in 0..n {
+        h.ok(&["item", "add", &format!("Ship {i}")]);
+    }
+}
+
+#[test]
+fn cli_extref_add_list_find_rm_round_trip() {
+    let h = Haven::new();
+    project_with_items(&h, 2); // HV-1, HV-2
+
+    // add: records the locator AND flips in_progress by default.
+    let added = h.json(&[
+        "item",
+        "extref",
+        "add",
+        "HV-1",
+        "--store",
+        "jira",
+        "--target",
+        "PROJ-9",
+        "--url",
+        "https://x/9",
+        "--canonical",
+    ]);
+    assert_eq!(added["status"], "in_progress");
+    assert_eq!(added["metadata"]["external_refs"][0]["target"], "PROJ-9");
+    assert_eq!(
+        added["metadata"]["external_refs"][0]["execution_canonical"],
+        true
+    );
+
+    // list
+    let list = h.json(&["item", "extref", "list", "HV-1"]);
+    assert_eq!(list.as_array().unwrap().len(), 1);
+    assert_eq!(list[0]["store"], "jira");
+
+    // find: reverse lookup from the external id back to the Haven item.
+    let found = h.json(&["item", "extref", "find", "--target", "PROJ-9"]);
+    let arr = found.as_array().unwrap();
+    assert_eq!(arr.len(), 1);
+    assert_eq!(arr[0]["ref"], "HV-1");
+
+    // rm
+    h.ok(&["item", "extref", "rm", "HV-1", "--target", "PROJ-9"]);
+    assert!(h
+        .json(&["item", "extref", "list", "HV-1"])
+        .as_array()
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
+fn cli_extref_no_in_progress_keeps_status_and_target_required() {
+    let h = Haven::new();
+    project_with_items(&h, 1); // HV-1 (discovery)
+
+    let added = h.json(&[
+        "item",
+        "extref",
+        "add",
+        "HV-1",
+        "--store",
+        "github",
+        "--target",
+        "o/r#1",
+        "--no-in-progress",
+    ]);
+    assert_eq!(added["status"], "discovery");
+
+    // missing --target is a clap usage error (non-zero exit).
+    let out = h
+        .cmd(&["item", "extref", "add", "HV-1", "--store", "jira"])
+        .output()
+        .unwrap();
+    assert!(!out.status.success(), "missing --target should fail");
+}
+
+#[test]
+fn cli_artifact_add_with_xref_round_trips_via_xref_read() {
+    // HV-229: an artifact xref is writable from the public CLI and reads back
+    // through `haven xref`.
+    let h = Haven::new();
+    project_with_items(&h, 1); // HV-1
+    h.ok(&[
+        "artifact",
+        "add",
+        "HV-1",
+        "--role",
+        "design",
+        "--content",
+        "doc",
+        "--name",
+        "d.md",
+        "--xref-relation",
+        "mirror",
+        "--xref-store",
+        "github",
+        "--xref-target",
+        "o/r#1",
+    ]);
+    let report = h.json(&["xref", "HV-1"]);
+    assert_eq!(report["outbound"][0]["target"], "o/r#1");
+    assert_eq!(report["outbound"][0]["relation"], "mirror");
+}

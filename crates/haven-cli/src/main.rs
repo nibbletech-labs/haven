@@ -11,9 +11,9 @@ use std::time::Instant;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use haven_core::{
     telemetry::{self, TelemetryLine},
-    ArtifactKind, ArtifactRole, ArtifactSelector, CompleteInput, DueUpdate, HandoffInput,
-    HavenError, Include, IntegrityKind, ItemFilter, ItemUpdate, LineageDirection, NewArtifact,
-    NewItem, NodeType, OwnerKind, Result, Status, Store, WaitState, WaitUpdate,
+    ArtifactKind, ArtifactRole, ArtifactSelector, CompleteInput, DueUpdate, ExternalRef,
+    HandoffInput, HavenError, Include, IntegrityKind, ItemFilter, ItemUpdate, LineageDirection,
+    NewArtifact, NewItem, NodeType, OwnerKind, Result, Status, Store, WaitState, WaitUpdate,
     DEFAULT_DISPATCH_LIMIT, DEFAULT_NEXT_LIMIT,
 };
 
@@ -428,6 +428,19 @@ struct ArtifactAddArgs {
     /// Optional creator handle.
     #[arg(long)]
     by: Option<String>,
+    /// Cross-store xref relation: canonical-source | mirror | derived-from | discussed-in.
+    /// With --xref-store/--xref-target, writes a `metadata.xref[]` entry (HV-69/HV-229).
+    #[arg(long = "xref-relation")]
+    xref_relation: Option<String>,
+    /// Cross-store xref: the store the target lives in (free string, e.g. github).
+    #[arg(long = "xref-store")]
+    xref_store: Option<String>,
+    /// Cross-store xref: the target locator (a Haven ref or opaque cross-store id).
+    #[arg(long = "xref-target")]
+    xref_target: Option<String>,
+    /// Mark this xref as pointing at the canonical copy.
+    #[arg(long = "xref-canonical")]
+    xref_canonical: bool,
 }
 
 #[derive(Args)]
@@ -597,6 +610,83 @@ enum ItemCmd {
         #[arg(long)]
         rationale: Option<String>,
     },
+    /// Record/list/remove an item's external references (Jira/Linear/GitHub) for
+    /// handed-off work, or find an item by its external target (HV-226).
+    Extref {
+        #[command(subcommand)]
+        cmd: ExtrefCmd,
+    },
+}
+
+/// Item-level external-reference verbs (HV-226). `add` records the structured
+/// locator (and, by default, flips the item to `in_progress`); `find` is the
+/// reverse lookup used to reconcile an external id back to its Haven item.
+#[derive(Subcommand)]
+enum ExtrefCmd {
+    /// Record (upsert) an external reference on an item; marks it in_progress by default.
+    Add(ExtrefAddArgs),
+    /// List the external references on an item.
+    List(ExtrefListArgs),
+    /// Remove external reference(s) on an item matching a target.
+    Rm(ExtrefRmArgs),
+    /// Find items carrying an external reference with a given target.
+    Find(ExtrefFindArgs),
+}
+
+#[derive(Args)]
+struct ExtrefAddArgs {
+    /// The item to record the external reference on (ref or public_id).
+    reference: String,
+    /// External system the work lives in (e.g. jira, linear, github).
+    #[arg(long)]
+    store: String,
+    /// External locator within the store (e.g. PROJ-123, owner/repo#42).
+    #[arg(long)]
+    target: String,
+    /// Optional direct link to the external item.
+    #[arg(long)]
+    url: Option<String>,
+    /// Optional last-observed external status (free text).
+    #[arg(long)]
+    status: Option<String>,
+    /// Mark the external system as canonical for execution (vs a mirror).
+    #[arg(long)]
+    canonical: bool,
+    /// Optional human-readable receipt note kept on the external reference.
+    #[arg(long)]
+    note: Option<String>,
+    /// Record the reference WITHOUT flipping the item to in_progress (by default,
+    /// `extref add` marks the item in_progress for active external execution).
+    #[arg(long = "no-in-progress")]
+    no_in_progress: bool,
+}
+
+#[derive(Args)]
+struct ExtrefListArgs {
+    /// The item whose external references to list (ref or public_id).
+    reference: String,
+}
+
+#[derive(Args)]
+struct ExtrefRmArgs {
+    /// The item to remove external reference(s) from (ref or public_id).
+    reference: String,
+    /// The external target to remove.
+    #[arg(long)]
+    target: String,
+    /// Restrict removal to a specific store (default: any store with this target).
+    #[arg(long)]
+    store: Option<String>,
+}
+
+#[derive(Args)]
+struct ExtrefFindArgs {
+    /// The external target to search for across the project's items.
+    #[arg(long)]
+    target: String,
+    /// Restrict the search to a specific store.
+    #[arg(long)]
+    store: Option<String>,
 }
 
 #[derive(Args)]
@@ -1078,6 +1168,10 @@ fn guard_kind(cmd: &Command) -> GuardKind {
         | Command::Note { .. } => GuardKind::Mutation,
         Command::Item { cmd } => match cmd {
             ItemCmd::List(_) | ItemCmd::Get(_) => GuardKind::Read,
+            ItemCmd::Extref { cmd } => match cmd {
+                ExtrefCmd::List(_) | ExtrefCmd::Find(_) => GuardKind::Read,
+                ExtrefCmd::Add(_) | ExtrefCmd::Rm(_) => GuardKind::Mutation,
+            },
             ItemCmd::Add(_)
             | ItemCmd::Update(_)
             | ItemCmd::Commit { .. }
@@ -1485,6 +1579,39 @@ fn sync_err(e: haven_sync::SyncError) -> HavenError {
     HavenError::Invalid(format!("sync: {e}"))
 }
 
+/// Build the optional `metadata.xref[]` payload from the `artifact add --xref-*`
+/// flags (HV-229). `None` when no xref flag is set. Relation + store + target must
+/// be given together; the core write path then validates the closed relation enum
+/// and non-empty target (`validate_xref_metadata`).
+fn artifact_xref_metadata(
+    relation: Option<&str>,
+    store: Option<&str>,
+    target: Option<&str>,
+    canonical: bool,
+) -> Result<Option<serde_json::Value>> {
+    if relation.is_none() && store.is_none() && target.is_none() && !canonical {
+        return Ok(None);
+    }
+    let (relation, store, target) = match (relation, store, target) {
+        (Some(r), Some(s), Some(t)) => (r, s, t),
+        _ => {
+            return Err(HavenError::Invalid(
+                "artifact xref needs --xref-relation, --xref-store and --xref-target together"
+                    .into(),
+            ))
+        }
+    };
+    let mut entry = serde_json::json!({
+        "relation": relation,
+        "store": store,
+        "target": target,
+    });
+    if canonical {
+        entry["canonical"] = serde_json::json!(true);
+    }
+    Ok(Some(serde_json::json!({ "xref": [entry] })))
+}
+
 fn cmd_artifact(project: Option<&str>, cmd: &ArtifactCmd) -> Result<Output> {
     let s = config::open_store()?;
     match cmd {
@@ -1507,9 +1634,15 @@ fn cmd_artifact(project: Option<&str>, cmd: &ArtifactCmd) -> Result<Output> {
                 from_owner: opt_parse(&a.from, OwnerKind::parse)?,
                 to_owner: opt_parse(&a.to, OwnerKind::parse)?,
                 created_by: a.by.clone(),
-                // No xref write flag yet — xref metadata is authored via the core
-                // NewArtifact path (the read verb + doctor only need read). HV-69.
-                metadata: None,
+                // HV-229: assemble a `metadata.xref[]` entry from the structured
+                // --xref-* flags so an artifact xref is writable from the public CLI
+                // (the core add path validates the closed relation enum + target).
+                metadata: artifact_xref_metadata(
+                    a.xref_relation.as_deref(),
+                    a.xref_store.as_deref(),
+                    a.xref_target.as_deref(),
+                    a.xref_canonical,
+                )?,
                 replace: a.replace,
             };
             Ok(Output::Json(serde_json::to_value(s.add_artifact(
@@ -2667,6 +2800,12 @@ fn item_op_name(cmd: &ItemCmd) -> &'static str {
         ItemCmd::Rank(_) => "item.rank",
         ItemCmd::Archive { .. } => "item.archive",
         ItemCmd::Reopen { .. } => "item.reopen",
+        ItemCmd::Extref { cmd } => match cmd {
+            ExtrefCmd::Add(_) => "item.extref.add",
+            ExtrefCmd::List(_) => "item.extref.list",
+            ExtrefCmd::Rm(_) => "item.extref.rm",
+            ExtrefCmd::Find(_) => "item.extref.find",
+        },
     }
 }
 
@@ -2891,6 +3030,43 @@ fn cmd_item(project: Option<&str>, cmd: &ItemCmd) -> Result<Output> {
             reference,
             rationale.as_deref(),
             None,
+        )?)),
+        ItemCmd::Extref { cmd } => cmd_extref(project, &s, cmd),
+    }
+}
+
+/// `haven item extref …` — the item-level external-reference surface (HV-226).
+fn cmd_extref(project: Option<&str>, s: &Store, cmd: &ExtrefCmd) -> Result<Output> {
+    match cmd {
+        ExtrefCmd::Add(a) => {
+            let eref = ExternalRef {
+                store: a.store.clone(),
+                target: a.target.clone(),
+                url: a.url.clone(),
+                status: a.status.clone(),
+                execution_canonical: a.canonical,
+                note: a.note.clone(),
+            };
+            Ok(Output::Item(s.add_external_ref(
+                project,
+                &a.reference,
+                eref,
+                !a.no_in_progress,
+            )?))
+        }
+        ExtrefCmd::List(a) => Ok(Output::Json(serde_json::to_value(
+            s.list_external_refs(project, &a.reference)?,
+        )?)),
+        ExtrefCmd::Rm(a) => Ok(Output::Item(s.remove_external_ref(
+            project,
+            &a.reference,
+            &a.target,
+            a.store.as_deref(),
+        )?)),
+        ExtrefCmd::Find(a) => Ok(Output::Items(s.find_items_by_external_ref(
+            project,
+            &a.target,
+            a.store.as_deref(),
         )?)),
     }
 }

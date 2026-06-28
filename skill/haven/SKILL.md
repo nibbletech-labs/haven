@@ -307,6 +307,10 @@ haven_claim        {"project":"haven","ref":"HV-1"}        // owner defaults to 
 haven_handoff      {"project":"haven","ref":"HV-1","to":"human",
                     "note":"Implemented; review the rate-limit defaults."}
 haven_complete_item{"project":"haven","ref":"HV-1","evidence":"cargo test: ok"}
+// External-system handoff (HV-226): record the locator for work executing in
+// Jira/Linear/GitHub + flip in_progress (owner/wait untouched — NOT haven_handoff).
+haven_set_extref   {"project":"haven","ref":"HV-1","store":"jira","target":"PROJ-9","url":"https://…"}
+haven_find_extref  {"project":"haven","target":"PROJ-9"}   // reverse lookup: which item carries it
 // Edges, evolve, stale refs.
 haven_add_edge     {"project":"haven","kind":"dependency","from":"HV-2","to":"HV-1"}
 haven_resolve_live {"project":"haven","ref":"HV-9"}   // old ref → live descendant

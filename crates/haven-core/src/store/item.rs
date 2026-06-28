@@ -21,6 +21,21 @@ fn epoch_millis() -> u128 {
         .unwrap_or(0)
 }
 
+/// Parse the `metadata.external_refs[]` array off an item's metadata into typed
+/// [`ExternalRef`]s (HV-226), silently dropping any structurally-malformed entry
+/// (the write path validates, so this is defensive on read). Empty when absent.
+fn parse_external_refs(metadata: &serde_json::Value) -> Vec<ExternalRef> {
+    metadata
+        .get("external_refs")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|e| serde_json::from_value::<ExternalRef>(e.clone()).ok())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// Parameters for `item add`. All fields beyond `title` are optional — the
 /// default is a bare, floating, uncommitted, `discovery` node (SPEC §3).
 #[derive(Debug, Default, Clone)]
@@ -279,6 +294,9 @@ impl Store {
             .metadata
             .clone()
             .unwrap_or_else(|| serde_json::json!({}));
+        // HV-226: an item born with external_refs is validated too, so the
+        // create path can't smuggle a malformed ref past the add/update guard.
+        super::content::validate_external_refs(&metadata)?;
 
         let (node_id, reference) = self.insert_node(
             &tx,
@@ -734,6 +752,156 @@ impl Store {
         }
         tx.commit()?;
         self.get_item(project, selector, &[])
+    }
+
+    /// Load a node's raw `metadata` column as JSON (defaulting to `{}` if somehow
+    /// unparseable). Used by the item-level external-ref read-modify-write path.
+    fn load_node_metadata(&self, node_id: i64) -> Result<serde_json::Value> {
+        let raw: String =
+            self.conn
+                .query_row("SELECT metadata FROM nodes WHERE id = ?1", [node_id], |r| {
+                    r.get(0)
+                })?;
+        Ok(serde_json::from_str(&raw).unwrap_or_else(|_| serde_json::json!({})))
+    }
+
+    /// Record (upsert) an external execution reference on an item's
+    /// `metadata.external_refs[]` (HV-226). Upserts by `(store, target)`: a matching
+    /// entry is replaced (so re-recording refreshes `url`/`status`/…), otherwise the
+    /// ref is appended — multiple distinct refs per item are preserved. With
+    /// `set_in_progress` the item is flipped to `in_progress` in the SAME revision
+    /// (active external execution), while **owner and `wait_state` are left
+    /// untouched** — the deliberate distinction from the ai↔human `handoff` (which
+    /// flips owner) and from `claim`. Bumps `revision`/`sync_state`, so it rides the
+    /// existing item sync with no new sync code.
+    pub fn add_external_ref(
+        &self,
+        project: Option<&str>,
+        selector: &str,
+        eref: ExternalRef,
+        set_in_progress: bool,
+    ) -> Result<Item> {
+        if eref.store.trim().is_empty() {
+            return Err(HavenError::Invalid(
+                "external ref `store` must not be empty".into(),
+            ));
+        }
+        if eref.target.trim().is_empty() {
+            return Err(HavenError::Invalid(
+                "external ref `target` must not be empty".into(),
+            ));
+        }
+        let (project_id, _key) = self.require_project_mut(project)?;
+        let node_id = self.resolve_node_id(project_id, selector)?;
+
+        let mut metadata = self.load_node_metadata(node_id)?;
+        let obj = metadata
+            .as_object_mut()
+            .ok_or_else(|| HavenError::Invalid("item metadata is not a JSON object".into()))?;
+        let arr = obj
+            .entry("external_refs")
+            .or_insert_with(|| serde_json::Value::Array(Vec::new()))
+            .as_array_mut()
+            .ok_or_else(|| HavenError::Invalid("metadata.external_refs must be an array".into()))?;
+        // Upsert by (store, target) — refresh in place, else append.
+        let entry = serde_json::to_value(&eref)?;
+        if let Some(slot) = arr.iter_mut().find(|e| {
+            e.get("store").and_then(|s| s.as_str()) == Some(eref.store.as_str())
+                && e.get("target").and_then(|t| t.as_str()) == Some(eref.target.as_str())
+        }) {
+            *slot = entry;
+        } else {
+            arr.push(entry);
+        }
+        super::content::validate_external_refs(&metadata)?;
+
+        let tx = self.conn.unchecked_transaction()?;
+        let extra_set = if set_in_progress {
+            "status = 'in_progress', "
+        } else {
+            ""
+        };
+        tx.execute(
+            &format!(
+                "UPDATE nodes SET metadata = ?1, {extra_set}revision = revision + 1, \
+                 updated_at = datetime('now'), sync_state = 'local' WHERE id = ?2"
+            ),
+            params![metadata.to_string(), node_id],
+        )?;
+        tx.commit()?;
+        self.get_item(project, selector, &[])
+    }
+
+    /// Remove external reference(s) matching `target` (and optionally `store`) from
+    /// an item's `metadata.external_refs[]` (HV-226). Bumps `revision`/`sync_state`.
+    pub fn remove_external_ref(
+        &self,
+        project: Option<&str>,
+        selector: &str,
+        target: &str,
+        store: Option<&str>,
+    ) -> Result<Item> {
+        let (project_id, _key) = self.require_project_mut(project)?;
+        let node_id = self.resolve_node_id(project_id, selector)?;
+        let mut metadata = self.load_node_metadata(node_id)?;
+        if let Some(arr) = metadata
+            .get_mut("external_refs")
+            .and_then(|v| v.as_array_mut())
+        {
+            arr.retain(|e| {
+                let target_matches = e.get("target").and_then(|t| t.as_str()) == Some(target);
+                let store_matches = store.map_or(true, |want| {
+                    e.get("store").and_then(|s| s.as_str()) == Some(want)
+                });
+                !(target_matches && store_matches)
+            });
+        }
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute(
+            "UPDATE nodes SET metadata = ?1, revision = revision + 1, \
+             updated_at = datetime('now'), sync_state = 'local' WHERE id = ?2",
+            params![metadata.to_string(), node_id],
+        )?;
+        tx.commit()?;
+        self.get_item(project, selector, &[])
+    }
+
+    /// The external references on an item, parsed from `metadata.external_refs[]`
+    /// (HV-226). Empty when none.
+    pub fn list_external_refs(
+        &self,
+        project: Option<&str>,
+        selector: &str,
+    ) -> Result<Vec<ExternalRef>> {
+        let item = self.get_item(project, selector, &[])?;
+        Ok(parse_external_refs(&item.metadata))
+    }
+
+    /// Reverse lookup (HV-226): every item in the project carrying an external ref
+    /// whose `target` matches (and optionally `store`), so an agent can reconcile
+    /// from an external id back to the Haven item. Compact items, ordered by ref.
+    pub fn find_items_by_external_ref(
+        &self,
+        project: Option<&str>,
+        target: &str,
+        store: Option<&str>,
+    ) -> Result<Vec<Item>> {
+        let (project_id, _key) = self.require_project(project)?;
+        let sql = format!("SELECT {ITEM_SELECT} FROM {ITEM_FROM} WHERE n.project_id = ?1");
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map([project_id], item_from_row)?;
+        let mut out = Vec::new();
+        for item in rows {
+            let item = item?;
+            let hit = parse_external_refs(&item.metadata)
+                .iter()
+                .any(|r| r.target == target && store.map_or(true, |want| r.store == want));
+            if hit {
+                out.push(item);
+            }
+        }
+        out.sort_by_key(|i| super::parse_ref(&i.reference).map_or(i64::MAX, |(_, n)| n));
+        Ok(out)
     }
 
     /// Apply the same update to several items in one grooming step ("mark these

@@ -3392,3 +3392,158 @@ fn prime_assembles_all_sections() {
     assert!(block.contains("INBOX (untriaged: 1)"), "block: {block}");
     assert!(block.contains("HV-3"), "inbox floater missing: {block}");
 }
+
+// ---- item-level external references (HV-226) --------------------------------
+
+fn eref(store: &str, target: &str) -> ExternalRef {
+    ExternalRef {
+        store: store.into(),
+        target: target.into(),
+        url: None,
+        status: None,
+        execution_canonical: false,
+        note: None,
+    }
+}
+
+#[test]
+fn external_ref_add_round_trip_and_flips_in_progress() {
+    let s = store();
+    let item = add(&s, "ship X");
+    let updated = s
+        .add_external_ref(
+            None,
+            &item.reference,
+            ExternalRef {
+                store: "jira".into(),
+                target: "PROJ-9".into(),
+                url: Some("https://x/PROJ-9".into()),
+                status: Some("In Progress".into()),
+                execution_canonical: true,
+                note: Some("handed to platform team".into()),
+            },
+            true,
+        )
+        .unwrap();
+    // in_progress flip — but owner + wait_state are deliberately untouched
+    // (the distinction from handoff/claim).
+    assert_eq!(updated.status, Status::InProgress);
+    assert_eq!(updated.owner_kind, None);
+    assert_eq!(updated.wait_state, None);
+
+    let refs = s.list_external_refs(None, &item.reference).unwrap();
+    assert_eq!(refs.len(), 1);
+    assert_eq!(refs[0].store, "jira");
+    assert_eq!(refs[0].target, "PROJ-9");
+    assert!(refs[0].execution_canonical);
+    assert_eq!(refs[0].url.as_deref(), Some("https://x/PROJ-9"));
+    assert_eq!(refs[0].note.as_deref(), Some("handed to platform team"));
+}
+
+#[test]
+fn external_ref_no_in_progress_leaves_status() {
+    let s = store();
+    let item = add(&s, "ship Y"); // born discovery
+    let updated = s
+        .add_external_ref(None, &item.reference, eref("github", "o/r#1"), false)
+        .unwrap();
+    assert_eq!(updated.status, Status::Discovery);
+}
+
+#[test]
+fn external_ref_two_refs_preserved_and_upsert_replaces() {
+    let s = store();
+    let item = add(&s, "ship Z");
+    s.add_external_ref(None, &item.reference, eref("jira", "PROJ-1"), false)
+        .unwrap();
+    s.add_external_ref(None, &item.reference, eref("github", "o/r#2"), false)
+        .unwrap();
+    assert_eq!(
+        s.list_external_refs(None, &item.reference).unwrap().len(),
+        2
+    );
+
+    // Re-recording the same (store,target) upserts in place (refreshes status),
+    // it does not append a third entry.
+    let mut refreshed = eref("jira", "PROJ-1");
+    refreshed.status = Some("Done".into());
+    s.add_external_ref(None, &item.reference, refreshed, false)
+        .unwrap();
+    let refs = s.list_external_refs(None, &item.reference).unwrap();
+    assert_eq!(refs.len(), 2);
+    let jira = refs.iter().find(|r| r.store == "jira").unwrap();
+    assert_eq!(jira.status.as_deref(), Some("Done"));
+}
+
+#[test]
+fn external_ref_requires_store_and_target() {
+    let s = store();
+    let item = add(&s, "ship W");
+    let mut empty_store = eref("", "X");
+    empty_store.store = String::new();
+    assert!(s
+        .add_external_ref(None, &item.reference, empty_store, false)
+        .is_err());
+    assert!(s
+        .add_external_ref(None, &item.reference, eref("jira", "   "), false)
+        .is_err());
+}
+
+#[test]
+fn external_ref_remove_one_of_many() {
+    let s = store();
+    let item = add(&s, "ship R");
+    s.add_external_ref(None, &item.reference, eref("jira", "PROJ-1"), false)
+        .unwrap();
+    s.add_external_ref(None, &item.reference, eref("github", "o/r#3"), false)
+        .unwrap();
+    s.remove_external_ref(None, &item.reference, "PROJ-1", None)
+        .unwrap();
+    let refs = s.list_external_refs(None, &item.reference).unwrap();
+    assert_eq!(refs.len(), 1);
+    assert_eq!(refs[0].store, "github");
+}
+
+#[test]
+fn external_ref_find_by_target_hit_and_miss() {
+    let s = store();
+    let a = add(&s, "A");
+    let b = add(&s, "B");
+    s.add_external_ref(None, &a.reference, eref("jira", "PROJ-7"), false)
+        .unwrap();
+    s.add_external_ref(None, &b.reference, eref("github", "o/r#9"), false)
+        .unwrap();
+
+    let hits = s.find_items_by_external_ref(None, "PROJ-7", None).unwrap();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].reference, a.reference);
+
+    // store-scoped: PROJ-7 is in jira, not github → miss
+    assert!(s
+        .find_items_by_external_ref(None, "PROJ-7", Some("github"))
+        .unwrap()
+        .is_empty());
+    // unknown target → miss
+    assert!(s
+        .find_items_by_external_ref(None, "NOPE-1", None)
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
+fn create_with_malformed_external_ref_is_rejected() {
+    let s = store();
+    // missing required `target`
+    let bad = serde_json::json!({"external_refs": [{"store": "jira"}]});
+    let err = s
+        .add_item(
+            None,
+            NewItem {
+                title: "bad".into(),
+                metadata: Some(bad),
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+    assert!(err.to_string().contains("target"), "got: {err}");
+}

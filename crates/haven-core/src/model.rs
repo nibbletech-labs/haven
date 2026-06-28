@@ -343,6 +343,37 @@ fn is_false(b: &bool) -> bool {
     !*b
 }
 
+/// A first-class **item-level** external execution reference living in
+/// `items.metadata.external_refs[]` (HV-226). Distinct from the artifact-level
+/// [`Xref`]: this is the handoff *locator* for work being executed in an external
+/// PM/dev system (Jira / Linear / GitHub / …), not a content-provenance link — so
+/// it carries `url`/`status`/`execution_canonical` instead of a closed relation
+/// enum, and is the primary way an agent rediscovers/reconciles handed-off work.
+/// Multiple refs per item are allowed (an issue *and* a PR).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ExternalRef {
+    /// The external system the work lives in (`jira` / `linear` / `github` / …) —
+    /// a free string (validated non-empty on write), mirroring [`Xref::store`].
+    pub store: String,
+    /// The external locator within `store` — required, non-empty (e.g. `PROJ-123`,
+    /// `owner/repo#42`). Opaque; Haven never resolves or existence-checks it.
+    pub target: String,
+    /// Optional direct link to the external item.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    /// Optional last-observed status in the external system (free text — Haven does
+    /// not interpret it; reconciliation is user/agent policy).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    /// Whether the external system is canonical for *execution* of this item (vs a
+    /// mirror). Defaults `false`.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub execution_canonical: bool,
+    /// Optional human-readable receipt note kept alongside the structured locator.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
 /// One outbound xref in a [`XrefReport`], carrying the owning artifact's identity
 /// for traceability.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
