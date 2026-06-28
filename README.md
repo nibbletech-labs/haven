@@ -48,6 +48,20 @@ depend on any one of them.
 
 ## Install
 
+### Supported Platforms
+
+| Platform | Prebuilt binary | Homebrew tap | Install script | From source |
+| --- | --- | --- | --- | --- |
+| macOS Apple Silicon | Yes | Yes | Yes | Yes |
+| macOS Intel | Yes | Yes | Yes | Yes |
+| Linux ARM64 | Yes | Yes | Yes | Yes |
+| Linux x64 | Yes | Yes | Yes | Yes |
+| Windows | No | No | No | Not supported yet |
+
+Prebuilt Linux binaries are static musl builds. Platforms without a prebuilt
+binary fall back to source builds when the install script can find a Rust
+toolchain.
+
 **Homebrew:**
 
 ```sh
@@ -66,7 +80,7 @@ curl -fsSL https://raw.githubusercontent.com/nibbletech-labs/haven/main/packagin
 
 It downloads the matching release tarball, verifies its sha256, and installs to
 the first writable of `$HAVEN_BIN_DIR`, `/usr/local/bin`, `~/.local/bin`. Pin a
-version with `HAVEN_VERSION=v0.1.2`. On a platform without a prebuilt binary it
+version with `HAVEN_VERSION=v0.1.4`. On a platform without a prebuilt binary it
 falls back to building from source (needs cargo); force that with
 `--from-source` or `HAVEN_BUILD_FROM_SOURCE=1`.
 

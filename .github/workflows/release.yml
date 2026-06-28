@@ -1,10 +1,11 @@
 name: release
 
-# Tag a version (`git tag v0.1.2 && git push origin v0.1.2`) to build prebuilt
+# Tag a version (`git tag v0.1.4 && git push origin v0.1.4`) to build prebuilt
 # `haven` binaries for macOS (arm64/x64) and Linux (arm64/x64, static musl),
-# package each as a tarball + sha256 sidecar, render a ready-to-paste Homebrew
-# formula, and attach everything to the GitHub Release for the tag. Tags with a
-# pre-release suffix (e.g. v0.1.1-rc.1) publish as a GitHub pre-release.
+# package each as a tarball + sha256 sidecar, publish the GitHub Release with
+# RELEASE_NOTES.md, and push the generated Homebrew formula to
+# nibbletech-labs/homebrew-tap. Tags with a pre-release suffix (e.g.
+# v0.1.1-rc.1) publish as a GitHub pre-release and do not update the stable tap.
 on:
   push:
     tags: ["v*"]
@@ -159,10 +160,36 @@ jobs:
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          name: Haven ${{ github.ref_name }}
           prerelease: ${{ contains(github.ref_name, '-') }}
-          generate_release_notes: true
+          body_path: RELEASE_NOTES.md
           fail_on_unmatched_files: true
           files: |
             dist/haven-*.tar.gz
             dist/haven-*.tar.gz.sha256
             dist/haven.rb
+
+      - name: Update Homebrew tap
+        if: ${{ !contains(github.ref_name, '-') }}
+        shell: bash
+        env:
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TAP_TOKEN}" ]; then
+            echo "::error::HOMEBREW_TAP_TOKEN is required to update nibbletech-labs/homebrew-tap."
+            exit 1
+          fi
+
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git clone "https://x-access-token:${TAP_TOKEN}@github.com/nibbletech-labs/homebrew-tap.git" tap
+          cp dist/haven.rb tap/Formula/haven.rb
+          cd tap
+          git add Formula/haven.rb
+          if git diff --cached --quiet; then
+            echo "Homebrew tap already up to date for ${GITHUB_REF_NAME}."
+          else
+            git commit -m "Update haven formula to ${GITHUB_REF_NAME}"
+            git push origin HEAD:main
+          fi

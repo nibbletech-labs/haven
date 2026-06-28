@@ -9,7 +9,7 @@
 #   ./packaging/install.sh
 #
 # Env:
-#   HAVEN_VERSION=v0.1.2        install a specific release tag (default: latest)
+#   HAVEN_VERSION=v0.1.4        install a specific release tag (default: latest)
 #   HAVEN_BIN_DIR=/path         install dir (else /usr/local/bin, then ~/.local/bin)
 #   HAVEN_BUILD_FROM_SOURCE=1   skip the prebuilt path and compile (needs cargo)
 # Flags:
