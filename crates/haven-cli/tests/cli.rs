@@ -361,8 +361,10 @@ fn skill_install_and_setup_write_the_snapshot() {
     assert!(fresh.home.join(".agents/skills/haven/SKILL.md").exists());
     assert!(!fresh.home.join("AGENTS.md").exists());
     assert_eq!(setup["agents_md"], "skipped (--agents-md not requested)");
-    assert_eq!(setup["current_project"], "haven");
-    assert_eq!(setup["project_created"], true);
+    // A plain `setup` (no --project-key) creates no project — a fresh install
+    // starts with none; one is created when the user first names some work.
+    assert_eq!(setup["current_project"], serde_json::Value::Null);
+    assert_eq!(setup["project_created"], false);
     let codex_config = std::fs::read_to_string(fresh.home.join(".codex/config.toml")).unwrap();
     assert!(codex_config.contains("[mcp_servers.haven]"));
     assert!(codex_config.contains("command = \"haven\""));
@@ -938,22 +940,23 @@ fn doctor_flags_context_pack_tombstone() {
 }
 
 #[test]
-fn setup_can_bootstrap_first_project() {
+fn setup_creates_no_project_by_default_but_can_bootstrap_one() {
+    // A plain `setup` wires up skills/MCP but creates NO project — a fresh install
+    // starts with none. A project is created when the user (or their AI) first
+    // names some work, or up front with `--project-key`.
     let h = Haven::new();
     let out = h.json(&["setup"]);
-    assert_eq!(out["current_project"], "haven");
-    assert_eq!(out["project_created"], true);
+    assert_eq!(out["current_project"], serde_json::Value::Null);
+    assert_eq!(out["project_created"], false);
+    assert_eq!(
+        h.json(&["project", "list"]).as_array().unwrap().len(),
+        0,
+        "plain setup must not create a default project"
+    );
+    // With no current project, item ops fail rather than filing into a default.
+    h.fail(&["item", "add", "First item"]);
 
-    let projects = h.json(&["project", "list"]);
-    assert!(projects
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|p| { p["key"] == "haven" && p["title"] == "Haven" && p["ref_prefix"] == "HV" }));
-
-    let item = h.json(&["item", "add", "First item"]);
-    assert_eq!(item["ref"], "HV-1");
-
+    // doctor is still green on a fresh, project-less install.
     let bin = assert_cmd::cargo::cargo_bin("haven");
     let bindir = bin.parent().unwrap();
     let out = h.cmd(&["doctor"]).env("PATH", bindir).output().unwrap();
@@ -965,9 +968,10 @@ fn setup_can_bootstrap_first_project() {
     let doctor: Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(
         doctor["ok"], true,
-        "fresh setup + first item should leave doctor green: {doctor}"
+        "fresh setup should leave doctor green even with no project: {doctor}"
     );
 
+    // `--project-key` bootstraps and selects a named project up front.
     let custom = Haven::new();
     let out = custom.json(&[
         "setup",
@@ -1244,7 +1248,7 @@ fn unlink_discovers_custom_named_projection_without_name_arg() {
 #[test]
 fn batch_commit_and_archive_take_multiple_refs() {
     let h = Haven::new();
-    h.ok(&["setup"]);
+    h.ok(&["setup", "--project-key", "haven", "--prefix", "HV"]);
     h.json(&["item", "add", "A"]);
     h.json(&["item", "add", "B"]);
     h.json(&["item", "add", "C"]);
@@ -1272,7 +1276,7 @@ fn batch_commit_and_archive_take_multiple_refs() {
 #[test]
 fn item_list_limit_and_offset_slice() {
     let h = Haven::new();
-    h.ok(&["setup"]);
+    h.ok(&["setup", "--project-key", "haven", "--prefix", "HV"]);
     h.json(&["item", "add", "A"]);
     h.json(&["item", "add", "B"]);
     h.json(&["item", "add", "C"]);
@@ -1302,7 +1306,7 @@ fn item_list_limit_and_offset_slice() {
 #[test]
 fn full_lifecycle() {
     let h = Haven::new();
-    h.ok(&["setup"]);
+    h.ok(&["setup", "--project-key", "haven", "--prefix", "HV"]);
 
     // Add a committed, ready, AI-owned item and an uncommitted prereq.
     let item = h.json(&[
@@ -1420,7 +1424,7 @@ fn full_lifecycle() {
 #[test]
 fn error_envelope_and_exit_code() {
     let h = Haven::new();
-    h.ok(&["setup"]);
+    h.ok(&["setup", "--project-key", "haven", "--prefix", "HV"]);
 
     let err = h.fail(&["item", "get", "HV-999"]);
     assert_eq!(err["error"]["code"], "not_found");
@@ -1437,7 +1441,7 @@ fn error_envelope_and_exit_code() {
 #[test]
 fn item_claim_takes_then_clashes() {
     let h = Haven::new();
-    h.ok(&["setup"]);
+    h.ok(&["setup", "--project-key", "haven", "--prefix", "HV"]);
 
     let item = h.json(&[
         "item",
@@ -1476,7 +1480,7 @@ fn item_claim_takes_then_clashes() {
 #[test]
 fn content_layer_artifact_note_render() {
     let h = Haven::new();
-    h.ok(&["setup"]);
+    h.ok(&["setup", "--project-key", "haven", "--prefix", "HV"]);
     h.json(&[
         "item",
         "add",
@@ -1769,7 +1773,14 @@ fn self_update_check_detects_symlinked_haven_bin_dir_as_install_sh() {
 #[test]
 fn backup_now_list_verify_and_restore_round_trip() {
     let h = Haven::new();
-    h.ok(&["setup", "--no-skill"]);
+    h.ok(&[
+        "setup",
+        "--no-skill",
+        "--project-key",
+        "haven",
+        "--prefix",
+        "HV",
+    ]);
     h.json(&["item", "add", "First item"]);
 
     // Take a snapshot now.

@@ -20,9 +20,6 @@ use haven_core::{
 use output::Output;
 
 const CLOUD_SYNC_PREVIEW_ENV: &str = "HAVEN_CLOUD_SYNC_PREVIEW";
-const DEFAULT_PROJECT_KEY: &str = "haven";
-const DEFAULT_PROJECT_TITLE: &str = "Haven";
-const DEFAULT_PROJECT_PREFIX: &str = "HV";
 
 /// Default page size for the CLI `item list` / `inbox` when no `--limit` is given
 /// — parity with the MCP surface, so a CLI-driven agent isn't blown up by a large
@@ -1779,6 +1776,8 @@ fn cmd_setup(
     };
 
     let mut project_created = false;
+    // A fresh install starts with no project — one is created when the user (or
+    // their AI) first names some work. `--project-key` opts into creating one now.
     let current_project = if let Some(key) = project_key {
         ensure_setup_project(
             &s,
@@ -1788,19 +1787,15 @@ fn cmd_setup(
             &mut project_created,
         )?;
         Some(key.to_string())
-    } else if let Some(key) = s.current_project()? {
-        Some(key)
     } else {
-        ensure_setup_project(
-            &s,
-            DEFAULT_PROJECT_KEY,
-            DEFAULT_PROJECT_TITLE,
-            Some(DEFAULT_PROJECT_PREFIX),
-            &mut project_created,
-        )?;
-        Some(DEFAULT_PROJECT_KEY.to_string())
+        s.current_project()?
     };
     let paths = config::resolve()?;
+    let next = if current_project.is_some() {
+        "add items with `haven item add ...`"
+    } else {
+        "create a project with `haven project add ...` (or just ask your AI to track something — it will create one)"
+    };
     let mut out = serde_json::json!({
         "message": "haven local setup complete",
         "root": paths.root.display().to_string(),
@@ -1815,7 +1810,7 @@ fn cmd_setup(
         "current_project": current_project,
         "project_created": project_created,
         "warnings": warnings,
-        "next": "add items with `haven item add ...`",
+        "next": next,
     });
     if cloud_sync_preview_enabled() {
         out["note"] =
