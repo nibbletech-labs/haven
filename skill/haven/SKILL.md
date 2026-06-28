@@ -118,6 +118,12 @@ The mistakes that actually bite — internalise these:
   [--priority N]` — `item update` does *not* take `--commit` (`--commit` exists
   only on `item add`). Over MCP it's the opposite: one tool, `haven_update_item
   {commit: true, …}`. Don't carry one surface's shape to the other.
+- **Explain judgment-driven priority moves.** When you change priority,
+  commitment, or fine rank because you made a product/backlog judgment, pass a
+  short rationale (`--rationale "…"` on CLI `item update --priority`,
+  `item commit`, `item uncommit`, `item rank`; `rationale` on MCP
+  `haven_update_item` / `haven_rank`). Haven records it as lineage so the order
+  still explains itself later.
 - **Over MCP, pass `project` on every call** — there is no sticky session.
 
 ## The one rule that matters most: structure vs content

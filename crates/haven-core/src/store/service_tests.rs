@@ -1963,6 +1963,138 @@ fn rank_is_scoped_to_the_targets_band() {
 }
 
 #[test]
+fn priority_rationale_records_update_lineage_context() {
+    let s = store();
+    let item = s
+        .add_item(
+            None,
+            NewItem {
+                title: "Work".into(),
+                commit: true,
+                priority: Some(2),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    s.update_item(
+        None,
+        &item.reference,
+        ItemUpdate {
+            priority: Some(1),
+            rationale: Some("Needed before the next release".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    let item = s
+        .get_item(None, &item.reference, &[Include::Lineage])
+        .unwrap();
+    let lineage = item.lineage.unwrap();
+    assert_eq!(lineage.len(), 1);
+    assert_eq!(lineage[0].event_type, EventType::Update);
+    assert_eq!(
+        lineage[0].rationale.as_deref(),
+        Some("Needed before the next release")
+    );
+    assert_eq!(lineage[0].from, vec![item.reference.clone()]);
+    assert_eq!(lineage[0].to, vec![item.reference.clone()]);
+    assert_eq!(lineage[0].context["operation"], "priority_update");
+    assert_eq!(lineage[0].context["old_priority"], 2);
+    assert_eq!(lineage[0].context["new_priority"], 1);
+}
+
+#[test]
+fn rank_rationale_records_old_and_new_sort_context() {
+    let s = store();
+    let a = s
+        .add_item(
+            None,
+            NewItem {
+                title: "A".into(),
+                commit: true,
+                priority: Some(1),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let b = s
+        .add_item(
+            None,
+            NewItem {
+                title: "B".into(),
+                commit: true,
+                priority: Some(1),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    s.rank_item_with_rationale(
+        None,
+        &b.reference,
+        Some(&a.reference),
+        None,
+        Some("B is a release blocker"),
+    )
+    .unwrap();
+
+    let item = s.get_item(None, &b.reference, &[Include::Lineage]).unwrap();
+    let event = &item.lineage.as_ref().unwrap()[0];
+    assert_eq!(event.event_type, EventType::Update);
+    assert_eq!(event.rationale.as_deref(), Some("B is a release blocker"));
+    assert_eq!(event.context["operation"], "rank");
+    assert_eq!(event.context["placement"], "before");
+    assert_eq!(event.context["target"], a.reference);
+    assert_eq!(event.context["new_priority"], 1);
+    assert!(event.context.get("new_sort_key").is_some());
+}
+
+#[test]
+fn commit_and_uncommit_rationale_record_lineage_context() {
+    let s = store();
+    let item = add(&s, "Work");
+
+    s.commit_item_with_rationale(
+        None,
+        &item.reference,
+        Some(1),
+        Some("Pull into the current release"),
+    )
+    .unwrap();
+    s.uncommit_item_with_rationale(None, &item.reference, Some("Park until design is ready"))
+        .unwrap();
+
+    let item = s
+        .get_item(None, &item.reference, &[Include::Lineage])
+        .unwrap();
+    let lineage = item.lineage.unwrap();
+    assert_eq!(lineage.len(), 2);
+    assert_eq!(lineage[0].event_type, EventType::Update);
+    assert_eq!(
+        lineage[0].rationale.as_deref(),
+        Some("Pull into the current release")
+    );
+    assert_eq!(lineage[0].context["operation"], "commit");
+    assert_eq!(lineage[0].context["old_committed"], false);
+    assert_eq!(lineage[0].context["new_committed"], true);
+    assert_eq!(lineage[0].context["old_priority"], serde_json::Value::Null);
+    assert_eq!(lineage[0].context["new_priority"], 1);
+
+    assert_eq!(lineage[1].event_type, EventType::Update);
+    assert_eq!(
+        lineage[1].rationale.as_deref(),
+        Some("Park until design is ready")
+    );
+    assert_eq!(lineage[1].context["operation"], "uncommit");
+    assert_eq!(lineage[1].context["old_committed"], true);
+    assert_eq!(lineage[1].context["new_committed"], false);
+    assert_eq!(lineage[1].context["old_priority"], 1);
+    assert_eq!(lineage[1].context["new_priority"], 1);
+}
+
+#[test]
 fn icebox_filter_excludes_committed_and_dead() {
     let s = store();
     let _floating = add(&s, "idea");

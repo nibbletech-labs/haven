@@ -4,6 +4,7 @@
 
 use rusqlite::{params, Row};
 use serde::Serialize;
+use serde_json::Value;
 
 use crate::error::Result;
 use crate::model::*;
@@ -1048,7 +1049,7 @@ impl Store {
     /// Lineage events touching a node (either endpoint), oldest first.
     pub(crate) fn lineage_events_for_node(&self, node_id: i64) -> Result<Vec<LineageEvent>> {
         let mut stmt = self.conn.prepare(
-            "SELECT DISTINCT e.id, e.public_id, e.event_type, e.rationale, e.triggered_by, e.created_at
+            "SELECT DISTINCT e.id, e.public_id, e.event_type, e.rationale, e.triggered_by, e.context, e.created_at
              FROM lineage_events e
              JOIN lineage_edges le ON le.event_id = e.id
              WHERE le.from_node_id = ?1 OR le.to_node_id = ?1
@@ -1112,7 +1113,7 @@ impl Store {
         // Events with at least one endpoint in the reachable set.
         let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
         let mut stmt = self.conn.prepare(&format!(
-            "SELECT DISTINCT e.id, e.public_id, e.event_type, e.rationale, e.triggered_by, e.created_at
+            "SELECT DISTINCT e.id, e.public_id, e.event_type, e.rationale, e.triggered_by, e.context, e.created_at
              FROM lineage_events e
              JOIN lineage_edges le ON le.event_id = e.id
              WHERE le.from_node_id IN ({placeholders}) OR le.to_node_id IN ({placeholders})
@@ -1216,12 +1217,15 @@ impl Store {
 
 /// The non-edge columns of a lineage event (edges filled in by `hydrate_event`).
 fn event_header(r: &Row<'_>) -> rusqlite::Result<LineageEvent> {
+    let context: String = r.get(5)?;
     Ok(LineageEvent {
         public_id: r.get(1)?,
         event_type: r.get(2)?,
         rationale: r.get(3)?,
         triggered_by: r.get(4)?,
-        created_at: r.get(5)?,
+        context: serde_json::from_str(&context)
+            .unwrap_or_else(|_| Value::Object(Default::default())),
+        created_at: r.get(6)?,
         from: Vec::new(),
         to: Vec::new(),
     })

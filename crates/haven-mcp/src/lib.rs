@@ -776,11 +776,12 @@ fn dispatch_tool(store: &Store, name: &str, a: &Value) -> Result<Value> {
         // Fine ordering within a priority band — exposed over MCP so a remote
         // client (phone/web) can reorder conversationally ("put X before Y"),
         // not just shuffle priority bands. Same core op as CLI `item rank`.
-        "haven_rank" => to_value(store.rank_item(
+        "haven_rank" => to_value(store.rank_item_with_rationale(
             project,
             req_str(a, "ref")?,
             opt_str(a, "before"),
             opt_str(a, "after"),
+            opt_str(a, "rationale"),
         )?),
         "haven_add_item" => {
             let new = NewItem {
@@ -820,6 +821,12 @@ fn dispatch_tool(store: &Store, name: &str, a: &Value) -> Result<Value> {
             let reference = req_str(a, "ref")?;
             let commit = opt_bool(a, "commit");
             let priority = opt_i64(a, "priority");
+            let rationale = opt_str(a, "rationale");
+            if rationale.is_some() && commit.is_none() && priority.is_none() {
+                return Err(HavenError::Invalid(
+                    "rationale requires priority or commit on haven_update_item".into(),
+                ));
+            }
             // Maturity/content fields. When we're also committing, let
             // commit_item own `priority` so a single logical change is one write
             // (one revision bump), not two.
@@ -843,6 +850,11 @@ fn dispatch_tool(store: &Store, name: &str, a: &Value) -> Result<Value> {
                 node_type: opt_str(a, "type").map(NodeType::parse).transpose()?,
                 wait,
                 due,
+                rationale: if commit == Some(true) {
+                    None
+                } else {
+                    rationale.map(String::from)
+                },
             };
             let has_update = upd.title.is_some()
                 || upd.body.is_some()
@@ -863,10 +875,10 @@ fn dispatch_tool(store: &Store, name: &str, a: &Value) -> Result<Value> {
             // Commitment axis.
             match commit {
                 Some(true) => {
-                    store.commit_item(project, reference, priority)?;
+                    store.commit_item_with_rationale(project, reference, priority, rationale)?;
                 }
                 Some(false) => {
-                    store.uncommit_item(project, reference)?;
+                    store.uncommit_item_with_rationale(project, reference, rationale)?;
                 }
                 None => {}
             }
@@ -1320,14 +1332,14 @@ fn tools_list() -> Value {
           "inputSchema": obj(json!({"project":{"type":"string"},"owner":{"type":"string","enum":["human","ai"]},"limit":{"type":"integer"},"scope":{"type":"string"},"explain":{"type":"boolean"}}), json!([])) },
         { "name": "haven_next_explain", "description": "Diagnose why the dispatch queue is empty: the dispatchable count plus a per-reason breakdown (owner-mismatch, blocked-by-dependency, waiting, committed-not-ready, ready-but-uncommitted) and a hint. Call when haven_next returns nothing — diagnose, don't invent work.",
           "inputSchema": obj(json!({"project":{"type":"string"},"owner":{"type":"string","enum":["human","ai"]}}), json!([])) },
-        { "name": "haven_rank", "description": "Reorder an item within its priority band: place it immediately before or after another item (exactly one of `before`/`after`). Fine ordering for 'do X before Y' — use `haven_update_item {priority}` for coarse band moves.",
-          "inputSchema": obj(json!({"ref":{"type":"string"},"project":{"type":"string"},"before":{"type":"string"},"after":{"type":"string"}}), json!(["ref"])) },
+        { "name": "haven_rank", "description": "Reorder an item within its priority band: place it immediately before or after another item (exactly one of `before`/`after`). Fine ordering for 'do X before Y' — use `haven_update_item {priority}` for coarse band moves. Pass `rationale` when the ordering judgment should be auditable in lineage.",
+          "inputSchema": obj(json!({"ref":{"type":"string"},"project":{"type":"string"},"before":{"type":"string"},"after":{"type":"string"},"rationale":{"type":"string"}}), json!(["ref"])) },
         { "name": "haven_add_item", "description": "Create a work-graph item (node). `done_looks_like` is the acceptance statement output is verified against; `why` is a one-line provenance trace. `due_at` is an optional deadline as a calendar date YYYY-MM-DD (no time/timezone), validated on write. Pass `if_absent: true` to return an existing live item with the same normalized title (marked `existing: true`) instead of creating a duplicate; responses may carry `similar` — up to 3 live items with overlapping titles (advisory).",
           "inputSchema": obj(json!({"title":{"type":"string"},"project":{"type":"string"},"type":{"type":"string","enum":["task","code","research","data","design","admin","release","phase","gate","anchor"],"description":"Node type. Leaves: task (default), code, research, data, design, admin. Containers (the only valid group targets): release, phase, gate. anchor = a long-lived project-docs / overview node."},"body":{"type":"string"},"done_looks_like":{"type":"string"},"why":{"type":"string"},"due_at":{"type":"string"},"status":{"type":"string","enum":["discovery","definition","ready","in_progress","blocked","done","superseded","archived"]},"priority":{"type":"integer","minimum":0,"maximum":4},"commit":{"type":"boolean"},"assign":{"type":"string","enum":["human","ai"]},"parent":{"type":"string"},"depends_on":{"type":"string"},"group":{"type":"string","description":"Add this new item to a release/phase/gate container (creates a grouping edge from that container to this item)."},"if_absent":{"type":"boolean"}}), json!(["title"])) },
         { "name": "haven_import", "description": "Bulk-add an N-node sub-graph in ONE atomic call — the `haven import` envelope inline. `items` is a JSON array; each element carries the haven_add_item fields (title*, type, body, done_looks_like, why, status, priority, commit, assign) PLUS a temp `id` (file-local, lets siblings reference it) and ref-or-temp-id edge fields `parent` / `depends_on` (array) / `group`. Edge targets may be an existing ref OR a temp id from this batch, including forward references (a target appearing later in the array). All-or-nothing: any failure — a bad edge target, a cycle, a born-engaged item — rolls the WHOLE batch back, ref counter included. `if_absent: true` skips items whose normalized title matches a live item (their temp ids resolve to the match). Like haven_add_item, items cannot be born in an engaged state (status in_progress/blocked/done or commit:true), and a `ready` item needs done_looks_like. Returns one outcome per input item (temp `id` echoed, the created/matched item, and `existing`).",
           "inputSchema": obj(json!({"items":{"type":"array","items":import_item_schema},"if_absent":{"type":"boolean"},"project":{"type":"string"}}), json!(["items"])) },
-        { "name": "haven_update_item", "description": "Update maturity/commitment/ownership/grouping of an item. Set `done_looks_like` (acceptance) when it becomes ready so dispatch can verify against it. `due_at` sets the YYYY-MM-DD deadline (validated on write); pass `\"none\"` to clear it. Pass `group` to add the item to a release/phase/gate container (mirrors haven_add_item). Returns the updated item in full (same shape as haven_get_item). If the ref is superseded/archived the update still applies, but the response carries `stale_ref` {ref, resolved_to} — re-target the live item. To pass the work baton between ai and human (flip owner + record a note + set wait/status atomically), use haven_handoff, not a bare assign/update here.",
-          "inputSchema": obj(json!({"ref":{"type":"string"},"title":{"type":"string"},"body":{"type":"string"},"done_looks_like":{"type":"string"},"why":{"type":"string"},"due_at":{"type":"string"},"status":{"type":"string","enum":["discovery","definition","ready","in_progress","blocked","done","superseded","archived"]},"priority":{"type":"integer","minimum":0,"maximum":4},"type":{"type":"string","enum":["task","code","research","data","design","admin","release","phase","gate","anchor"],"description":"Node type. Leaves: task (default), code, research, data, design, admin. Containers (the only valid group targets): release, phase, gate. anchor = a long-lived project-docs / overview node."},"wait":{"type":"string","enum":["on_human","on_dependency","on_external","none"],"description":"none clears the wait"},"commit":{"type":"boolean"},"assign":{"type":"string","enum":["human","ai"]},"group":{"type":"string","description":"Add this item to a release/phase/gate container (creates a grouping edge from that container to this item). To remove, use haven_add_edge {kind:\"grouping\", remove:true}."},"actor":{"type":"string"},"project":{"type":"string"}}), json!(["ref"])) },
+        { "name": "haven_update_item", "description": "Update maturity/commitment/ownership/grouping of an item. Set `done_looks_like` (acceptance) when it becomes ready so dispatch can verify against it. `due_at` sets the YYYY-MM-DD deadline (validated on write); pass `\"none\"` to clear it. Pass `group` to add the item to a release/phase/gate container (mirrors haven_add_item). Pass `rationale` with `priority` or `commit` when the priority/commitment judgment should be auditable in lineage. Returns the updated item in full (same shape as haven_get_item). If the ref is superseded/archived the update still applies, but the response carries `stale_ref` {ref, resolved_to} — re-target the live item. To pass the work baton between ai and human (flip owner + record a note + set wait/status atomically), use haven_handoff, not a bare assign/update here.",
+          "inputSchema": obj(json!({"ref":{"type":"string"},"title":{"type":"string"},"body":{"type":"string"},"done_looks_like":{"type":"string"},"why":{"type":"string"},"due_at":{"type":"string"},"status":{"type":"string","enum":["discovery","definition","ready","in_progress","blocked","done","superseded","archived"]},"priority":{"type":"integer","minimum":0,"maximum":4},"rationale":{"type":"string"},"type":{"type":"string","enum":["task","code","research","data","design","admin","release","phase","gate","anchor"],"description":"Node type. Leaves: task (default), code, research, data, design, admin. Containers (the only valid group targets): release, phase, gate. anchor = a long-lived project-docs / overview node."},"wait":{"type":"string","enum":["on_human","on_dependency","on_external","none"],"description":"none clears the wait"},"commit":{"type":"boolean"},"assign":{"type":"string","enum":["human","ai"]},"group":{"type":"string","description":"Add this item to a release/phase/gate container (creates a grouping edge from that container to this item). To remove, use haven_add_edge {kind:\"grouping\", remove:true}."},"actor":{"type":"string"},"project":{"type":"string"}}), json!(["ref"])) },
         { "name": "haven_add_edge", "description": "Add (or `remove:true`) a structural edge; direction matters. decomposition: from=parent → to=child. dependency: from=the blocked item → to=its blocker (the prerequisite). grouping: from=container → to=member, and the container (`from`) MUST be a release/phase/gate node. If an endpoint is superseded/archived the edge still forms, but the response carries `stale_ref` {ref, resolved_to} so you can re-point it at the live item.",
           "inputSchema": obj(json!({"kind":{"type":"string","enum":["decomposition","dependency","grouping"]},"from":{"type":"string"},"to":{"type":"string"},"remove":{"type":"boolean"},"project":{"type":"string"}}), json!(["kind","from","to"])) },
         { "name": "haven_evolve", "description": "Evolve items along lineage. `op` (split|merge|supersede) selects the operation, and which other args are required follows from it: split — refs[0] is the source, `into` lists the new child titles; merge — `refs` are the sources, `title` names the NEW node minted to replace them; supersede — refs[0] is the source folded into the EXISTING node named by `with`. So merge MINTS a new node (needs `title`) while supersede points at an existing one (needs `with`).",
@@ -2178,6 +2190,86 @@ mod tests {
         assert_eq!(refs, ["HV-2", "HV-1"]);
         // Missing before/after surfaces as a tool error, not a crash.
         assert_eq!(out[4]["result"]["isError"], true);
+    }
+
+    #[test]
+    fn priority_and_rank_rationale_are_readable_via_lineage() {
+        let s = store();
+        let out = session(
+            &s,
+            &[
+                json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{
+                    "name":"haven_add_item","arguments":{"title":"First","status":"ready","commit":true,"priority":2,"done_looks_like":"it works"}
+                }}),
+                json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{
+                    "name":"haven_add_item","arguments":{"title":"Second","status":"ready","commit":true,"priority":2,"done_looks_like":"it works"}
+                }}),
+                json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{
+                    "name":"haven_update_item","arguments":{"ref":"HV-1","priority":1,"rationale":"Needed for release sequencing"}
+                }}),
+                json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{
+                    "name":"haven_rank","arguments":{"ref":"HV-2","before":"HV-1","rationale":"Second should be first within P2"}
+                }}),
+                json!({"jsonrpc":"2.0","id":5,"method":"tools/call","params":{
+                    "name":"haven_get_item","arguments":{"ref":"HV-1","include":["lineage"]}
+                }}),
+                json!({"jsonrpc":"2.0","id":6,"method":"tools/call","params":{
+                    "name":"haven_get_item","arguments":{"ref":"HV-2","include":["lineage"]}
+                }}),
+                json!({"jsonrpc":"2.0","id":7,"method":"tools/call","params":{
+                    "name":"haven_update_item","arguments":{"ref":"HV-1","commit":false,"priority":3,"rationale":"Park and lower priority"}
+                }}),
+                json!({"jsonrpc":"2.0","id":8,"method":"tools/call","params":{
+                    "name":"haven_get_item","arguments":{"ref":"HV-1","include":["lineage"]}
+                }}),
+            ],
+        );
+
+        assert_eq!(out[2]["result"]["isError"], false);
+        assert_eq!(out[3]["result"]["isError"], false);
+        let priority = tool_payload(&out[4]);
+        assert_eq!(priority["lineage"][0]["event_type"], "update");
+        assert_eq!(
+            priority["lineage"][0]["rationale"],
+            "Needed for release sequencing"
+        );
+        assert_eq!(
+            priority["lineage"][0]["context"]["operation"],
+            "priority_update"
+        );
+        assert_eq!(priority["lineage"][0]["context"]["old_priority"], 2);
+        assert_eq!(priority["lineage"][0]["context"]["new_priority"], 1);
+
+        let rank = tool_payload(&out[5]);
+        assert_eq!(rank["lineage"][0]["event_type"], "update");
+        assert_eq!(
+            rank["lineage"][0]["rationale"],
+            "Second should be first within P2"
+        );
+        assert_eq!(rank["lineage"][0]["context"]["operation"], "rank");
+        assert_eq!(rank["lineage"][0]["context"]["placement"], "before");
+        assert_eq!(rank["lineage"][0]["context"]["target"], "HV-1");
+
+        assert_eq!(out[6]["result"]["isError"], false);
+        let combined = tool_payload(&out[7]);
+        assert_eq!(combined["lineage"].as_array().unwrap().len(), 3);
+        assert_eq!(
+            combined["lineage"][1]["rationale"],
+            "Park and lower priority"
+        );
+        assert_eq!(
+            combined["lineage"][1]["context"]["operation"],
+            "priority_update"
+        );
+        assert_eq!(combined["lineage"][1]["context"]["old_priority"], 1);
+        assert_eq!(combined["lineage"][1]["context"]["new_priority"], 3);
+        assert_eq!(
+            combined["lineage"][2]["rationale"],
+            "Park and lower priority"
+        );
+        assert_eq!(combined["lineage"][2]["context"]["operation"], "uncommit");
+        assert_eq!(combined["lineage"][2]["context"]["old_committed"], true);
+        assert_eq!(combined["lineage"][2]["context"]["new_committed"], false);
     }
 
     #[test]

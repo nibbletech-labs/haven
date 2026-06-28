@@ -559,11 +559,17 @@ enum ItemCmd {
         /// Priority band 0-4. Lower numbers sort first.
         #[arg(long)]
         priority: Option<i64>,
+        /// Why this priority/commitment decision is being made.
+        #[arg(long)]
+        rationale: Option<String>,
     },
     /// Mark one or more items uncommitted. Priority is retained.
     Uncommit {
         #[arg(required = true)]
         references: Vec<String>,
+        /// Why this priority/commitment decision is being made.
+        #[arg(long)]
+        rationale: Option<String>,
     },
     /// Claim an item: set owner + in_progress atomically (errors if already claimed).
     Claim(ItemClaimArgs),
@@ -704,6 +710,9 @@ struct ItemUpdateArgs {
     /// Priority band 0-4. Lower numbers sort first.
     #[arg(long)]
     priority: Option<i64>,
+    /// Why this priority-band decision is being made.
+    #[arg(long)]
+    rationale: Option<String>,
     /// task | code | research | data | design | admin | release | phase | gate | anchor.
     #[arg(long = "type")]
     node_type: Option<String>,
@@ -809,6 +818,9 @@ struct ItemRankArgs {
     /// Place this item after the referenced item.
     #[arg(long)]
     after: Option<String>,
+    /// Why this fine-ordering decision is being made.
+    #[arg(long)]
+    rationale: Option<String>,
 }
 
 #[derive(Args)]
@@ -2765,6 +2777,7 @@ fn cmd_item(project: Option<&str>, cmd: &ItemCmd) -> Result<Output> {
                 node_type: opt_parse(&a.node_type, NodeType::parse)?,
                 wait,
                 due,
+                rationale: a.rationale.clone(),
             };
             Ok(Output::Items(s.update_items(
                 project,
@@ -2775,14 +2788,21 @@ fn cmd_item(project: Option<&str>, cmd: &ItemCmd) -> Result<Output> {
         ItemCmd::Commit {
             references,
             priority,
-        } => Ok(Output::Items(s.commit_items(
+            rationale,
+        } => Ok(Output::Items(s.commit_items_with_rationale(
             project,
             &refs(references),
             *priority,
+            rationale.as_deref(),
         )?)),
-        ItemCmd::Uncommit { references } => {
-            Ok(Output::Items(s.uncommit_items(project, &refs(references))?))
-        }
+        ItemCmd::Uncommit {
+            references,
+            rationale,
+        } => Ok(Output::Items(s.uncommit_items_with_rationale(
+            project,
+            &refs(references),
+            rationale.as_deref(),
+        )?)),
         ItemCmd::Claim(a) => {
             let owner = OwnerKind::parse(&a.owner)?;
             Ok(Output::Item(s.claim(
@@ -2829,11 +2849,12 @@ fn cmd_item(project: Option<&str>, cmd: &ItemCmd) -> Result<Output> {
                 input,
             )?)?))
         }
-        ItemCmd::Rank(a) => Ok(Output::Item(s.rank_item(
+        ItemCmd::Rank(a) => Ok(Output::Item(s.rank_item_with_rationale(
             project,
             &a.reference,
             a.before.as_deref(),
             a.after.as_deref(),
+            a.rationale.as_deref(),
         )?)),
         ItemCmd::Archive {
             references,

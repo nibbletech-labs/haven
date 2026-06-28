@@ -191,6 +191,9 @@ pub struct ItemUpdate {
     /// `None` leaves `due_at` unchanged; `Some(DueUpdate::Set)` sets it (after
     /// boundary validation); `Some(DueUpdate::Clear)` sets it NULL.
     pub due: Option<DueUpdate>,
+    /// Optional decision rationale for a priority-band change. Stored as a
+    /// lineage `update` event when `priority` is set.
+    pub rationale: Option<String>,
 }
 
 /// Filters for `item list`. `committed`/`icebox` are mutually-exclusive views.
@@ -611,6 +614,13 @@ impl Store {
     ) -> Result<Item> {
         let (project_id, _key) = self.require_project_mut(project)?;
         let node_id = self.resolve_node_id(project_id, selector)?;
+        let rationale = upd.rationale.clone();
+
+        if rationale.is_some() && upd.priority.is_none() {
+            return Err(HavenError::Invalid(
+                "update rationale only applies to priority changes".into(),
+            ));
+        }
 
         // HV-80: `ready` requires acceptance. This is the single chokepoint for
         // status→ready (CLI `item update` and MCP `haven_update_item` both route
@@ -683,6 +693,15 @@ impl Store {
         if sets.is_empty() {
             return Err(HavenError::Invalid("update: no fields to change".into()));
         }
+        let before_priority = if rationale.is_some() {
+            Some(self.conn.query_row(
+                "SELECT priority FROM nodes WHERE id = ?1",
+                [node_id],
+                |r| r.get::<_, Option<i64>>(0),
+            )?)
+        } else {
+            None
+        };
         sets.push("revision = revision + 1".into());
         sets.push("updated_at = datetime('now')".into());
         sets.push("sync_state = 'local'".into());
@@ -694,7 +713,26 @@ impl Store {
         );
         args.push(Box::new(node_id));
         let params = rusqlite::params_from_iter(args.iter().map(|b| b.as_ref()));
-        self.conn.execute(&sql, params)?;
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute(&sql, params)?;
+        if let (Some(rationale), Some(old_priority), Some(new_priority)) =
+            (rationale.as_deref(), before_priority, upd.priority)
+        {
+            self.record_event(
+                &tx,
+                project_id,
+                EventType::Update,
+                Some(rationale),
+                None,
+                &serde_json::json!({
+                    "operation": "priority_update",
+                    "old_priority": old_priority,
+                    "new_priority": new_priority,
+                }),
+                &[(node_id, node_id)],
+            )?;
+        }
+        tx.commit()?;
         self.get_item(project, selector, &[])
     }
 
@@ -720,32 +758,103 @@ impl Store {
         selector: &str,
         priority: Option<i64>,
     ) -> Result<Item> {
+        self.commit_item_with_rationale(project, selector, priority, None)
+    }
+
+    /// Commitment axis with an optional decision rationale. When supplied,
+    /// records a lineage `update` event linked to the affected item.
+    pub fn commit_item_with_rationale(
+        &self,
+        project: Option<&str>,
+        selector: &str,
+        priority: Option<i64>,
+        rationale: Option<&str>,
+    ) -> Result<Item> {
         let (project_id, _key) = self.require_project_mut(project)?;
         let node_id = self.resolve_node_id(project_id, selector)?;
+        let (old_committed, old_priority): (bool, Option<i64>) = self.conn.query_row(
+            "SELECT committed, priority FROM nodes WHERE id = ?1",
+            [node_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        let new_priority = priority.or(old_priority);
+        let tx = self.conn.unchecked_transaction()?;
         match priority {
-            Some(p) => self.conn.execute(
+            Some(p) => tx.execute(
                 "UPDATE nodes SET committed = 1, priority = ?1, revision = revision + 1,
                      updated_at = datetime('now'), sync_state = 'local' WHERE id = ?2",
                 params![p, node_id],
             )?,
-            None => self.conn.execute(
+            None => tx.execute(
                 "UPDATE nodes SET committed = 1, revision = revision + 1,
                      updated_at = datetime('now'), sync_state = 'local' WHERE id = ?1",
                 [node_id],
             )?,
         };
+        if let Some(rationale) = rationale {
+            self.record_event(
+                &tx,
+                project_id,
+                EventType::Update,
+                Some(rationale),
+                None,
+                &serde_json::json!({
+                    "operation": "commit",
+                    "old_committed": old_committed,
+                    "new_committed": true,
+                    "old_priority": old_priority,
+                    "new_priority": new_priority,
+                }),
+                &[(node_id, node_id)],
+            )?;
+        }
+        tx.commit()?;
         self.get_item(project, selector, &[])
     }
 
     /// Commitment axis: back to the icebox (floating). Priority is retained.
     pub fn uncommit_item(&self, project: Option<&str>, selector: &str) -> Result<Item> {
+        self.uncommit_item_with_rationale(project, selector, None)
+    }
+
+    /// Commitment axis with an optional decision rationale. Priority is retained.
+    pub fn uncommit_item_with_rationale(
+        &self,
+        project: Option<&str>,
+        selector: &str,
+        rationale: Option<&str>,
+    ) -> Result<Item> {
         let (project_id, _key) = self.require_project_mut(project)?;
         let node_id = self.resolve_node_id(project_id, selector)?;
-        self.conn.execute(
+        let (old_committed, priority): (bool, Option<i64>) = self.conn.query_row(
+            "SELECT committed, priority FROM nodes WHERE id = ?1",
+            [node_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute(
             "UPDATE nodes SET committed = 0, revision = revision + 1,
                  updated_at = datetime('now'), sync_state = 'local' WHERE id = ?1",
             [node_id],
         )?;
+        if let Some(rationale) = rationale {
+            self.record_event(
+                &tx,
+                project_id,
+                EventType::Update,
+                Some(rationale),
+                None,
+                &serde_json::json!({
+                    "operation": "uncommit",
+                    "old_committed": old_committed,
+                    "new_committed": false,
+                    "old_priority": priority,
+                    "new_priority": priority,
+                }),
+                &[(node_id, node_id)],
+            )?;
+        }
+        tx.commit()?;
         self.get_item(project, selector, &[])
     }
 
@@ -758,18 +867,39 @@ impl Store {
         refs: &[&str],
         priority: Option<i64>,
     ) -> Result<Vec<Item>> {
+        self.commit_items_with_rationale(project, refs, priority, None)
+    }
+
+    /// Commit several items, optionally recording the same rationale on each.
+    pub fn commit_items_with_rationale(
+        &self,
+        project: Option<&str>,
+        refs: &[&str],
+        priority: Option<i64>,
+        rationale: Option<&str>,
+    ) -> Result<Vec<Item>> {
         self.validate_refs(project, refs)?;
         refs.iter()
-            .map(|r| self.commit_item(project, r, priority))
+            .map(|r| self.commit_item_with_rationale(project, r, priority, rationale))
             .collect()
     }
 
     /// Uncommit several items at once (validated up front). Returns the updated
     /// items.
     pub fn uncommit_items(&self, project: Option<&str>, refs: &[&str]) -> Result<Vec<Item>> {
+        self.uncommit_items_with_rationale(project, refs, None)
+    }
+
+    /// Uncommit several items, optionally recording the same rationale on each.
+    pub fn uncommit_items_with_rationale(
+        &self,
+        project: Option<&str>,
+        refs: &[&str],
+        rationale: Option<&str>,
+    ) -> Result<Vec<Item>> {
         self.validate_refs(project, refs)?;
         refs.iter()
-            .map(|r| self.uncommit_item(project, r))
+            .map(|r| self.uncommit_item_with_rationale(project, r, rationale))
             .collect()
     }
 
@@ -1058,6 +1188,19 @@ impl Store {
         before: Option<&str>,
         after: Option<&str>,
     ) -> Result<Item> {
+        self.rank_item_with_rationale(project, selector, before, after, None)
+    }
+
+    /// Set `sort_key` with an optional decision rationale. When supplied, records
+    /// a lineage `update` event carrying the old/new rank context.
+    pub fn rank_item_with_rationale(
+        &self,
+        project: Option<&str>,
+        selector: &str,
+        before: Option<&str>,
+        after: Option<&str>,
+        rationale: Option<&str>,
+    ) -> Result<Item> {
         let (project_id, _key) = self.require_project_mut(project)?;
         let node_id = self.resolve_node_id(project_id, selector)?;
         let (target_sel, is_before) = match (before, after) {
@@ -1086,20 +1229,26 @@ impl Store {
                 "anchor nodes cannot be ranked or used as rank targets".into(),
             ));
         }
+        let target_ref = self.node_ref(target_id)?;
 
         // Ensure the target has a key to anchor against. Fetch its priority band
         // too: `sort_key` is fine ordering *within a band* (SPEC §0 Q2), so the
         // gap search is scoped to the target's band — a key from another band must
         // not narrow the gap (it would burn key space without affecting order).
-        let (mut target_key, target_priority): (Option<String>, Option<i64>) =
-            self.conn.query_row(
-                "SELECT sort_key, priority FROM nodes WHERE id = ?1",
-                [target_id],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )?;
+        let tx = self.conn.unchecked_transaction()?;
+        let (old_key, old_priority): (Option<String>, Option<i64>) = tx.query_row(
+            "SELECT sort_key, priority FROM nodes WHERE id = ?1",
+            [node_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        let (mut target_key, target_priority): (Option<String>, Option<i64>) = tx.query_row(
+            "SELECT sort_key, priority FROM nodes WHERE id = ?1",
+            [target_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
         if target_key.is_none() {
             let k = sortkey::between(None, None)?;
-            self.conn.execute(
+            tx.execute(
                 "UPDATE nodes SET sort_key = ?1, revision = revision + 1,
                      updated_at = datetime('now'), sync_state = 'local' WHERE id = ?2",
                 params![k, target_id],
@@ -1112,7 +1261,7 @@ impl Store {
         // excluding the moving node; mint a key in the gap. `priority IS ?4` is
         // SQLite NULL-safe equality, so the unprioritised band matches too.
         let new_key = if is_before {
-            let lower: Option<String> = self.conn.query_row(
+            let lower: Option<String> = tx.query_row(
                 "SELECT max(sort_key) FROM nodes
                  WHERE project_id = ?1 AND sort_key < ?2 AND id <> ?3 AND priority IS ?4",
                 params![project_id, target_key, node_id, target_priority],
@@ -1120,7 +1269,7 @@ impl Store {
             )?;
             sortkey::between(lower.as_deref(), Some(&target_key))?
         } else {
-            let upper: Option<String> = self.conn.query_row(
+            let upper: Option<String> = tx.query_row(
                 "SELECT min(sort_key) FROM nodes
                  WHERE project_id = ?1 AND sort_key > ?2 AND id <> ?3 AND priority IS ?4",
                 params![project_id, target_key, node_id, target_priority],
@@ -1129,11 +1278,32 @@ impl Store {
             sortkey::between(Some(&target_key), upper.as_deref())?
         };
 
-        self.conn.execute(
+        tx.execute(
             "UPDATE nodes SET sort_key = ?1, revision = revision + 1,
                  updated_at = datetime('now'), sync_state = 'local' WHERE id = ?2",
             params![new_key, node_id],
         )?;
+        if let Some(rationale) = rationale {
+            self.record_event(
+                &tx,
+                project_id,
+                EventType::Update,
+                Some(rationale),
+                None,
+                &serde_json::json!({
+                    "operation": "rank",
+                    "placement": if is_before { "before" } else { "after" },
+                    "target": target_ref,
+                    "old_priority": old_priority,
+                    "new_priority": old_priority,
+                    "target_priority": target_priority,
+                    "old_sort_key": old_key,
+                    "new_sort_key": new_key,
+                }),
+                &[(node_id, node_id)],
+            )?;
+        }
+        tx.commit()?;
         self.get_item(project, selector, &[])
     }
 

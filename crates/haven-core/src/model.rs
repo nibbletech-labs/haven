@@ -499,9 +499,15 @@ pub struct LineageEvent {
     pub rationale: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub triggered_by: Option<String>,
+    #[serde(default, skip_serializing_if = "json_is_empty_object")]
+    pub context: serde_json::Value,
     pub created_at: String,
     pub from: Vec<String>,
     pub to: Vec<String>,
+}
+
+fn json_is_empty_object(value: &serde_json::Value) -> bool {
+    matches!(value, serde_json::Value::Object(map) if map.is_empty())
 }
 
 /// The context pack that governs building a leaf: the grouping container that

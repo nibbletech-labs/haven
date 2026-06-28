@@ -133,6 +133,107 @@ fn status_of(report: &Value, name: &str) -> String {
 }
 
 #[test]
+fn cli_priority_and_rank_rationale_round_trip_in_lineage() {
+    let h = Haven::new();
+    h.ok(&[
+        "project", "add", "--key", "haven", "--title", "Haven", "--prefix", "HV",
+    ]);
+    h.ok(&["project", "use", "haven"]);
+    h.ok(&[
+        "item",
+        "add",
+        "First",
+        "--status",
+        "ready",
+        "--done-looks-like",
+        "done",
+        "--commit",
+        "--priority",
+        "2",
+    ]);
+    h.ok(&[
+        "item",
+        "add",
+        "Second",
+        "--status",
+        "ready",
+        "--done-looks-like",
+        "done",
+        "--commit",
+        "--priority",
+        "2",
+    ]);
+
+    h.ok(&[
+        "item",
+        "update",
+        "HV-1",
+        "--priority",
+        "1",
+        "--rationale",
+        "Needed for the release",
+    ]);
+    h.ok(&[
+        "item",
+        "rank",
+        "HV-2",
+        "--before",
+        "HV-1",
+        "--rationale",
+        "Second should lead the band",
+    ]);
+
+    let first = h.json(&["item", "get", "HV-1", "--include", "lineage"]);
+    assert_eq!(first["lineage"][0]["event_type"], "update");
+    assert_eq!(first["lineage"][0]["rationale"], "Needed for the release");
+    assert_eq!(
+        first["lineage"][0]["context"]["operation"],
+        "priority_update"
+    );
+    assert_eq!(first["lineage"][0]["context"]["old_priority"], 2);
+    assert_eq!(first["lineage"][0]["context"]["new_priority"], 1);
+
+    let second = h.json(&["item", "get", "HV-2", "--include", "lineage"]);
+    assert_eq!(second["lineage"][0]["event_type"], "update");
+    assert_eq!(
+        second["lineage"][0]["rationale"],
+        "Second should lead the band"
+    );
+    assert_eq!(second["lineage"][0]["context"]["operation"], "rank");
+    assert_eq!(second["lineage"][0]["context"]["target"], "HV-1");
+
+    h.ok(&["item", "add", "Third"]);
+    h.ok(&[
+        "item",
+        "commit",
+        "HV-3",
+        "--priority",
+        "1",
+        "--rationale",
+        "Bring into scope",
+    ]);
+    h.ok(&[
+        "item",
+        "uncommit",
+        "HV-3",
+        "--rationale",
+        "Park until the blocker clears",
+    ]);
+    let third = h.json(&["item", "get", "HV-3", "--include", "lineage"]);
+    assert_eq!(third["lineage"].as_array().unwrap().len(), 2);
+    assert_eq!(third["lineage"][0]["context"]["operation"], "commit");
+    assert_eq!(third["lineage"][0]["rationale"], "Bring into scope");
+    assert_eq!(third["lineage"][0]["context"]["old_committed"], false);
+    assert_eq!(third["lineage"][0]["context"]["new_priority"], 1);
+    assert_eq!(third["lineage"][1]["context"]["operation"], "uncommit");
+    assert_eq!(
+        third["lineage"][1]["rationale"],
+        "Park until the blocker clears"
+    );
+    assert_eq!(third["lineage"][1]["context"]["old_priority"], 1);
+}
+
+#[test]
 fn skill_install_and_setup_write_the_snapshot() {
     let h = Haven::new();
     let skill_dir = h.home.join(".claude/skills/haven");

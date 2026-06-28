@@ -70,15 +70,15 @@ haven item list [--status] [--type] [--owner] [--committed] [--icebox] [--group 
                 # and an explicit --status archived|superseded still reaches them
 haven item get <ref> [--include edges,artifacts,lineage]
 haven item update <ref>… [--title] [--body] [--done-looks-like "…"] [--why "…"]
-                        [--status] [--priority N] [--type] [--wait]
+                        [--status] [--priority N] [--rationale "…"] [--type] [--wait]
                         [--due-at YYYY-MM-DD|none]   # 1+ refs, same update each; `none` clears due-at
-haven item commit <ref>… [--priority N]      # one or more refs (grooming)
-haven item uncommit <ref>…
+haven item commit <ref>… [--priority N] [--rationale "…"]  # one or more refs (grooming)
+haven item uncommit <ref>… [--rationale "…"]
 haven item claim <ref> [--as ai|human] [--actor <name>]   # atomic: owner + in_progress in one op
 haven item assign <ref> --to human|ai [--actor <name>]
 haven item handoff <ref> --to human|ai [--from] [--note "…"] [--status] [--wait] [--actor]
 haven item complete <ref> [--evidence "…"] [--role delivery] [--by]
-haven item rank <ref> [--before <ref>] [--after <ref>]
+haven item rank <ref> [--before <ref>] [--after <ref>] [--rationale "…"]
 haven item archive <ref>… [--rationale "…"]  # one or more refs (grooming)
 haven item reopen  <ref> [--rationale "…"]
 
@@ -141,10 +141,10 @@ haven mcp
 | `haven_next` | `owner?, limit?` — compact items; `owner` filters ASSIGNMENT (`owner_kind = owner`), unassigned (NULL) excluded |
 | `haven_dispatch` | `owner?, limit?, scope?, explain?` — lean "what should I work on?" briefing: bounded `next` plus targeted candidate detail (`done_looks_like`, parent/group context, blocked dependents, artifact pointers); `scope` restricts candidates to live descendants of a parent/release/phase ref |
 | `haven_next_explain` | `owner?` — diagnose an empty queue (counts by reason + hint) |
-| `haven_rank` | **`ref`**, `before?` \| `after?` (exactly one) — reorder within a priority band (fine ordering) |
+| `haven_rank` | **`ref`**, `before?` \| `after?` (exactly one), `rationale?` — reorder within a priority band (fine ordering) |
 | `haven_add_item` | **`title`**, `type?, body?, done_looks_like?, why?, status?, priority?, commit?, assign?, due_at?, parent?, depends_on?, group?, if_absent?` — with `if_absent` a normalized-title match returns the existing item (`existing: true`); responses may carry advisory `similar` |
 | `haven_import` | **`items`** (array of `{title*, id?, type?, body?, done_looks_like?, why?, status?, priority?, commit?, assign?, parent?, depends_on?, group?}`), `if_absent?` — the `haven import` envelope inline: bulk-add an N-node sub-graph in ONE atomic call (temp-id / forward-ref resolution, all-or-nothing rollback, `if_absent` dedupe). Inherits the born-state guard (no engaged-born / committed item; `ready` needs `done_looks_like`). Returns one outcome per item (`id` echoed, the item, `existing`) |
-| `haven_update_item` | **`ref`**, `title?, body?, done_looks_like?, why?, status?, priority?, type?, wait?, due_at?, commit?, assign?, group?, actor?` (`due_at` accepts `"none"` to clear; `group` adds the item to a release/phase/gate container, mirroring `haven_add_item`). A dead (superseded/archived) `ref` still updates but rides a `stale_ref` hint |
+| `haven_update_item` | **`ref`**, `title?, body?, done_looks_like?, why?, status?, priority?, rationale?, type?, wait?, due_at?, commit?, assign?, group?, actor?` (`due_at` accepts `"none"` to clear; `group` adds the item to a release/phase/gate container, mirroring `haven_add_item`; `rationale` is recorded for `priority` or `commit` changes). A dead (superseded/archived) `ref` still updates but rides a `stale_ref` hint |
 | `haven_add_edge` | **`kind`** (`decomposition`\|`dependency`\|`grouping`), **`from`**, **`to`**, `remove?` — direction: `from→to` is parent→child / blocked→blocker / container→member (the container `from` must be release/phase/gate). A dead endpoint still forms the edge but rides a `stale_ref` hint (re-point it) |
 | `haven_evolve` | **`op`** (`split`\|`merge`\|`supersede`), **`refs`**, `into?, with?, title?, rationale?, by?` |
 | `haven_lineage` | **`ref`**, `direction?, depth?` |
