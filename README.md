@@ -22,13 +22,13 @@ private preview and its commands stay hidden unless
 `HAVEN_CLOUD_SYNC_PREVIEW=1` is explicitly set.
 
 ```sh
-haven setup
+haven setup --project-key my-work --project-title "My Work" --prefix MW
 haven item add "Draft the spec" --status ready --commit --assign ai \
   --done-looks-like "approved by review"
 haven next                          # show ready, unblocked work
 haven dispatch --owner ai --limit 5 # next candidates + targeted context
-haven item get HV-1 --include edges,artifacts,lineage
-haven item assign HV-1 --to human
+haven item get MW-1 --include edges,artifacts,lineage
+haven item assign MW-1 --to human
 haven docs                          # project vision, architecture, and spec anchors
 ```
 
@@ -66,7 +66,7 @@ toolchain.
 
 ```sh
 brew install nibbletech-labs/tap/haven
-haven setup
+haven setup --project-key my-work --project-title "My Work" --prefix MW
 haven item add "First item"
 haven doctor       # verify the install
 ```
@@ -89,7 +89,7 @@ falls back to building from source (needs cargo); force that with
 ```sh
 git clone https://github.com/nibbletech-labs/haven && cd haven
 cargo build --release
-./target/release/haven setup
+./target/release/haven setup --project-key my-work --project-title "My Work" --prefix MW
 ```
 
 > **macOS Gatekeeper:** binaries from `brew` or `curl` run from a terminal are
@@ -105,6 +105,30 @@ project exists. Pass `--project-key`, `--project-title`, and `--prefix` to choos
 your own first project. It does not write files into the current directory unless
 you opt in with `--agents-md`, which writes or refreshes the Haven stanza in the
 current repo's `AGENTS.md`.
+
+## Projects
+
+Every item belongs to a Haven project. A project gives the backlog a namespace
+and an item ref prefix, so a project with `--prefix MW` will create refs such as
+`MW-1`, `MW-2`, and so on.
+
+`haven setup` creates and selects a project for you. If you do not pass project
+details, it creates/selects a default project named `haven` with `HV` refs. For
+real work, it is usually clearer to name the project up front:
+
+```sh
+haven setup --project-key my-work --project-title "My Work" --prefix MW
+```
+
+Later commands use the current project by default. You can switch projects or
+target one command explicitly:
+
+```sh
+haven project add --key website --title "Website" --prefix WEB
+haven project use website
+haven item add "Draft homepage copy"     # creates WEB-1
+haven --project my-work item list        # read another project without switching
+```
 
 Use `haven doctor` to check whether the local pieces are wired correctly.
 

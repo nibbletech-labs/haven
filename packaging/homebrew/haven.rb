@@ -38,9 +38,9 @@ class Haven < Formula
 
   def caveats
     <<~EOS
-      Wire the MCP server + skills and create/select the default first project:
-        haven setup
-      Then check the install:
+      Wire the MCP server + skills and create/select a first project:
+        haven setup --project-key my-work --project-title "My Work" --prefix MW
+      Then add an item and check the install:
         haven item add "First item"
         haven doctor
     EOS
