@@ -45,7 +45,7 @@ cargo build --release
 
 ## What `haven setup` does
 
-`haven setup` is safe to run more than once. Beyond creating `~/.haven` and running migrations, it makes your AI agents Haven-aware: it installs a suite of skills (`haven`, plus the planning and execution skills) into your **user-scope** skills folders (`~/.claude/skills` for Claude, `~/.agents/skills` for Codex) and registers the `haven` MCP server for both. So every new Claude or Codex session, in any repo, already knows how to drive Haven from plain language and can act on it through the MCP tools: no per-project wiring, and a binary upgrade refreshes the skills automatically. A plain `setup` creates **no project**. A fresh install starts with none; pass `--project-key` (with `--project-title` and `--prefix`) to create one up front, or just let your AI create one the first time you ask it to track something. It writes nothing into the current directory unless you opt in with `--agents-md`, which refreshes the Haven stanza in the repo's `AGENTS.md`.
+`haven setup` is safe to run more than once. Beyond creating `~/.haven` and running migrations, it makes your AI agents Haven-aware: it installs a suite of skills (`haven`, plus the planning and execution skills) into your **user-scope** skills folders (`~/.claude/skills` for Claude, `~/.agents/skills` for Codex) and registers the `haven` MCP server for both. So every new Claude or Codex session, in any repo, already knows how to drive Haven from plain language and can act on it through the MCP tools: no per-project wiring, and a binary upgrade refreshes the skills automatically. A plain `setup` creates **no project**. A fresh install starts with none; pass `--project-key` (with `--project-title` and `--prefix`) to create one up front, or just let your AI create one the first time you ask it to track something. It writes nothing into the current directory.
 
 ## Projects
 
@@ -85,7 +85,6 @@ haven self update             # apply the right update for how haven was install
 haven setup --agent codex
 haven setup --agent claude
 haven skill install --agent codex
-haven setup --agents-md   # opt in to repo-local AGENTS.md discovery
 ```
 
 Codex reads MCP servers from `~/.codex/config.toml` or trusted project `.codex/config.toml`. Haven writes this stanza for Codex:

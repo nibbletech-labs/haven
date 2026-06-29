@@ -359,8 +359,6 @@ fn skill_install_and_setup_write_the_snapshot() {
     assert!(setup["skill"].as_str().unwrap().ends_with("skills/haven"));
     assert!(fresh.home.join(".claude/skills/haven/SKILL.md").exists());
     assert!(fresh.home.join(".agents/skills/haven/SKILL.md").exists());
-    assert!(!fresh.home.join("AGENTS.md").exists());
-    assert_eq!(setup["agents_md"], "skipped (--agents-md not requested)");
     // A plain `setup` (no --project-key) creates no project — a fresh install
     // starts with none; one is created when the user first names some work.
     assert_eq!(setup["current_project"], serde_json::Value::Null);
@@ -386,11 +384,6 @@ fn setup_and_doctor_are_stable_across_current_directories() {
     std::fs::create_dir_all(&dir_b).unwrap();
 
     h.json_in_dir(&["setup"], &dir_a);
-    assert!(
-        !dir_a.join("AGENTS.md").exists(),
-        "plain setup must not write cwd-local AGENTS.md"
-    );
-    assert!(!dir_b.join("AGENTS.md").exists());
 
     let bin = assert_cmd::cargo::cargo_bin("haven");
     let bindir = bin.parent().unwrap();
@@ -406,56 +399,9 @@ fn setup_and_doctor_are_stable_across_current_directories() {
         String::from_utf8_lossy(&out.stderr)
     );
     let doctor: Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(status_of(&doctor, "agents_md"), "skip");
     assert_eq!(
         doctor["ok"], true,
         "doctor should stay green from an unrelated cwd: {doctor}"
-    );
-}
-
-#[test]
-fn setup_agents_md_flag_writes_and_updates_repo_stanza() {
-    let h = Haven::new();
-    let repo = h.home.join("repo");
-    let subdir = repo.join("nested");
-    std::fs::create_dir_all(repo.join(".git/info")).unwrap();
-    std::fs::create_dir_all(&subdir).unwrap();
-    std::fs::write(
-        repo.join("AGENTS.md"),
-        "# Existing instructions\n\n<!-- HAVEN:BEGIN -->\nstale\n<!-- HAVEN:END -->\n\nKeep this line.\n",
-    )
-    .unwrap();
-
-    let out = h.json_in_dir(&["setup", "--agents-md"], &subdir);
-    let actual_agents_md = std::path::PathBuf::from(out["agents_md"].as_str().unwrap());
-    assert_eq!(
-        std::fs::canonicalize(actual_agents_md).unwrap(),
-        std::fs::canonicalize(repo.join("AGENTS.md")).unwrap()
-    );
-    let raw = std::fs::read_to_string(repo.join("AGENTS.md")).unwrap();
-    assert!(raw.contains("# Existing instructions"));
-    assert!(raw.contains("Core local verbs:"));
-    assert!(raw.contains("Keep this line."));
-    assert!(!raw.contains("\nstale\n"));
-
-    let bin = assert_cmd::cargo::cargo_bin("haven");
-    let bindir = bin.parent().unwrap();
-    let out = h
-        .cmd(&["doctor"])
-        .current_dir(&subdir)
-        .env("PATH", bindir)
-        .output()
-        .unwrap();
-    assert!(
-        out.status.success(),
-        "doctor failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    let doctor: Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(status_of(&doctor, "agents_md"), "ok");
-    assert_eq!(
-        doctor["ok"], true,
-        "doctor should pass in the linked repo: {doctor}"
     );
 }
 
@@ -850,7 +796,6 @@ fn doctor_reports_install_health() {
     );
     assert_eq!(status_of(&before, "codex_skill_orchestrate-run"), "warn");
     assert_eq!(status_of(&before, "codex_skill_verify-acceptance"), "warn");
-    assert_eq!(status_of(&before, "agents_md"), "skip");
 
     // After setup, MCP + skill are green. Put the built binary on $PATH so the
     // `path` check can resolve `haven` (it isn't there by default in the test env).
@@ -881,7 +826,6 @@ fn doctor_reports_install_health() {
     assert_eq!(status_of(&after, "codex_skill_create-context-pack"), "ok");
     assert_eq!(status_of(&after, "codex_skill_orchestrate-run"), "ok");
     assert_eq!(status_of(&after, "codex_skill_verify-acceptance"), "ok");
-    assert_eq!(status_of(&after, "agents_md"), "skip");
     assert_eq!(status_of(&after, "path"), "ok");
     assert_eq!(
         after["ok"], true,

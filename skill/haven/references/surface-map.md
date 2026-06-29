@@ -299,9 +299,8 @@ must rely on a local CLI or a pre-arranged state:
 ## Agent discovery and setup
 
 `haven setup` wires selected agent integrations. `--agent all` is the default.
-It does not write into the current working directory by default; pass
-`--agents-md` from a repo to write or refresh the agent-agnostic `AGENTS.md`
-Haven stanza there.
+It never writes into the current working directory: discovery is via the
+installed skills plus the registered MCP server, not a repo-local file.
 
 Claude MCP lives in the Claude user config and its skill snapshot lives under
 `~/.claude/skills/haven`. Codex MCP lives in `~/.codex/config.toml` or a trusted

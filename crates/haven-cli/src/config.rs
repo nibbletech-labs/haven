@@ -379,9 +379,6 @@ pub struct InstallCheck {
     pub codex_mcp_registered: bool,
     /// Per-skill snapshot status under `<agents>/skills/<name>/`, keyed by name.
     pub codex_skills: BTreeMap<String, SkillInstallStatus>,
-    pub agents_md_path: Option<PathBuf>,
-    pub agents_md_present: bool,
-    pub agents_md_current: bool,
     /// `haven` resolved on `$PATH` — what the MCP `command: "haven"` stanza needs
     /// to actually launch. `None` if the binary isn't reachable by that name.
     pub haven_on_path: Option<PathBuf>,
@@ -446,15 +443,6 @@ pub fn install_check() -> Result<InstallCheck> {
             },
         );
     }
-    let agents_md_path = discover_agents_md()?;
-    let agents_md = agents_md_path
-        .as_ref()
-        .and_then(|path| std::fs::read_to_string(path).ok());
-    let agents_md_current = agents_md
-        .as_deref()
-        .map(agents_md_has_current_stanza)
-        .unwrap_or(false);
-
     Ok(InstallCheck {
         claude_mcp_config_path,
         claude_mcp_registered,
@@ -462,9 +450,6 @@ pub fn install_check() -> Result<InstallCheck> {
         codex_mcp_config_path,
         codex_mcp_registered,
         codex_skills,
-        agents_md_path,
-        agents_md_present: agents_md.is_some(),
-        agents_md_current,
         haven_on_path: haven_on_path(),
     })
 }
@@ -623,88 +608,6 @@ fn push_toml_table(out: &mut String, header: &str, body: &[&str]) {
         out.push_str(line);
         out.push('\n');
     }
-}
-
-const AGENTS_BEGIN: &str = "<!-- HAVEN:BEGIN -->";
-const AGENTS_END: &str = "<!-- HAVEN:END -->";
-const AGENTS_STANZA: &str = r#"<!-- HAVEN:BEGIN -->
-## Haven
-
-Haven is the canonical project work graph. Use `haven` CLI commands locally, or
-the `haven_*` MCP tools when available. Keep structure in Haven: do not hand-edit
-`backlog.md`; it is a generated projection.
-
-Discovery:
-- Canonical graph/content lives under `~/.haven`.
-- Repo-local `_haven/` is a disposable visible workspace/projection when present.
-- Codex MCP config is `~/.codex/config.toml` or trusted `.codex/config.toml`:
-  `[mcp_servers.haven]` with `command = "haven"` and `args = ["mcp"]`.
-- Codex/Open Agent Skills are read from `.agents/skills`, `~/.agents/skills`, or
-  `/etc/codex/skills`; Claude skills live under `~/.claude/skills`.
-
-Core local verbs:
-- `haven project list` / `haven project use <key>` to select a backlog.
-- `haven item get <ref> --include edges,artifacts,lineage` to inspect work.
-- `haven item add "<title>" --if-absent` to capture without duplicating.
-- `haven next --explain` to diagnose an empty dispatch queue.
-- `haven item complete <ref> --evidence "<proof>"` to finish with evidence.
-<!-- HAVEN:END -->
-"#;
-
-pub fn ensure_agents_md() -> Result<PathBuf> {
-    let path = agents_md_write_path()?;
-    let raw = std::fs::read_to_string(&path).unwrap_or_default();
-    let updated = upsert_marked_block(&raw, AGENTS_BEGIN, AGENTS_END, AGENTS_STANZA);
-    std::fs::write(&path, updated)?;
-    Ok(path)
-}
-
-fn agents_md_write_path() -> Result<PathBuf> {
-    let cwd = std::env::current_dir()?;
-    let root = find_git_dir(cwd.clone())
-        .and_then(|git| git.parent().map(Path::to_path_buf))
-        .unwrap_or(cwd);
-    Ok(root.join("AGENTS.md"))
-}
-
-fn discover_agents_md() -> Result<Option<PathBuf>> {
-    let cwd = std::env::current_dir()?;
-    let path = find_git_dir(cwd.clone())
-        .and_then(|git| git.parent().map(|root| root.join("AGENTS.md")))
-        .unwrap_or_else(|| cwd.join("AGENTS.md"));
-    Ok(path.is_file().then_some(path))
-}
-
-fn agents_md_has_current_stanza(raw: &str) -> bool {
-    raw.contains(AGENTS_STANZA.trim())
-}
-
-fn upsert_marked_block(raw: &str, begin: &str, end: &str, block: &str) -> String {
-    if let Some(start) = raw.find(begin) {
-        if let Some(end_rel) = raw[start..].find(end) {
-            let end_idx = start + end_rel + end.len();
-            let mut out = String::new();
-            out.push_str(raw[..start].trim_end());
-            if !out.is_empty() {
-                out.push_str("\n\n");
-            }
-            out.push_str(block.trim());
-            let suffix = raw[end_idx..].trim_start();
-            if !suffix.is_empty() {
-                out.push_str("\n\n");
-                out.push_str(suffix);
-            }
-            out.push('\n');
-            return out;
-        }
-    }
-    let mut out = raw.trim_end().to_string();
-    if !out.is_empty() {
-        out.push_str("\n\n");
-    }
-    out.push_str(block.trim());
-    out.push('\n');
-    out
 }
 
 pub struct LinkResult {
