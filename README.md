@@ -6,7 +6,7 @@ It's the tool I run my own work through, built over months and many iterations, 
 
 **Haven is currently single-user and not cloud-enabled**. It is driven from the `haven` CLI and a stdio MCP server your AI agents talk to. Multi-user support, cloud or remote sync, and a UI are potential future priorities.
 
-Although Haven is single user, for those in teams your AI can **hand an item off to tools such as Jira, Linear, or GitHub** using available remote endpoints to create the ticket there, recording where it's running, and reconciling status back into Haven, with no integration to wire up. More in [Using Haven](USING-HAVEN.md#hand-work-off-to-your-teams-tools).
+Although Haven is single user, for those in teams your AI can **hand an item off to tools such as Jira, Linear, or GitHub** using available remote endpoints to create the ticket there, recording where it's running, and reconciling status back into Haven, with no integration to wire up. More in [Using Haven](USING-HAVEN.md).
 
 It keeps track of what needs doing, who owns it, what's blocked, what changed, and what's ready to pick up next, useful when a flat TODO list isn't enough:
 
