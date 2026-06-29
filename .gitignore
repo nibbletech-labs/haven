@@ -15,5 +15,13 @@ config.local.toml
 
 # In-house docs — kept local, deliberately not part of the public repo.
 # (See the publish decision: docs/ + STATUS + CLAUDE.md are working-tree only.)
+# AGENTS.md is a local symlink to CLAUDE.md (one orientation doc, two names).
 /docs/
 /CLAUDE.md
+/AGENTS.md
+
+# Haven local state — backlog graph/content + run logs live under the user's
+# ~/.haven; these repo-local projections/markers are disposable and never public.
+/_haven/
+/.haven-project
+/.haven-run/
