@@ -7,7 +7,6 @@ mcp:
   args:
     - mcp
 discovery:
-  agents_md: AGENTS.md
   skill_paths:
     - .agents/skills/orchestrate-plan
     - ~/.agents/skills/orchestrate-plan
