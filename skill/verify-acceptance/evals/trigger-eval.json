@@ -1,0 +1,19 @@
+[
+  {"query": "verify HV-41", "should_trigger": true},
+  {"query": "is HV-12 actually done? check it against its done_looks_like", "should_trigger": true},
+  {"query": "give me a pass/fail verdict on the auth-hardening work", "should_trigger": true},
+  {"query": "the build agent says PF-9 is finished — get an independent judgment before I trust it", "should_trigger": true},
+  {"query": "check whether the diff on the run/HV-30 branch meets the acceptance", "should_trigger": true},
+  {"query": "roll up the v1 release container — does everything under it meet acceptance?", "should_trigger": true},
+  {"query": "run the acceptance gate on this worktree before we merge it", "should_trigger": true},
+  {"query": "does this leaf meet its done_looks_like? if it clearly passes, complete it too", "should_trigger": true},
+
+  {"query": "review this PR for bugs and code quality", "should_trigger": false},
+  {"query": "verify the change works — click through the flow in the app and watch it behave", "should_trigger": false},
+  {"query": "run the test suite and tell me if it's green", "should_trigger": false},
+  {"query": "complete HV-12 with the evidence from the test run", "should_trigger": false},
+  {"query": "the graph's planned — build it batch by batch and merge to main", "should_trigger": false},
+  {"query": "QA the whole app and find any bugs or UX issues", "should_trigger": false},
+  {"query": "firm up the acceptance on HV-7 so it's verifiable later", "should_trigger": false},
+  {"query": "decompose the cloud-sync epic into dispatchable leaves", "should_trigger": false}
+]

@@ -1,0 +1,19 @@
+[
+  {"query": "the perfume plan is decomposed and packed — run the build and get phase 1 shipped", "should_trigger": true},
+  {"query": "execute the haven graph — dispatch whatever's ready for ai and build it to convergence", "should_trigger": true},
+  {"query": "work the backlog autonomously; step around anything waiting on me", "should_trigger": true},
+  {"query": "the plan exists, just build it — worktrees, gates, merges, the loop", "should_trigger": true},
+  {"query": "dispatch the ready frontier and keep merging until nothing's left for the AI", "should_trigger": true},
+  {"query": "autonomously implement the graph for the servo v2 project", "should_trigger": true},
+  {"query": "build phase 1 — batch the ready leaves, gate each one, land them on main", "should_trigger": true},
+  {"query": "resume the run on the haven project — pick up the frontier where it left off", "should_trigger": true},
+
+  {"query": "plan out absolutely everything I'd need to launch the newsletter — nothing exists yet", "should_trigger": false},
+  {"query": "create a context pack for PF-36 and PF-37 so they're build-ready for dev", "should_trigger": false},
+  {"query": "there's a bug in checkout.ts — the cart total doesn't recalculate. can you fix it?", "should_trigger": false},
+  {"query": "verify HV-41 — did the diff actually meet the acceptance?", "should_trigger": false},
+  {"query": "what should I work on next on the scent project?", "should_trigger": false},
+  {"query": "make a plan for the JWKS caching change and I'll approve it before you build", "should_trigger": false},
+  {"query": "mark HV-12 done — I reviewed it and it's fine", "should_trigger": false},
+  {"query": "just build this one ready item for me directly, no ceremony", "should_trigger": false}
+]

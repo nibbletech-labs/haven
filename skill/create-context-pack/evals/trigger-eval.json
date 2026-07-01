@@ -1,0 +1,19 @@
+[
+  {"query": "create a context pack for HV-3 and HV-4 so they're build-ready", "should_trigger": true},
+  {"query": "spec out phase 1 of the perfume-site build — one integrated brief the leaves conform to", "should_trigger": true},
+  {"query": "PF-12, PF-13 and PF-14 all touch the same catalog data model — prep them to be built together", "should_trigger": true},
+  {"query": "ready these three items for dev — they're planned, they just need the shared contracts written down", "should_trigger": true},
+  {"query": "the v1 hardening release members share an API surface — write the cross-cutting spec before anyone builds", "should_trigger": true},
+  {"query": "these five leaves are about to go to the executor as one batch — synthesise the shared foundation and sharpen each acceptance", "should_trigger": true},
+  {"query": "before we dispatch the auth slice, pull the members into one verify-first brief on the phase node", "should_trigger": true},
+  {"query": "HV-86 is groomed but thin — enrich it into a build-ready spec", "should_trigger": true},
+
+  {"query": "break the analytics-platform idea down into a full dependency graph with acceptance criteria", "should_trigger": false},
+  {"query": "the graph's already planned and packed — run the build and merge as you go", "should_trigger": false},
+  {"query": "firm up HV-7's acceptance, it's vague", "should_trigger": false},
+  {"query": "verify HV-41 actually meets its done_looks_like", "should_trigger": false},
+  {"query": "make a plan for adding rate-limiting to the search endpoint", "should_trigger": false},
+  {"query": "this epic is way too coarse — split it into buildable pieces first", "should_trigger": false},
+  {"query": "add these three ideas to the backlog for later", "should_trigger": false},
+  {"query": "write up the architecture decision we just made as a doc on the project", "should_trigger": false}
+]
