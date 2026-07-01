@@ -93,7 +93,11 @@ autonomous path — the real backstop is still the post-build verifier (§ GATE)
   running `build + lint + test` (exit-0) + an independent acceptance judgment, returning a
   **PASS / NEEDS-HUMAN / FAIL** verdict + evidence. **The verifier inherits no skill, so FORWARD the
   contract into its prompt** — read `skill/verify-acceptance` (`SKILL.md` + `references/verdict-contract.md`
-  + `references/evaluation-lens.md`) and inline it; naming the skill reaches nothing. Only **PASS**
+  + `references/evaluation-lens.md`) and inline it; naming the skill reaches nothing. **Trim what you
+  forward to the leaf:** for a code leaf, inline the Mode-1 material only — the independence contract,
+  the verdict definitions, and the lens's code sections (exhaustive walk, 5-category checklist,
+  confidence filter, severity) — and skip the a11y + design-eval lenses unless the leaf's acceptance
+  is user-facing UI; **never** forward `mode2-future.md` (fenced future vocabulary). Only **PASS**
   merges; a **FAIL** keeps the batch in the worktree → failure path (STRIKES below); a **NEEDS-HUMAN**
   escalates straight to `handoff` (ambiguity won't clear on a blind retry). The verifier's
   independence by construction is the load-bearing quality guarantee — deterministic exit-0 alone is

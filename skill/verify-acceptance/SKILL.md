@@ -148,7 +148,8 @@ the verdict). But it trades the human gate, so it is **earned, not assumed**:
   `done_looks_like`, not from the diff alone. This is an **expectation**, not a separate
   tool: a leaf whose `done_looks_like` is a user-facing browser behaviour routes here; a
   code/contract leaf stays in Mode 1. Browser checks use the flake discipline and the
-  **PASS-WITH-ISSUES** middle tier in `references/verdict-contract.md`, judged with the
+  **PASS-WITH-ISSUES** middle tier in `references/mode2-future.md` (fenced future
+  vocabulary — never forwarded for a Mode-1 gate), judged with the
   a11y + design-eval lenses and the severity model in `references/evaluation-lens.md`. The
   retry *engine* is out of v1 scope; the expectation and its contract are stated now.
 

@@ -14,7 +14,7 @@ the three-verdict contract (`references/verdict-contract.md`): a must-fix that b
 acceptance is a **FAIL**, an ambiguity you can't resolve deterministically is a
 **NEEDS-HUMAN**, cosmetic nits ride **PASS** noted in evidence. (For a browser leaf, the
 fuller verdict ladder including the **PASS-WITH-ISSUES** middle tier is in
-`verdict-contract.md` — that tier is browser-only.)
+`mode2-future.md` — browser-only, and future: Mode 2 is not in v1.)
 
 ---
 
@@ -247,4 +247,4 @@ run only the items tagged **[CRITICAL]**; in a full pass, run them all.
 - A **CONCERN** you can't resolve deterministically (ambiguous/under-specified
   acceptance) → **NEEDS-HUMAN**.
 - Severity-1 cosmetics with everything else green → **PASS**, noted in evidence (or, for a
-  browser leaf, **PASS-WITH-ISSUES** per `verdict-contract.md`).
+  browser leaf, **PASS-WITH-ISSUES** per `mode2-future.md` — when Mode 2 exists).

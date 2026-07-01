@@ -118,7 +118,9 @@ attended gate is a human plan-mode "go".
 `references/dispatch-policy.md` § GATE). Inline, from `skill/verify-acceptance`: the
 PASS / NEEDS-HUMAN / FAIL definitions (`references/verdict-contract.md`), the independence rule
 (judge from `done_looks_like` + shared-requirements + diff only), and the exhaustive
-acceptance-clause walk + lens (`references/evaluation-lens.md`). **Collect the verdict explicitly** —
+acceptance-clause walk + lens (`references/evaluation-lens.md`). **Trim to the leaf** (why:
+`references/dispatch-policy.md` § GATE): code leaf → the lens's code sections only, no a11y /
+design-eval material, never `mode2-future.md`. **Collect the verdict explicitly** —
 an idle signal means *fetch the verdict*, never proceed on an absent one.
 
 ## 8. Merge — serialized lock → rebase → re-gate → ff

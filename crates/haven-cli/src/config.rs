@@ -258,6 +258,10 @@ const VERIFY_ACCEPTANCE_SKILL_FILES: &[(&str, &str)] = &[
         include_str!("../../../skill/verify-acceptance/references/evaluation-lens.md"),
     ),
     (
+        "references/mode2-future.md",
+        include_str!("../../../skill/verify-acceptance/references/mode2-future.md"),
+    ),
+    (
         "agents/openai.yaml",
         include_str!("../../../skill/verify-acceptance/agents/openai.yaml"),
     ),
