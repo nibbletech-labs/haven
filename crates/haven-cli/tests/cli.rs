@@ -377,6 +377,40 @@ fn skill_install_and_setup_write_the_snapshot() {
 }
 
 #[test]
+fn skill_install_default_syncs_present_targets_without_creating_absent_ones() {
+    let h = Haven::new();
+    let claude = h.home.join(".claude/skills/haven");
+    let codex = h.home.join(".agents/skills/haven");
+
+    // Fresh machine: the smart default seeds Claude only — it must NOT force-create
+    // a Codex copy that was never there (single-agent setups stay respected).
+    h.ok(&["skill", "install", "--skill", "haven"]);
+    assert!(claude.join("SKILL.md").exists());
+    assert!(
+        !codex.exists(),
+        "bare install must not create an absent codex copy"
+    );
+
+    // Once Codex is explicitly installed it's a target in use...
+    h.ok(&["skill", "install", "--skill", "haven", "--agent", "codex"]);
+    assert!(codex.join("SKILL.md").exists());
+
+    // ...so a BARE reinstall now refreshes BOTH — the regression this guards: the
+    // old claude-only default left the codex copy stale after a rebuild.
+    std::fs::write(claude.join("SKILL.md"), "drifted").unwrap();
+    std::fs::write(codex.join("SKILL.md"), "drifted").unwrap();
+    let out = h.json(&["skill", "install", "--skill", "haven"]);
+    assert!(out["installed"]["claude_haven"].is_string());
+    assert!(out["installed"]["codex_haven"].is_string());
+    assert!(std::fs::read_to_string(claude.join("SKILL.md"))
+        .unwrap()
+        .contains("name: haven"));
+    assert!(std::fs::read_to_string(codex.join("SKILL.md"))
+        .unwrap()
+        .contains("name: haven"));
+}
+
+#[test]
 fn setup_and_doctor_are_stable_across_current_directories() {
     let h = Haven::new();
     let dir_a = h.home.join("dir-a");

@@ -324,6 +324,17 @@ pub fn ensure_codex_skill_installed(skill_name: &str) -> Result<PathBuf> {
     Ok(skill_dir)
 }
 
+/// Which agent skill-dirs already exist for `skill_name`, as `(claude, codex)`.
+/// The smart default of `haven skill install` refreshes exactly the present ones,
+/// so a reinstall can't leave one agent's copy stale — while never creating a dir
+/// that wasn't there (single-agent setups stay respected, the same doctrine as
+/// [`refresh_stale_skill_snapshots`]).
+pub fn skill_target_presence(skill_name: &str) -> Result<(bool, bool)> {
+    let claude = claude_dir()?.join("skills").join(skill_name).is_dir();
+    let codex = agents_dir()?.join("skills").join(skill_name).is_dir();
+    Ok((claude, codex))
+}
+
 fn write_skill_snapshot(skill_name: &str, skill_dir: &Path) -> Result<()> {
     let files = skill_files(skill_name)
         .ok_or_else(|| HavenError::Invalid(format!("unknown skill: {skill_name}")))?;

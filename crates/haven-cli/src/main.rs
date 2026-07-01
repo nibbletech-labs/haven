@@ -299,9 +299,11 @@ enum SyncCmd {
 enum SkillCmd {
     /// Write the embedded skill(s) to the selected agent skill path.
     Install {
-        /// Agent skill target: all, claude, or codex.
-        #[arg(long, value_enum, default_value_t = AgentTarget::Claude)]
-        agent: AgentTarget,
+        /// Agent skill target: all, claude, or codex. Omit it for the smart
+        /// default: refresh every agent whose copy already exists (so a reinstall
+        /// can't leave one stale), seeding Claude if a skill is installed nowhere.
+        #[arg(long, value_enum)]
+        agent: Option<AgentTarget>,
         /// Install only this skill (default: all shipped skills).
         #[arg(long)]
         skill: Option<String>,
@@ -1966,7 +1968,22 @@ fn cmd_skill(cmd: &SkillCmd) -> Result<Output> {
             let mut installed = serde_json::Map::new();
             let mut files = serde_json::Map::new();
             for name in names {
-                if agent.includes_claude() {
+                // Which agent targets to (re)write for this skill?
+                //  - explicit `--agent`: force exactly that target set;
+                //  - default (omitted): refresh every target whose copy already
+                //    exists, so a reinstall can't leave one agent stale — and if
+                //    the skill is installed nowhere, seed Claude as the baseline.
+                //    We never create a target that wasn't there (single-agent
+                //    setups stay respected — the `refresh_stale_skill_snapshots`
+                //    doctrine, now the CLI default too).
+                let (want_claude, want_codex) = match agent {
+                    Some(a) => (a.includes_claude(), a.includes_codex()),
+                    None => match config::skill_target_presence(name)? {
+                        (false, false) => (true, false),
+                        present => present,
+                    },
+                };
+                if want_claude {
                     installed.insert(
                         format!("claude_{name}"),
                         serde_json::json!(config::ensure_skill_installed(name)?
@@ -1974,7 +1991,7 @@ fn cmd_skill(cmd: &SkillCmd) -> Result<Output> {
                             .to_string()),
                     );
                 }
-                if agent.includes_codex() {
+                if want_codex {
                     installed.insert(
                         format!("codex_{name}"),
                         serde_json::json!(config::ensure_codex_skill_installed(name)?
@@ -2338,7 +2355,12 @@ fn doctor_report(store: Result<Store>, paths: &config::Paths) -> Result<serde_js
             let skill_check =
                 |agent: &str, name: &str, st: &config::SkillInstallStatus| -> serde_json::Value {
                     let check_name = format!("{agent}_skill_{name}");
-                    let hint = if agent == "codex" {
+                    // A present-but-stale copy is fixed by the bare `haven skill
+                    // install` (the smart default refreshes every target already on
+                    // disk). A missing copy must be force-created, so for codex it
+                    // needs the explicit `--agent codex`.
+                    let stale_hint = "run `haven skill install`";
+                    let missing_hint = if agent == "codex" {
                         "run `haven skill install --agent codex`"
                     } else {
                         "run `haven skill install`"
@@ -2353,13 +2375,13 @@ fn doctor_report(store: Result<Store>, paths: &config::Paths) -> Result<serde_js
                         check(
                             &check_name,
                             "warn",
-                            format!("installed but stale vs this binary — {hint}"),
+                            format!("installed but stale vs this binary — {stale_hint}"),
                         )
                     } else {
                         check(
                             &check_name,
                             "warn",
-                            format!("missing {} — {hint}", st.missing_files.join(", ")),
+                            format!("missing {} — {missing_hint}", st.missing_files.join(", ")),
                         )
                     }
                 };
