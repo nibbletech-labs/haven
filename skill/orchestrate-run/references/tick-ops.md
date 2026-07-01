@@ -93,16 +93,19 @@ recipe is what the step-7 verifier re-runs independently (`references/dispatch-p
 § self-check); a green global build is not proof a specific leaf's acceptance is met.
 
 **Plan-gate ops (plan-gate on — `references/dispatch-policy.md` § PLAN-GATE).** For a complex /
-ultracode batch the agent writes its plan to the **container** before building; you read it back for
-a **fresh** validator (never the builder). Write (the build agent) / read (you, for the gate):
+ultracode batch a **read-only plan agent** writes its plan to the **container** (6a); you read it
+back for a **fresh** validator that judges the tick's plans **as a whole** (6b). Plan agent writes /
+you read for the gate:
 - CLI: `haven artifact add <CONTAINER> --role scratch --name build-plan.md --content "…" -p <P>` ·
   read: `haven artifact get <CONTAINER> --role scratch --path build-plan.md -p <P>`
 - MCP: `haven_add_artifact {"project":"<P>","ref":"<CONTAINER>","role":"scratch","name":"build-plan.md","content":"…"}` ·
   read: `haven_get_artifact {"project":"<P>","ref":"<CONTAINER>","role":"scratch"}`
 
-On **APPROVE** `SendMessage` the *same* build agent "proceed" (retained context — no re-spawn);
-**REVISE** returns the gaps for a rewrite + re-gate; **REJECT** routes to the failure / replan path.
-A **mechanical** batch skips this and builds directly.
+On **APPROVE** spawn a **fresh** build agent (6c) handed the approved `build-plan.md` as its brief +
+the pack + `done_looks_like` — the coordinator carries the context; the loop keeps no agent alive
+across the gate. **REVISE** re-spawns a plan agent with the gaps + the prior plan to rewrite, then
+re-gate; **REJECT** routes to the failure / replan path. A **mechanical** batch skips this and builds
+directly.
 
 ## 7. Gate — compose the `verify-acceptance` skill (unattended) or plan-mode approval (attended)
 
@@ -161,6 +164,11 @@ The default is the cheap path (record + continue); escalate to reassessment only
 need no replanning at all.
 
 ## Failure path
+
+**Minor vs major first.** A *mechanical / deterministic* issue the verifier fixed inline (§ 7;
+`references/dispatch-policy.md` § GATE) is **not a fail** — no fix-log, no strike, the batch
+proceeds. The steps below are for a **major** fail: the verifier's **fix plan** (a `scratch` note)
+feeds a **fresh fix agent** dispatched through the plan-first pipeline (§ 6), and it takes a strike.
 
 **a. Append a fix-log entry on the batch CONTAINER** (append-only; strikes = entry count):
 - CLI: `haven artifact add <CONTAINER> --role scratch --name fix-log.md --content "<strike N: what failed + gate excerpt>" -p <P>`

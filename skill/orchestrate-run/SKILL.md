@@ -143,35 +143,39 @@ human-gated knowledge promotion — is in `references/executor-discipline.md`.
 5. **CLAIM.** Soft-claim every member of the batch: `haven_update_item {ref,
    status:in_progress}`, one call per leaf. This removes them from `next`, so a re-read
    this same tick won't re-pick them. **Claim before you spawn — never spawn before claim.**
-6. **DISPATCH — plan → validate → build, on one retained-context agent.** Per batch, create
-   an isolated worktree off `main` (`references/worktree-merge.md`) and spawn **one** build agent
-   into it (at BUILD_TIER — `references/dispatch-policy.md` § MODEL_TIERS), **addressable** so you
-   can gate it mid-run without discarding its context. Hand it: the container's `context-pack.md`
-   (`haven_get_artifact {ref:container, role:context-pack}`), the members' `done_looks_like`, the
-   **effort/model** and **gate mode** per `references/dispatch-policy.md`, and — for each leaf — a
-   **2–5 step self-check derived from its `done_looks_like`** (a green global build is not proof a
-   specific leaf's acceptance is met). It is a pure executor: it never touches the graph.
-   - **6a Plan first.** For a complex/ultracode batch (the plan-gate dial —
+6. **DISPATCH — plan → validate-as-a-batch → build, on fresh agents you load with context.** Per
+   batch, create an isolated worktree off `main` (`references/worktree-merge.md`). **You — the
+   coordinator — own the full-context handoff:** a spawned agent knows only what its prompt carries
+   (`references/dispatch-policy.md` § Dispatch-prompt quality), so **synthesise full context into
+   every spawn**; do not rely on any agent staying alive across the gate (in practice the loop
+   spawns fresh at each phase). The plan artifact is the **hand-off medium** between phases, not a
+   recovery shadow.
+   - **6a Plan.** For a complex/ultracode batch (the plan-gate dial —
      `references/dispatch-policy.md` § PLAN-GATE; a **mechanical** batch skips 6a/6b and builds
-     directly), instruct the agent to **produce a build plan, write it as `build-plan.md` on the
-     container** (`role:scratch`, sibling to `fix-log.md` — `references/tick-ops.md` § 6), and
-     **not modify code**, then report and wait. Read-only here is *by instruction*, not a hard
-     sandbox — the accepted trade for retained context.
-   - **6b Plan-gate — fresh eyes, VERIFY_TIER.** Spawn a **separate** validator (never the build
-     agent — a same-context reviewer is structurally blind) given the plan + the pack's shared
-     requirements + each `done_looks_like`, returning **APPROVE / REVISE / REJECT** (criteria:
-     `references/executor-discipline.md` § The build plan). **APPROVE** → `SendMessage` the *same*
-     build agent "proceed". **REVISE** → `SendMessage` the specific gaps; it rewrites
-     `build-plan.md` and you re-gate. **REJECT** (structurally wrong / needs scope it can't
-     self-grant) → it's a Change Request, not a build → failure/replan path, no code written. This
-     AI gate replaces native plan mode's **human** gate on the autonomous path.
-   - **6c Build — retained context.** On APPROVE the same agent builds from its **live planning
-     context**; the `build-plan.md` artifact is the durable shadow (for the gate, for audit, and
-     for crash recovery — step 0), **not** the happy-path build input. It runs its self-check and
-     reports pass/fail + evidence + any **scope finding**. If it discovers its member list is
-     wrong / a dependency is missing, it **surfaces and returns** — never silently overreach or
-     stall (the Change-Request rule); you decide next tick whether to re-pack, re-plan, or adjust
-     the batch.
+     directly), spawn a **read-only plan agent** (BUILD_TIER — § MODEL_TIERS) handed the container's
+     `context-pack.md` (`haven_get_artifact {ref:container, role:context-pack}`), the members'
+     `done_looks_like`, and the envelope. It **produces a build plan, writes it as `build-plan.md`
+     on the container** (`role:scratch` — `references/tick-ops.md` § 6) and does **not** modify
+     code. The plan must pass the synthesis test *on its own* — rich enough that a fresh builder
+     could execute from it plus the pack alone.
+   - **6b Plan-gate — validate the tick's plan(s) as a whole, fresh eyes at VERIFY_TIER.** Once the
+     plans are in, spawn a **separate** validator (never a plan/build agent — a same-context
+     reviewer is structurally blind) over the **plans together**: the whole-set view catches
+     cross-batch conflicts, shared-surface collisions, and duplication *before* any code is written.
+     Per plan it returns **APPROVE / REVISE / REJECT** (criteria: `references/executor-discipline.md`
+     § The build plan). **REVISE** → re-spawn a plan agent with the specific gaps + the prior
+     `build-plan.md` to rewrite, then re-gate. **REJECT** (structurally wrong / needs scope it can't
+     self-grant) → Change Request, not a build → failure/replan path, no code written. This AI gate
+     replaces native plan mode's **human** gate on the autonomous path.
+   - **6c Build.** For each APPROVEd plan, spawn a **fresh** build agent (BUILD_TIER) handed the
+     **full context you synthesised**: the `context-pack.md`, the members' `done_looks_like`, the
+     **approved `build-plan.md` as its primary brief**, and — per leaf — a **2–5 step self-check
+     derived from `done_looks_like`** (a green global build is not proof a specific leaf's
+     acceptance is met). It builds, runs its self-check, reports pass/fail + evidence + any **scope
+     finding**, and never touches the graph. If it finds its member list wrong / a dependency
+     missing, it **surfaces and returns** (the Change-Request rule); you decide next tick whether to
+     re-pack, re-plan, or adjust the batch. A fresh builder isn't context-*starved* — it can re-read
+     the code; the approved plan + your synthesis is what keeps re-exploration cheap.
 7. **GATE — a fresh verifier, not the builder.** Run the gate **inside** the worktree.
    *Unattended:* spawn a **separate verifier agent** given only the leaf's `done_looks_like`
    + the pack's shared requirements + the diff — **not** the build agent's reasoning — which
@@ -185,6 +189,17 @@ human-gated knowledge promotion — is in `references/executor-discipline.md`.
    skill reaches nothing — the spawned agent only knows what its prompt carries; you forward the
    contract, you don't re-implement the judgment. *Attended:* native plan-mode human approval. A
    fail stays in the worktree — nothing merged, siblings untouched → failure path (§ below).
+   - **The verifier may fix MINOR issues inline; MAJOR issues become a planned fix.** A **minor**
+     issue is *mechanical / deterministic* — fmt, lint, a missing import, an obvious typo — where
+     "fixed" is proven by the suite going green, **not** by the verifier's judgment. There the
+     verifier may fix it and re-run `build + lint + test`; independence holds because the check is
+     objective (the compiler/tests, not its opinion), and the fix is re-confirmed at the merge
+     re-gate. A **major** issue — anything behavioral / structural / acceptance-level ("does not
+     meet `done_looks_like`", wrong approach) — the verifier must **not** self-fix (fixing then
+     re-judging its own work is the structural-blindness trap the gate exists to prevent): it writes
+     a **fix plan** and the failure path dispatches a **fresh fix agent** through the same plan-first
+     pipeline (§ below; `references/executor-discipline.md` § Verifier fixes). **When unsure whether
+     it's minor, treat it as major.**
 8. **MERGE (serialized).** Acquire the single merge lock; `rebase` the batch branch onto
    current `main`; **re-run the deterministic gate post-rebase** (catches semantic conflicts
    a clean textual merge hid); only a green re-gate **fast-forwards** to `main`. Rebase
@@ -199,7 +214,7 @@ human-gated knowledge promotion — is in `references/executor-discipline.md`.
    (the pack's "structurally-wrong → re-plan" escape, applied in the *run* loop). Remove
    the worktree; release the lock.
 
-**Collecting a spawned agent's result (build § 6c, plan-gate § 6b, gate § 7).** A spawned agent
+**Collecting a spawned agent's result (plan § 6a, plan-gate § 6b, build § 6c, gate § 7).** A spawned agent
 often signals **idle/complete WITHOUT delivering its final report** — treat the idle signal as
 *"go fetch the report,"* never as the report itself. After any build or validator/verifier agent
 goes idle, **explicitly retrieve and confirm its structured result** (the build self-check outcome
@@ -218,7 +233,12 @@ progress report). Inherited rule — see the haven skill, not restated here.
 
 ## Failure, retry, escalation
 
-A gate-fail is isolated in the worktree (and again post-rebase in the merge lock). On fail:
+A gate-fail is isolated in the worktree (and again post-rebase in the merge lock). **A minor,
+deterministic issue the verifier fixed inline (§ tick 7) is not a fail and not a strike** — the
+suite re-confirmed it and the batch proceeds. A **major** fail (behavioral / structural /
+acceptance-level) is a *planned* fix, not a patch: the verifier's **fix plan** feeds a **fresh fix
+agent** dispatched through the same plan-first pipeline (plan → validate → build → gate, § tick 6),
+which reuses the fix-log + strike machinery below. On a major fail:
 **append a fix-log entry** as an append-only artifact on the **batch container** (graph-
 durable; `metadata` is write-once, so run-state cannot live on the node — and that's a
 feature). **Strikes are derived by counting** fix-log entries — no schema field, same

@@ -117,21 +117,33 @@ Then **wait — do not assume approval.** A build agent that hits a trigger must
 never silently stall. You — the single orchestrator — decide on the next tick whether
 to re-pack, re-plan, or adjust the member list. No self-granted scope expansion, ever.
 
-## The build plan — plan-first, validated before build
+## The build plan — plan-first, validated (as a batch) before build
 
 For a complex / ultracode batch (the plan-gate dial — `references/dispatch-policy.md` § PLAN-GATE),
-the build agent **plans before it writes code**, and a **fresh validator** (VERIFY_TIER, never the
-builder) approves that plan first. This is an **AI** gate, not native plan mode's human gate — so the
-planning phase is read-only *by instruction* ("do not modify code until I approve"), not a hard
-sandbox. The accepted trade buys the thing that matters most: the agent that planned is the agent
-that builds, so the **full planning context is retained** (a plan doc is a lossy compression of it).
+a **read-only plan agent** produces a build plan and a **fresh validator** (VERIFY_TIER, never a
+plan/build agent) approves it **before any code is written**. This is an **AI** gate, not native
+plan mode's human gate — so the planning phase is read-only *by instruction* ("do not modify code
+until approved"), not a hard sandbox.
+
+**Plan and build are separate fresh agents — context is the coordinator's job, not the agent's.**
+The loop does **not** keep one agent alive across the gate (in a real run the coordinator collects
+the tick's plans, validates them as a whole, then dispatches builders). So the fix for "a fresh
+builder lost the planner's reasoning" is **not** agent continuity — it is (a) a plan rich enough to
+pass the synthesis test *on its own*, and (b) the coordinator synthesising full context into the
+build spawn (`references/dispatch-policy.md` § Dispatch-prompt quality). A fresh builder isn't
+context-*starved*: it can re-read the code, so the plan + synthesis only need to make that
+re-exploration cheap, not eliminate it.
+
+**Validate the plans as a whole.** When more than one batch plans in a tick, the validator judges
+the plan *set* together — the whole-set view catches cross-batch conflicts, shared-surface
+collisions, and duplication before any building starts (a barrier that pays for itself).
 
 **Artifact contract.** The plan is written as `build-plan.md` on the **batch container**
 (`role:scratch`, sibling to `fix-log.md` — there is no `plan` role; `scratch` is the container's
-working-artifact slot the orchestrator already reads). It is the **durable shadow**: read by the
-validator, by a human auditor, and by a fresh agent on crash-recovery (approved plan + no build
-commits → resume at build, not re-plan — SKILL § tick 0). On the **happy path the builder does not
-re-read it** — it builds from live context; the artifact exists for validation, audit, and recovery.
+working-artifact slot the orchestrator already reads). It is the **primary hand-off medium**: the
+validator reads it, the fresh builder builds from it as its brief, a human audits it, and on
+crash-recovery a fresh agent resumes the build from it (approved plan + no build commits → resume at
+build, not re-plan — SKILL § tick 0).
 
 **Plan-validation criteria** (the validator's APPROVE / REVISE / REJECT):
 
@@ -144,9 +156,31 @@ re-read it** — it builds from live context; the artifact exists for validation
 4. **Is concrete** — names the key files / edges and the approach, passing the synthesis test
    (`references/dispatch-policy.md` § Dispatch-prompt quality); a hand-wavy plan is a REVISE.
 
-**REVISE** returns the specific gaps to the *same* agent (it rewrites `build-plan.md`, you re-gate);
-**REJECT** sends the batch to the change-request / replan path with no code written; **APPROVE**
-releases the agent to build (tick step 6c).
+**REVISE** re-spawns a plan agent with the specific gaps + the prior `build-plan.md` to rewrite,
+then re-gates; **REJECT** sends the batch to the change-request / replan path with no code written;
+**APPROVE** releases a **fresh** build agent to execute the plan (tick step 6c).
+
+## Verifier fixes — deterministic self-fix, but never self-judge
+
+The gate verifier (§ tick 7) may **fix**, not only report — but only where fixing cannot corrupt its
+own judgment. The line is *deterministic vs judgment*, not *small vs big*:
+
+- **Minor = mechanical / deterministic.** fmt, lint, a missing import, an obvious typo — anything
+  whose correctness is settled by `build + lint + test` going green, not by an opinion. The verifier
+  fixes it inline and re-runs the suite. Independence holds: the *compiler and tests* confirm the
+  fix, not the verifier grading itself, and the merge re-gate re-confirms it deterministically. This
+  is **not a strike** — it never entered the failure path.
+- **Major = behavioral / structural / acceptance-level.** "Does not meet `done_looks_like`", a wrong
+  approach, a missing requirement — anything needing a judgment call. The verifier **must not
+  self-fix**: fixing and then re-judging its own change is exactly the structural-blindness the
+  independent gate exists to prevent. Instead it writes a **fix plan** (a diagnosis + proposed
+  approach, as a `scratch` note the coordinator reads) and **returns FAIL**. The coordinator
+  dispatches a **fresh fix agent** through the same plan-first pipeline (plan → validate → build →
+  gate), which takes a strike and appends to the fix-log — a major fix is a first-class planned +
+  independently-verified unit, not an ad-hoc patch.
+
+**When the verifier can't tell which it is, it treats the issue as major** (report, don't fix) — the
+same conservative default as "when unsure, serial".
 
 ## Batching heuristics — how a batch is composed
 

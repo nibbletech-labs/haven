@@ -52,7 +52,7 @@ effort on the first retry and bump on the second.
 
 Two tiers, set at kickoff:
 
-- **BUILD_TIER** — the one plan+code agent (tick steps 6a/6c).
+- **BUILD_TIER** — the **plan agent** (6a) and the **build agent** (6c), each spawned fresh.
 - **VERIFY_TIER** — the fresh validators: the **plan-gate** (6b) and the **code verifier** (7).
 
 **Default: session parity.** Both tiers inherit the orchestrating session's model and effort — no
@@ -71,19 +71,23 @@ This **amends HV-167** (which read "no separate dial"); the amendment + rational
 
 ## PLAN-GATE — validate the approach before any code (tick steps 6a/6b)
 
-A build agent **plans first** and has that plan validated **before it writes code** — catching a
-wrong approach before it costs a full build + a failed § GATE. Same on/off rule as TDD:
+A **read-only plan agent plans first** (6a) and a fresh validator approves that plan **before any
+code is written** (6b) — catching a wrong approach before it costs a full build + a failed § GATE.
+Same on/off rule as TDD:
 
 - **On for complex / ultracode batches** (novel, cross-cutting, schema / security / concurrency).
 - **Optional for mechanical batches** — a rename / config edit has no approach worth gating; it
   skips 6a/6b and builds directly (the degenerate path).
 
-The validator is **fresh eyes at VERIFY_TIER — never the build agent** (a same-context reviewer is
-structurally blind, exactly as for the code gate). Verdicts **APPROVE / REVISE / REJECT**; the
+The validator is **fresh eyes at VERIFY_TIER — never a plan/build agent** (a same-context reviewer
+is structurally blind, exactly as for the code gate), and it judges the tick's **plans as a whole**
+so cross-batch conflicts surface before any building. Verdicts **APPROVE / REVISE / REJECT**; the
 plan-validation criteria (covers every acceptance clause, stays in envelope, sequences TDD, is
-concrete) are in `references/executor-discipline.md` § The build plan. This is the **AI** gate that
-replaces native plan mode's **human** gate on the autonomous path — the plan is read-only *by
-instruction*, and the real backstop is still the post-build verifier (§ GATE).
+concrete) are in `references/executor-discipline.md` § The build plan. Plan and build are **separate
+fresh spawns** — the approved `build-plan.md` is the builder's brief, and the coordinator carries
+full context into the build spawn (§ Dispatch-prompt quality); the loop does not keep one agent
+alive across the gate. This is the **AI** gate that replaces native plan mode's **human** gate on the
+autonomous path — the real backstop is still the post-build verifier (§ GATE).
 
 ## GATE — how a batch is judged before merge
 
@@ -108,6 +112,14 @@ instruction*, and the real backstop is still the post-build verifier (§ GATE).
 > The verifier (or the human) runs **twice** for any merged batch: once in-worktree (step 7) and
 > again post-rebase inside the merge lock (step 8). The post-rebase run is non-negotiable — *when*,
 > *which worktree*, and *how many times* the gate runs is the **executor's**, not the skill's.
+
+**The verifier fixes minors, not majors.** A *mechanical / deterministic* problem (fmt, lint, a
+missing import) the verifier fixes inline and re-runs the suite — the suite, not its opinion,
+confirms the fix, so independence holds and it is **not a strike**. A *behavioral / structural /
+acceptance-level* problem it does **not** self-fix (fixing then re-judging its own change is the
+blindness the gate prevents): it writes a fix plan and **FAILs**, and the failure path dispatches a
+fresh fix agent through the plan-first pipeline. The exact boundary is in
+`references/executor-discipline.md` § Verifier fixes. When unsure, treat it as major.
 
 ## The build agent's self-check (shifts acceptance left)
 
