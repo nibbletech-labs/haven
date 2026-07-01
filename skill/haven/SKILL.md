@@ -1,20 +1,16 @@
 ---
 name: haven
 description: >-
-  Track long-lived project work as a graph of items in Haven — both the
-  building and the human tasks around it (reviews, approvals, decisions,
-  real-world actions). Use it to capture, prioritise, groom, and decompose
-  work, evolve items, and hand work between people and AI (who owns each item,
-  what's waiting on whom). Fire on capture, planning, or handoff intent even
-  when the user never says "Haven" or "backlog" — e.g. "look at X later",
-  "what should I work on next", "break this down", "who's next?", "park this";
-  on post-discussion capture — "structure what we just discussed", "write that
-  up as items"; on grouping / phasing / focus — "group these", "mark these the
-  current focus"; and on grooming — "firm this up", "consolidate these into
-  one". When a Haven item already tracks the work, a "create a task list"
-  request resolves to graph child-items + dependency edges (surviving
-  context-clears), not a parallel native list. Not for ephemeral one-off
-  reminders outside a tracked project.
+  Track long-lived project work as a graph of items in Haven — the building
+  and the human tasks around it (reviews, approvals, decisions). Capture,
+  prioritise, groom, evolve, and hand work between people and AI. Fire on
+  capture, planning, or handoff intent even when the user never says "Haven" —
+  "look at X later", "what should I work on next", "break this down", "park
+  this", "structure what we just discussed", "group these", "firm this up",
+  "consolidate these into one". When a Haven item already tracks the work,
+  a "create a task list" request resolves to graph child-items + dependency
+  edges, not a parallel native list. Not for ephemeral one-off reminders
+  outside a tracked project.
 ---
 
 # Haven — the work-graph

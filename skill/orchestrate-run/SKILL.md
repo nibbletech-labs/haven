@@ -1,18 +1,16 @@
 ---
 name: orchestrate-run
 description: >-
-  Autonomously execute an already-planned Haven graph (packing any still-packless
-  coupled cluster first, as it goes): loop the
-  AI-owned ready frontier, build each batch in its own git worktree via native
-  plan mode, gate it with a fresh verifier, merge to main, complete the leaves
-  (which unblocks downstream), and converge — stepping around anything blocked on
-  a human. The executor half of orchestrate. Use when the plan exists and you want
-  it built — e.g. "run the build", "execute the plan", "dispatch the ready work",
-  "build phase 1", "autonomously implement the graph", "work the backlog". DEFERS:
-  decomposing a goal → `orchestrate-plan`; writing the build spec → `create-context-pack`;
-  the actual code + the human approval gate → native plan mode. It owns the
-  loop / worktree / gate / merge — it does NOT write code itself. Not for planning,
-  spec-writing, or a one-off single-item edit (use the `haven` skill).
+  Autonomously execute an already-planned Haven graph: loop the AI-owned ready
+  frontier, build each batch in its own git worktree, gate it with a fresh
+  verifier, merge to main, complete the leaves (which unblocks downstream),
+  and converge — stepping around anything blocked on a human. Use when the
+  plan exists and you want it built — "run the build", "execute the plan",
+  "dispatch the ready work", "build phase 1", "work the backlog". It owns the
+  loop / worktree / gate / merge and does NOT write code itself. Defers
+  decomposing a goal to `orchestrate-plan`, the build spec to
+  `create-context-pack`, the code + human approval gate to native plan mode.
+  Not for a one-off single-item edit (use the `haven` skill).
 ---
 
 # orchestrate-run — the executor half of orchestrate

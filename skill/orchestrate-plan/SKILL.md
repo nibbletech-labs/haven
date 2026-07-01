@@ -6,15 +6,11 @@ description: >-
   especially greenfield ("from scratch", "the lot"). Break it into a
   structured Haven work-graph: a tree of ownable tasks with dependencies and
   acceptance criteria. Planning, not doing — fire it even when phrased as
-  doing the work ("build it", "create the site"); you map it all first. Also
-  fires on "decompose this into a dependency / work graph / backlog" and on
-  "create the items then switch to plan mode". But a bare "make a plan" /
-  "plan this" for one feature is native plan mode, not this — every leaf here
-  is plan-mode-grain. When a Haven item already tracks the work, a "create a
-  task list" request resolves to graph child-items + dependency edges, not a
-  parallel native list. If a plan exists and they just want it built, that's
-  `orchestrate-run`; for one task or grooming one item, use `haven`. Not for a
-  one-off, single-component, or already-decomposed task.
+  doing the work ("build it", "create the site"). Also fires on "decompose
+  this into a dependency / work graph / backlog". A bare "make a plan" for one
+  feature is native plan mode, not this. If a plan exists and they just want
+  it built, that's `orchestrate-run`; for one task or grooming one item, use
+  `haven`. Not for a one-off, single-component, or already-decomposed task.
 ---
 
 # orchestrate-plan — the planner half of orchestrate

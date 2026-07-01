@@ -2,19 +2,15 @@
 name: create-context-pack
 description: >-
   Create a build-ready spec (a "context pack") for an already-planned group of
-  Haven items: enrich them into one integrated brief — shared foundation,
-  cross-cutting requirements, sharpened acceptance, a verify-first preamble —
-  written as a `context-pack` artifact onto the group's top node, ready for
-  plan mode. Headline case: a greenfield build — one large spec for a phase-1
-  build, setting the contracts the leaves conform to. Use when you have
-  planned leaves you're about to build together and want one brief — e.g.
-  "spec out phase 1 of the build", "create a context pack for HV-3 and HV-4",
-  "ready these items for dev". Run on one item it degenerates to grooming that
-  leaf; run on several it grooms each, then synthesises the cross-cutting
-  brief. Sits on the GROUPING axis, above `haven` and after
-  `orchestrate-plan`: it does NOT decompose a goal (use `orchestrate-plan`)
-  and does NOT execute or write code (that's plan mode). Not for coarse items
-  that still need decomposition.
+  Haven items: groom each member, then synthesise one integrated brief —
+  shared foundation, cross-cutting requirements, sharpened acceptance, a
+  verify-first preamble — written as a `context-pack` artifact on the group's
+  top node. Use when planned leaves are about to be built together and want
+  one brief — "spec out phase 1 of the build", "create a context pack for HV-3
+  and HV-4", "ready these items for dev"; on one item it degenerates to
+  grooming that leaf. It does NOT decompose a goal (use `orchestrate-plan`)
+  and does NOT execute or write code (plan mode / `orchestrate-run`). Not for
+  coarse items that still need decomposition.
 ---
 
 # create-context-pack — the build-prep (spec) half of orchestrate

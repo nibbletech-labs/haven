@@ -4,17 +4,14 @@ description: >-
   Verify that a Haven item actually meets its acceptance — give it a target
   ref (a leaf, or a container as a rollup) and it returns a PASS / NEEDS-HUMAN
   / FAIL verdict with evidence, judged against the item's LIVE
-  `done_looks_like`. It runs the deterministic suite (build + lint + test) and
-  makes an independent acceptance judgment from a fresh perspective — never
-  the build agent's. Use when you want to confirm work is done without doing
-  it yourself — e.g. "verify HV-41", "is this leaf actually done?", "check
-  done_looks_like is met", "give me a pass/fail verdict on this work". It is
-  the executor's step-7 gate lifted out to stand alone: orchestrate-run
-  COMPOSES this same skill as its verifier, so there is one judgment, not two.
-  It does NOT decompose a goal (use `orchestrate-plan`), does NOT write a
-  build spec (use `create-context-pack`), does NOT build the code or own the
-  human go (native plan mode), and does NOT dispatch/merge/loop the whole
-  graph (`orchestrate-run`).
+  `done_looks_like`: the deterministic suite (build + lint + test) plus an
+  independent acceptance judgment from fresh eyes — never the build agent's.
+  Use to confirm work is done without doing it yourself — "verify HV-41", "is
+  this leaf actually done?", "give me a pass/fail verdict on this work".
+  `orchestrate-run` composes this same skill as its merge gate, so there is
+  one judgment, not two. It does NOT decompose (`orchestrate-plan`), write
+  specs (`create-context-pack`), build code (plan mode), or run the graph
+  (`orchestrate-run`) — one verdict only.
 ---
 
 # verify-acceptance — the standalone acceptance-verifier (the executor's step-7 gate, lifted out)
