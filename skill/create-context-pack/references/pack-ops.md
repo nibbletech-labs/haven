@@ -1,4 +1,4 @@
-# Verify-ops — the exact CLI and MCP call for each flow step
+# Pack-ops — the exact CLI and MCP call for each flow step
 
 The canonical argument reference is the `haven` skill's `references/surface-map.md`
 (CLI⇄MCP differences). This file is `create-context-pack`'s per-step cheat-sheet. `<P>` =

@@ -204,8 +204,8 @@ const CREATE_CONTEXT_PACK_SKILL_FILES: &[(&str, &str)] = &[
         include_str!("../../../skill/create-context-pack/references/pack-template.md"),
     ),
     (
-        "references/verify-ops.md",
-        include_str!("../../../skill/create-context-pack/references/verify-ops.md"),
+        "references/pack-ops.md",
+        include_str!("../../../skill/create-context-pack/references/pack-ops.md"),
     ),
     (
         "agents/openai.yaml",

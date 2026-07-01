@@ -181,7 +181,7 @@ drawn from a fixed taxonomy. The tag is not decoration — each value has a dire
 The split is **direct-run vs spawn-tester vs human**: unit/integration (and automated
 e2e) are direct deterministic runs; visual (and non-automatable e2e) need a spawned
 tester; manual is the human gate. Tag every member so the verify step knows which path
-it falls into. See `references/verify-ops.md` for how the tag maps onto the verify call.
+it falls into. See `references/pack-ops.md` for how the tag maps onto the verify call.
 
 ---
 

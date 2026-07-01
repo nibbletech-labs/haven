@@ -23,7 +23,7 @@ You take a goal and **decompose it into a Haven work-graph**, one node per tick,
 until every node is either broken down further or is a skill-grain **leaf** a
 dispatcher can pick up. You build structure; **you execute nothing** — no agents,
 no skills dispatched, no files written as work product. Execution is a separate
-sibling skill (`orchestrate-run`, future) that consumes the same graph.
+sibling skill (`orchestrate-run`) that consumes the same graph.
 
 This is the recursive-decomposition reasoning from builder's `orchestrate`,
 re-expressed natively against Haven: the graph **is** the plan (no `state.json`,
@@ -211,7 +211,7 @@ The two skills **never talk directly — they meet only at the graph.** At conve
 5. no orphaned half-decompositions at rest; depth ≤ 5; lineage intact (restructuring
    went through evolve/archive with a rationale, never deletion).
 
-The future executor relies on `haven next --owner ai` as the AI dispatch queue and on
+The executor relies on `haven next --owner ai` as the AI dispatch queue and on
 `complete` reporting what each completion unblocks — which it re-feeds into this same
 tick loop. Human-owned leaves surface to the person (`next --owner human` /
 `wait_state`), not the AI queue. (`next` does not *itself* require `done_looks_like`;

@@ -277,7 +277,7 @@ fn skill_install_and_setup_write_the_snapshot() {
     let ccp_dir = h.home.join(".claude/skills/create-context-pack");
     assert!(ccp_dir.join("SKILL.md").exists());
     assert!(ccp_dir.join("references/pack-template.md").exists());
-    assert!(ccp_dir.join("references/verify-ops.md").exists());
+    assert!(ccp_dir.join("references/pack-ops.md").exists());
     assert!(ccp_dir.join("agents/openai.yaml").exists());
     assert!(std::fs::read_to_string(ccp_dir.join("SKILL.md"))
         .unwrap()

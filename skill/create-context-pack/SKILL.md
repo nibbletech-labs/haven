@@ -68,7 +68,7 @@ detail — don't restate arguments from memory. The gotchas that bite here:
 
 ## The flow
 
-The exact CLI **and** MCP op for each step is in `references/verify-ops.md`; the
+The exact CLI **and** MCP op for each step is in `references/pack-ops.md`; the
 pack's section layout + the verbatim preamble are in `references/pack-template.md`.
 
 0. **REORIENT.** Read the whole graph in one call (`haven graph` / `haven_graph`).
@@ -128,7 +128,7 @@ pack's section layout + the verbatim preamble are in `references/pack-template.m
    decompose). **Single active pack per leaf:** a member that already carries a
    `context_pack` pointer for a *different* container (or a `context_pack_clash`) is
    governed by another pack — **STOP and surface the clash**, never auto-pick or merge
-   (`references/verify-ops.md` step 3).
+   (`references/pack-ops.md` step 3).
 4. **READ MEMBERS.** `haven item get <ref> --include edges,artifacts` /
    `haven_get_item` per member — read `body`/`why`/`done_looks_like` + edges.
 5. **SHARED-CONTEXT ASSESSMENT** (the `haven` workflow-5 heuristic). If members share
@@ -206,8 +206,8 @@ own `context-pack.md` and grouping/edge inserts are no-ops). v1 ships a manual r
 
 ## Deferred to v2 / not in this skill
 
-Execution (the code-level plan, dispatch, verification, completion) — that's plan mode
-now, and a future `orchestrate-run` later. Also: auto-applying corrections (we
+Execution (the code-level plan, dispatch, verification, completion) — that's native
+plan mode, or the `orchestrate-run` executor. Also: auto-applying corrections (we
 defer-all to the human gate), a `haven`-side pack **projection** command (the skill
 assembles the pack; a query verb is future), `gate` containers as pack targets (a gate
 is a review, not a build batch), and decomposition-root epics as the primary target
