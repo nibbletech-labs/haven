@@ -193,8 +193,10 @@ human-gated knowledge promotion — is in `references/executor-discipline.md`.
    **fixes MINOR (mechanical / deterministic) issues inline** and re-runs the suite (not a strike);
    a **MAJOR** issue it must **not** self-fix — it writes a fix plan and the failure path dispatches
    a fresh fix agent (boundary: `references/executor-discipline.md` § Verifier fixes; when unsure,
-   treat as major). A fail stays in the worktree — nothing merged, siblings untouched → failure
-   path (§ below).
+   treat as major). It also **captures non-blocking nits** (acceptance met, nothing broken) to the
+   container's `punch-list.md` — never held to "eyeball later" — for the next checkpoint (§ tick 9;
+   `references/dispatch-policy.md` § CHECKPOINTS). A fail stays in the worktree — nothing merged,
+   siblings untouched → failure path (§ below).
 8. **MERGE (serialized).** Acquire the single merge lock; `rebase` the batch branch onto
    current `main`; **re-run the deterministic gate post-rebase** (invariant 2); only a green re-gate
    **fast-forwards** to `main`. Rebase conflict or red re-gate → do **not** merge, release the lock,
@@ -207,6 +209,12 @@ human-gated knowledge promotion — is in `references/executor-discipline.md`.
    **not** silently build the stale leaf — bounce that branch back to `orchestrate-plan`
    (the pack's "structurally-wrong → re-plan" escape, applied in the *run* loop). Remove
    the worktree; release the lock.
+   - **Checkpoint check — meaty, not every ticket.** If this completion closes a **meaty checkpoint**
+     (a whole-track event — `references/tick-ops.md` § 9d — never a minor subtask), run the checkpoint
+     cycle: **code review** (a fresh lens on the merged diff) **+ the scope's `punch-list.md`(s)** →
+     triage → **one batched fix pass** through the normal build → gate → merge (re-verified). Cadence,
+     review composition, the severity table, and why review ≠ the per-leaf gate:
+     `references/dispatch-policy.md` § CHECKPOINTS.
 
 **Collecting a spawned agent's result (plan § 6a, plan-gate § 6b, build § 6c, gate § 7).** A spawned agent
 often signals **idle/complete WITHOUT delivering its final report** — treat the idle signal as
@@ -217,8 +225,10 @@ goes idle, **explicitly retrieve and confirm its structured result** (the build 
 as a pass. The loop waits for the *report*, not merely the completion notification.
 
 Loop to step 0. **Converge** when `haven next --owner ai` is empty **and** nothing is in
-flight → report blocked-on-human items (`next --owner human` / `wait_state on_human`) and
-any strike-escalated items, then stop (inline) or sleep (`/loop`, v4).
+flight → **promote any undrained `punch-list.md` items to floating Haven items** (`owner:ai`, low
+priority, xref the source leaf) so nothing is lost (`references/tick-ops.md` § Convergence-time),
+then report blocked-on-human items (`next --owner human` / `wait_state on_human`) and any
+strike-escalated items, then stop (inline) or sleep (`/loop`, v4).
 
 When you surface progress to a person — mid-run status, a merge-gate pause, the convergence
 report — **report it as plain capabilities, not node refs** (the `haven` skill's *Standing

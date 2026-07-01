@@ -179,6 +179,26 @@ own judgment. The line is *deterministic vs judgment*, not *small vs big*:
 **When the verifier can't tell which it is, it treats the issue as major** (report, don't fix) — the
 same conservative default as "when unsure, serial".
 
+## The punch-list & checkpoint drain — non-blocking findings, aggregated not eyeballed
+
+A gate can PASS while the verifier still notices **non-blocking** issues — a quality nit, a small
+improvement, a follow-up — where acceptance is met and nothing is broken. These are neither a
+deterministic-minor (fix inline) nor a major (fix path); left ad-hoc they become the coordinator's
+"I'll look at them at the end", which is a **silent, lossy defer**. Systematise them:
+
+- **Capture (cheap, no agent).** The verifier **appends** each non-blocking finding — one line — to a
+  **`punch-list.md`** artifact (`role:scratch`) on the batch container, sibling to `fix-log.md`, same
+  append-only pattern. The gate's analogue of the change-request rule: *surface it, don't hold it in
+  your head.*
+- **Drain at a checkpoint, not per-nit** (a per-nit fix+verify agent isn't worth it). At a meaty
+  checkpoint the review findings + punch-lists are pooled and cleared in **one batched fix pass** —
+  each fix through the normal build → gate → merge, so it is re-verified, never self-judged. Cadence
+  + severity triage: `references/dispatch-policy.md` § CHECKPOINTS.
+- **Promote survivors.** At convergence, undrained items become **floating Haven items** (`owner:ai`,
+  low priority, xref the source leaf) — the inbox capture→drain→persist loop, so nothing is lost.
+- **Bound it.** Nits are low-priority and **never block convergence**; a fix pass's own findings are
+  logged, not re-drained the same run.
+
 ## Batching heuristics — how a batch is composed
 
 When you compose a packless cluster into one batch (or hand a member set to

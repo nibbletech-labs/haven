@@ -153,11 +153,20 @@ completion changed:
   `orchestrate-plan` or archive it; leave the rest of the graph alone.
 - A **whole-track-completing** event (a foundation merged, an architecture decided, a research
   leaf that changed the landscape) → **full reassessment** of what remains against the goal: are
-  planned leaves now unnecessary, are there gaps, did the approach shift?
+  planned leaves now unnecessary, are there gaps, did the approach shift? It is also a **meaty
+  checkpoint** → run the code-review + drain cycle (`references/dispatch-policy.md` § CHECKPOINTS;
+  SKILL § tick 9). A **minor subtask never triggers a checkpoint** — meaty only.
 
 The default is the cheap path (record + continue); escalate to reassessment only on the contradict
 / whole-track triggers. The frontier predicate already steps around blocked work, so most ticks
 need no replanning at all.
+
+**e. Checkpoint ops (meaty only — `references/dispatch-policy.md` § CHECKPOINTS).** Non-blocking nits
+are appended to the container **punch-list** (by the verifier at step 7) and read back at the
+checkpoint — same ops as the fix-log, just `--name/--path punch-list.md`. Drain via one batched fix
+pass (steps 6–8). Promote an **undrained survivor** at convergence to a floating item:
+- CLI: `haven item add "<nit>" --type task --assign ai --priority 4 --why "<HV-nn punch-list>" -p <P>`
+- MCP: `haven_add_item {"project":"<P>","title":"<nit>","owner":"ai","priority":4}`
 
 ## Failure path
 
@@ -185,6 +194,7 @@ feeds a **fresh fix agent** dispatched through the plan-first pipeline (§ 6), a
 
 ## Convergence-time ops
 
+- **Promote undrained punch-list survivors** to floating items (§ 9e) so no non-blocking finding is lost.
 - **Report the remaining AI queue / human queue:** `haven next --owner ai` / `--owner human`.
 - **Container progress:** `rollup_state` rides the step-0 graph read (Dormant|Queued|Active|Done).
 - **Follow a stale ref** from a resume note: CLI `haven evolve resolve <ref> -p <P>` · MCP

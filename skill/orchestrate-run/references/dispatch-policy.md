@@ -113,6 +113,36 @@ blindness the gate prevents): it writes a fix plan and **FAILs**, and the failur
 fresh fix agent through the plan-first pipeline. The exact boundary is in
 `references/executor-discipline.md` § Verifier fixes. When unsure, treat it as major.
 
+## CHECKPOINTS — code review + drain, at meaty boundaries (not every ticket)
+
+**Verification ≠ review.** The per-leaf gate (§ GATE) asks *"does it meet acceptance?"* and blocks
+each merge. **Code review** asks *"is it good code?"* — design, maintainability, and the latent bugs
+the suite misses. Review is a **finding source, not a second gate**: its findings route into the
+same severity tiers, and its fixes go through the one merge gate.
+
+**Cadence — meaty, the coarse default.** Run a checkpoint only at a *cohesive completed chunk*: a
+container `rollup_state:Done`, an integration boundary (`references/executor-discipline.md`
+§ Batching), a foundation merged, or a size threshold (≥N merged leaves / ≥N accumulated punch-list
+items). **Never after every ticket** — thin slices waste agents and hide design-level findings.
+Placement is your per-run judgment, like MAX_PARALLEL; bias coarse.
+
+**At a checkpoint** spawn a **fresh review agent** (never a builder/verifier of this work; VERIFY_TIER)
+that runs the repo's **`/code-review`** over the checkpoint's **merged diff** (post-merge — correctness
+is already gated per-leaf; review lifts quality on the integrated result), forwarded since a subagent
+inherits no skill. Aggregate its findings with the scope's `punch-list.md`(s) and drain them
+(`references/executor-discipline.md` § The punch-list & checkpoint drain).
+
+**Severity triage** (review findings + punch-list, one table):
+
+| finding | route |
+|---|---|
+| real bug / acceptance-violating | **major** fix path (fresh fix agent, plan-first) + flag the suite was inadequate |
+| mechanical (style, naming) | inline, or folded into the batched fix |
+| non-blocking nit | the batched drain |
+
+Capture, drain mechanics, survivor-promotion, and the recursion bound are in
+`references/executor-discipline.md` § The punch-list & checkpoint drain.
+
 ## The build agent's self-check (shifts acceptance left)
 
 When you dispatch a leaf, derive **2–5 concrete, executable checks** from its `done_looks_like`
