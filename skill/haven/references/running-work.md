@@ -23,14 +23,18 @@ use native plan mode on a single feature or not, verify or not — is free-form 
   if there isn't one. **Enter:** invoke/compose the `orchestrate-run` skill.
 
 The only reason to reach for the executor is **context isolation** — the conductor stays clean, so
-a long multi-leaf run scales (plus speed, once parallel is on — below). For a handful of tasks,
+a long multi-leaf run scales (plus speed when it fans out disjoint work in parallel — below). For a handful of tasks,
 direct is usually the better call.
 
 ## What the executor is — and isn't — today
 
-- **Serial.** `MAX_PARALLEL=1` by design: one leaf at a time (Build → Verify → merge → complete →
-  next). It does **not** fan out multiple builds at once yet — parallel fan-out is the gated next
-  step (**HV-85**, under epic HV-83, behind the proven serial core HV-84).
+- **Serial or parallel — the coordinator's per-run call** (`MAX_PARALLEL`). It runs one leaf at a
+  time (Build → Verify → merge → complete → next) by default, and can fan out several independent
+  builds at once when the ready frontier is clearly disjoint and low-blast. It's a *speed* choice,
+  not a correctness one — the serialized merge + post-rebase re-gate protects `main` either way, so
+  serial is just the safe fallback when the build is risky or unclear (the full risk rule lives in
+  `orchestrate-run`'s `references/dispatch-policy.md`; HV-84/85 proved the machine, HV-241 opened
+  the dial).
 - **Workers run at session parity.** A Build/Verify subagent inherits the **same model and the same
   effort** as the orchestrating session — no separate dial, no silent downgrade (**HV-167**).
 - **Two different verifications — don't conflate them:**
@@ -48,4 +52,5 @@ direct is usually the better call.
 ## Picking
 
 Few leaves, or quality-critical → **direct**. Many leaves that would blow the main context →
-**executor** (serial today). When it's ambiguous, the executor asks rather than assuming.
+**executor** (serial, or parallel when the frontier is disjoint — its call per run). When it's
+ambiguous, the executor asks rather than assuming.

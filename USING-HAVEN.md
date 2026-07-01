@@ -25,7 +25,7 @@ Installing Haven gives your agents a family of skills they pick up automatically
 | Skill | You say something like… | What it does |
 |---|---|---|
 | **orchestrate-plan** | "break the whole `<product>` into a work-graph" · "decompose this into a backlog" | turns a big, unplanned goal into a tree of ownable tasks with dependencies and acceptance |
-| **orchestrate-run** | "run the build" · "execute the plan" · "work the ready frontier" | autonomously builds the ready items: a worktree per batch, verify-gated, merged, looped (one leaf at a time today; parallel fan-out is built but gated off) |
+| **orchestrate-run** | "run the build" · "execute the plan" · "work the ready frontier" | autonomously builds the ready items: a worktree per batch, verify-gated, merged, looped (one at a time by default; it can also build several independent items at once when they're clearly disjoint, and you can just ask for that when you start the run) |
 
 **Two more skills round out the set, `create-context-pack` and `verify-acceptance`, and you are not expected to trigger either.** `orchestrate-run` composes them as it builds: before building a *coupled* cluster of tickets it runs **create-context-pack** to write one shared spec (shared foundation + cross-cutting requirements, so the parts fit together instead of being built in isolation), and it gates every batch with **verify-acceptance** (an independent build + lint + test plus an acceptance judgment, returning PASS / NEEDS-HUMAN / FAIL). You *can* still invoke them directly (to shape a shared spec before a build, or to get a standalone pass/fail verdict on a leaf an agent says it finished), but in normal use they fire on their own.
 

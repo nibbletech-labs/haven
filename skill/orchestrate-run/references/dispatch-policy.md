@@ -6,13 +6,31 @@ review — it dials plan mode, ultracode, and the verifier. The knobs:
 
 ## MAX_PARALLEL — how many independent batches run at once
 
-- **Default: 1 (serial).** This version proves the whole machine — happy path, loop, replan,
-  failure, recovery — with zero concurrency. Even at 1, MERGE runs the full
-  lock→rebase→re-gate→ff path (`references/worktree-merge.md`).
-- **> 1 is the one gated step (HV-85).** Raise it only once the serial path holds on a real
-  run. Keep it **conservative (3–4)**: the parallel-merge + re-gate seam degrades toward
-  serial under heavy hidden code-coupling anyway, and a conservative cap bounds the blast
-  radius of the one silent failure mode (a missed re-gate landing broken code on `main`).
+**You choose this per run, from the build's coupling risk — it is not a fixed default.**
+Parallelism is a *speed* dial, never a correctness one: the serialized merge + mandatory
+post-rebase re-gate protects `main` at any value (`references/worktree-merge.md`), so the
+worst case of choosing wrong is a slower run, never a broken one. That is what makes the
+choice safe to make per run instead of pinning it. Even at 1, MERGE runs the full
+lock→rebase→re-gate→ff path.
+
+- **Stay serial (1) when the build is risky.** The ready items likely touch overlapping code,
+  or involve schema/migrations, concurrency, security, or cross-cutting refactors — anywhere
+  hidden coupling makes the re-gate the only thing between you and broken `main`. Don't stack
+  that seam under concurrency. **When unsure, this is the default** — parallelism is pure
+  speed, so the safe choice under doubt is the slow one.
+- **Fan out when the frontier is clearly disjoint and low-blast.** Items in separate
+  crates/modules, additive or mechanical work, no shared files — the case the re-gate almost
+  never fires on.
+- **Keep the ceiling conservative (3–4)** regardless. The merge queue serializes anyway, so
+  wider buys little, and a low cap bounds the blast radius of the one silent failure mode (a
+  missed re-gate landing broken code on `main`). The human can always override the posture in
+  plain language when kicking off the run ("this one's touchy, keep it serial" / "these are
+  independent, run them together").
+
+> Serial-first was the *bring-up* posture (HV-84/85): prove the whole machine — happy path,
+> loop, replan, failure, recovery, **and** the parallel merge/re-gate seam — before trusting
+> fan-out. That proving run is done (HV-85), so the dial is now the coordinator's judgment,
+> not a pinned `1`.
 
 ## EFFORT — set on the *spawned build agent*, never on yourself
 

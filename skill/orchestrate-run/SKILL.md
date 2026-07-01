@@ -35,7 +35,8 @@ leaves under a container + a verify-first `spec` pack) → native **plan mode / 
 (the code) → **`orchestrate-run`** (this: loop, gate, worktree, merge, complete, converge).
 
 This executor is **one of four ways** Haven work gets driven — the most orchestrated end of the
-spectrum, and **serial today** (`MAX_PARALLEL=1`, HV-85 for parallel). For when to reach for it
+spectrum. It runs serial or parallel by the coordinator's per-run call (`MAX_PARALLEL`;
+`references/dispatch-policy.md`). For when to reach for it
 vs the inline / solo-plan-mode paths — and the build-subagent parity caveat (HV-167) that makes
 inline often the better choice for *small* runs — see the `haven` skill's
 `references/running-work.md`.
@@ -116,8 +117,9 @@ human-gated knowledge promotion — is in `references/executor-discipline.md`.
    batch, built directly under the deterministic gate.
 3. **SELECT.** A batch is dispatchable **now** iff every member is in the ready frontier
    (no member has an open cross-batch dependency — dependent batches simply aren't ready
-   yet, so they don't appear). Take up to **MAX_PARALLEL** independent batches
-   (`references/dispatch-policy.md`; **default 1** — see *Serial-first* below).
+   yet, so they don't appear). Take up to **MAX_PARALLEL** independent batches — the count
+   **you choose for this run** from its coupling risk (`references/dispatch-policy.md`; serial
+   when risky or unsure, fan out when disjoint — see *Choosing parallelism* below).
 4. **ENSURE-PACKED — pack-first is a precondition of CLAIM, never a fallback after it.**
    For an **already-packed** batch this is the cheap assertion: the container carries a `spec`
    `context-pack.md` (the pointer guarantees it). For a **ready packless cluster whose members
@@ -209,19 +211,27 @@ self-evicts the batch from `next --owner ai` while the rest of the graph keeps c
 The strike ceiling is the **liveness guarantee**: the AI frontier strictly shrinks, so the
 loop provably converges.
 
-## Serial-first (this version) — parallelism is a gated dial
+## Choosing parallelism — the coordinator's per-run call
 
-The whole skill is specified, but **`MAX_PARALLEL` defaults to 1**: this version dispatches
-**one batch at a time** and proves the full machine — happy path, loop, replan, failure,
-and crash-recovery — with **zero concurrency**. Even at 1 the MERGE step runs the full
-`lock → rebase → re-gate → ff` path (a degenerate one-entry queue), so the merge discipline
-is exercised from the start. **Turning on parallel fan-out (`MAX_PARALLEL > 1`) is the one
-gated step** (`references/dispatch-policy.md`): do it only once the serial path holds on a
-real run, because the parallel-merge + re-gate seam is where a missed re-gate can silently
-land broken code on `main` as "done" — the failure mode the whole design is organized to
-prevent, and the one you cannot observe in a parallel soup.
+**`MAX_PARALLEL` is your judgment for the run, not a fixed default.** It is a *speed* dial,
+never a correctness one: the serialized merge + mandatory post-rebase re-gate protects `main`
+at every value, so choosing wrong only costs wall-clock, never `main`. Pick from the ready
+frontier's **coupling risk** (full rule: `references/dispatch-policy.md`):
 
-**Pack-first stays serial too.** A packless coupled cluster takes **two ticks** — tick N
+- **Serial (1)** when the build is risky — items likely share code, or touch schema/migrations,
+  concurrency, security, or cross-cutting refactors. **This is also the default under doubt:**
+  parallelism is pure speed, so when unsure, run slow.
+- **Fan out (up to a conservative 3–4)** when the frontier is clearly disjoint and low-blast —
+  separate crates/modules, additive or mechanical work, no shared files.
+
+The parallel-merge + re-gate seam is still the one place a missed re-gate can silently land
+broken code on `main` as "done" — so the ceiling stays low and serial stays the safe fallback.
+Even at 1 the MERGE step runs the full `lock → rebase → re-gate → ff` path (a degenerate
+one-entry queue), so the merge discipline is exercised at any setting. (Serial-first was the
+*bring-up* posture — HV-84/85 proved the full machine including the parallel seam on a real
+run; the dial is now open.)
+
+**Pack-first is always serial, whatever `MAX_PARALLEL` you chose.** A packless coupled cluster takes **two ticks** — tick N
 composes `create-context-pack` to establish the pack, tick N+1 dispatches the now-packed batch
 — with **never more than one batch in flight** and no added concurrency. And because coupled leaves
 are ordered by their shared foundation's dependency edge, they never build as separate

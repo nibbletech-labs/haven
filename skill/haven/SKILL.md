@@ -276,7 +276,7 @@ against the *merge-base* not live `main`, and the verify-gated merge (AI-verify-
 for a human when a load-bearing check needs one).
 
 Before you dispatch a build, decide **how** it should run — inline vs solo plan mode vs the
-`orchestrate-run` executor (serial today). The four execution modes, their trade-offs, and a
+`orchestrate-run` executor (serial or parallel per its own per-run call). The four execution modes, their trade-offs, and a
 flow-gate for picking one (recommend or ask, don't default silently) are in
 **`references/running-work.md`**.
 
