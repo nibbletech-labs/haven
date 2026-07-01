@@ -41,9 +41,6 @@ fresh agent can parse the history):
 **Result:** [pass/fail — what happened]
 ```
 
-The fix-log is file-based — it survives agent discontinuity, can be read by any fresh
-agent or the user, and forces each Fix Agent to see all previous attempts.
-
 ## The 3-strike circuit breaker (per acceptance id)
 
 Strikes are **derived by counting fix-log entries** — there is no schema field on the

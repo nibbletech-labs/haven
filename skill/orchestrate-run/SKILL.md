@@ -42,7 +42,7 @@ vs the inline / solo-plan-mode paths — and the build-subagent parity caveat (H
 inline often the better choice for *small* runs — see the `haven` skill's
 `references/running-work.md`.
 
-## Three load-bearing invariants (do not weaken these)
+## Load-bearing invariants (do not weaken these)
 
 1. **SINGLE ORCHESTRATOR PER PROJECT.** You are the *sole* reader of `haven next
    --owner ai` and the *sole* writer of graph state. The per-batch build agents you
@@ -57,10 +57,9 @@ inline often the better choice for *small* runs — see the `haven` skill's
 2. **SERIALIZED MERGE QUEUE with a mandatory post-rebase re-gate.** Builds may fan out
    into N worktrees, but merges to `main` fan **in** through one lockfile:
    `lock → rebase onto current main → RE-GATE → fast-forward → complete`. The re-gate is
-   **inviolable, not a tunable**: two batches that are *graph-independent* but share an
-   *implicit code surface* can merge textually clean yet break semantically, and the
-   re-gate is the only thing that catches it before it lands on `main` as "done". Merge
-   **before** complete, always — that keeps the one crash window recoverable.
+   **inviolable** — the only thing that catches a semantic conflict a clean textual merge hid
+   (why: `references/worktree-merge.md`). Merge **before** complete, always — that keeps the one
+   crash window recoverable.
 
 3. **STATELESS REORIENT + graph↔worktree reconcile every tick.** The graph
    (`in_progress` status), `git worktree list`, and a commit done-marker are the **only**
@@ -68,6 +67,13 @@ inline often the better choice for *small* runs — see the `haven` skill's
    begins by reconciling, so a crash anywhere lands in a state the next tick fixes
    idempotently. A cold session (context reset, `/loop` wake, another machine over MCP)
    reorients perfectly by re-reading the graph.
+
+4. **WORKTREE ISOLATION — every build runs *off* `main`, never *in* it.** Each batch's plan /
+   build / fix agent works in its **own git worktree with its cwd inside it**
+   (`references/worktree-merge.md`); the shared **primary/session checkout is off-limits for
+   builds**. This holds **even at `MAX_PARALLEL=1`** — serial makes skipping it look harmless, but a
+   build in the primary checkout corrupts `main`, forfeits the disposable-failed-build property, and
+   breaks invariant 3's "`git worktree list` is truth". Isolate first, always.
 
 ## Operating rules (inherit from the `haven` skill)
 
@@ -144,8 +150,9 @@ human-gated knowledge promotion — is in `references/executor-discipline.md`.
    status:in_progress}`, one call per leaf. This removes them from `next`, so a re-read
    this same tick won't re-pick them. **Claim before you spawn — never spawn before claim.**
 6. **DISPATCH — plan → validate-as-a-batch → build, on fresh agents you load with context.** Per
-   batch, create an isolated worktree off `main` (`references/worktree-merge.md`). **You — the
-   coordinator — own the full-context handoff:** a spawned agent knows only what its prompt carries
+   batch, create an isolated worktree off `main` and **spawn each agent with its cwd inside it — it
+   edits *there*, never the session checkout** (invariant 4; `references/worktree-merge.md`).
+   **You — the coordinator — own the full-context handoff:** a spawned agent knows only what its prompt carries
    (`references/dispatch-policy.md` § Dispatch-prompt quality), so **synthesise full context into
    every spawn**; do not rely on any agent staying alive across the gate (in practice the loop
    spawns fresh at each phase). The plan artifact is the **hand-off medium** between phases, not a
@@ -159,8 +166,8 @@ human-gated knowledge promotion — is in `references/executor-discipline.md`.
      code. The plan must pass the synthesis test *on its own* — rich enough that a fresh builder
      could execute from it plus the pack alone.
    - **6b Plan-gate — validate the tick's plan(s) as a whole, fresh eyes at VERIFY_TIER.** Once the
-     plans are in, spawn a **separate** validator (never a plan/build agent — a same-context
-     reviewer is structurally blind) over the **plans together**: the whole-set view catches
+     plans are in, spawn a **separate** validator (never a plan/build agent — fresh eyes) over the
+     **plans together**: the whole-set view catches
      cross-batch conflicts, shared-surface collisions, and duplication *before* any code is written.
      Per plan it returns **APPROVE / REVISE / REJECT** (criteria: `references/executor-discipline.md`
      § The build plan). **REVISE** → re-spawn a plan agent with the specific gaps + the prior
@@ -176,35 +183,22 @@ human-gated knowledge promotion — is in `references/executor-discipline.md`.
      missing, it **surfaces and returns** (the Change-Request rule); you decide next tick whether to
      re-pack, re-plan, or adjust the batch. A fresh builder isn't context-*starved* — it can re-read
      the code; the approved plan + your synthesis is what keeps re-exploration cheap.
-7. **GATE — a fresh verifier, not the builder.** Run the gate **inside** the worktree.
-   *Unattended:* spawn a **separate verifier agent** given only the leaf's `done_looks_like`
-   + the pack's shared requirements + the diff — **not** the build agent's reasoning — which
-   runs `build + lint + test` (exit-0) and judges acceptance, returning pass/fail + evidence.
-   A same-context reviewer is structurally blind; the verifier's independence is the point.
-   **The verifier is a spawned subagent and does NOT inherit the `verify-acceptance` skill** — so
-   "compose `verify-acceptance`" means the executor **reads `skill/verify-acceptance` and FORWARDS its contract into
-   the verifier's prompt**: the PASS / NEEDS-HUMAN / FAIL definitions
-   (`verify-acceptance/references/verdict-contract.md`), the independence rule, and the **exhaustive
-   every-acceptance-clause walk** + lens (`verify-acceptance/references/evaluation-lens.md`). Naming the
-   skill reaches nothing — the spawned agent only knows what its prompt carries; you forward the
-   contract, you don't re-implement the judgment. *Attended:* native plan-mode human approval. A
-   fail stays in the worktree — nothing merged, siblings untouched → failure path (§ below).
-   - **The verifier may fix MINOR issues inline; MAJOR issues become a planned fix.** A **minor**
-     issue is *mechanical / deterministic* — fmt, lint, a missing import, an obvious typo — where
-     "fixed" is proven by the suite going green, **not** by the verifier's judgment. There the
-     verifier may fix it and re-run `build + lint + test`; independence holds because the check is
-     objective (the compiler/tests, not its opinion), and the fix is re-confirmed at the merge
-     re-gate. A **major** issue — anything behavioral / structural / acceptance-level ("does not
-     meet `done_looks_like`", wrong approach) — the verifier must **not** self-fix (fixing then
-     re-judging its own work is the structural-blindness trap the gate exists to prevent): it writes
-     a **fix plan** and the failure path dispatches a **fresh fix agent** through the same plan-first
-     pipeline (§ below; `references/executor-discipline.md` § Verifier fixes). **When unsure whether
-     it's minor, treat it as major.**
+7. **GATE — a fresh verifier, not the builder** (independence is the point — why:
+   `references/dispatch-policy.md` § GATE). Run it **inside** the worktree. *Unattended:* spawn a
+   **separate verifier** given only the leaf's `done_looks_like` + the pack's shared requirements +
+   the diff (never the builder's reasoning); it runs `build + lint + test` (exit-0), judges
+   acceptance, and returns **PASS / NEEDS-HUMAN / FAIL** + evidence. **Forward `verify-acceptance`'s
+   contract into its prompt** — the verifier inherits no skill (`references/dispatch-policy.md`
+   § GATE covers what to forward and why). *Attended:* native plan-mode human approval. The verifier
+   **fixes MINOR (mechanical / deterministic) issues inline** and re-runs the suite (not a strike);
+   a **MAJOR** issue it must **not** self-fix — it writes a fix plan and the failure path dispatches
+   a fresh fix agent (boundary: `references/executor-discipline.md` § Verifier fixes; when unsure,
+   treat as major). A fail stays in the worktree — nothing merged, siblings untouched → failure
+   path (§ below).
 8. **MERGE (serialized).** Acquire the single merge lock; `rebase` the batch branch onto
-   current `main`; **re-run the deterministic gate post-rebase** (catches semantic conflicts
-   a clean textual merge hid); only a green re-gate **fast-forwards** to `main`. Rebase
-   conflict or red re-gate → do **not** merge, release the lock, send the batch to the
-   failure path; `main` and siblings stay clean. (`references/worktree-merge.md`.)
+   current `main`; **re-run the deterministic gate post-rebase** (invariant 2); only a green re-gate
+   **fast-forwards** to `main`. Rebase conflict or red re-gate → do **not** merge, release the lock,
+   send the batch to the failure path; `main` and siblings stay clean. (`references/worktree-merge.md`.)
 9. **COMPLETE + REPLAN.** Only after the work is on `main`: `haven_complete_item {ref,
    evidence}` per leaf — which returns `unblocked[]`. When a leaf made a non-obvious
    integration/contract decision, also append a short `delivery`/`decision` artifact on it
@@ -239,45 +233,26 @@ suite re-confirmed it and the batch proceeds. A **major** fail (behavioral / str
 acceptance-level) is a *planned* fix, not a patch: the verifier's **fix plan** feeds a **fresh fix
 agent** dispatched through the same plan-first pipeline (plan → validate → build → gate, § tick 6),
 which reuses the fix-log + strike machinery below. On a major fail:
-**append a fix-log entry** as an append-only artifact on the **batch container** (graph-
-durable; `metadata` is write-once, so run-state cannot live on the node — and that's a
-feature). **Strikes are derived by counting** fix-log entries — no schema field, same
-derived-on-read lens as `context_pack`/`rollup_state`. Retry by putting the leaf back on the
-frontier — for an `in_progress` failed leaf the cheap path is `haven_update_item {status:
-ready}` (note: `haven_reopen` resets to **discovery**, not ready, so a reopened leaf must be
-re-groomed before re-dispatch — reserve it for leaves the run archived). At an **N-strike
-ceiling** (default 2–3, `references/dispatch-policy.md`) **stop retrying and escalate**:
-`haven_handoff {ref, to:human, wait:on_human}` with the fix-log as the diagnosis — which
-self-evicts the batch from `next --owner ai` while the rest of the graph keeps converging.
-The strike ceiling is the **liveness guarantee**: the AI frontier strictly shrinks, so the
-loop provably converges.
+**append a fix-log entry** (append-only, on the **batch container**); **strikes = fix-log entry
+count** (no schema field — `references/executor-discipline.md`). Retry by putting the leaf back on
+the frontier (`haven_update_item {status: ready}`; not `reopen`, which resets to discovery). At an
+**N-strike ceiling** (default 2–3, `references/dispatch-policy.md`) **stop and escalate**:
+`haven_handoff {ref, to:human, wait:on_human}` with the fix-log as the diagnosis — which self-evicts
+the batch from `next --owner ai` while the rest of the graph converges. The ceiling is the
+**liveness guarantee**: the AI frontier strictly shrinks, so the loop provably converges.
 
 ## Choosing parallelism — the coordinator's per-run call
 
-**`MAX_PARALLEL` is your judgment for the run, not a fixed default.** It is a *speed* dial,
-never a correctness one: the serialized merge + mandatory post-rebase re-gate protects `main`
-at every value, so choosing wrong only costs wall-clock, never `main`. Pick from the ready
-frontier's **coupling risk** (full rule: `references/dispatch-policy.md`):
+**`MAX_PARALLEL` is your judgment for the run, not a fixed default** — a *speed* dial, never a
+correctness one (the serialized merge + re-gate protect `main` at every value, so a wrong choice
+costs only wall-clock). Serial (1) when the build is risky or you're unsure; fan out (a conservative
+3–4) when the frontier is clearly disjoint and low-blast. Full rule + rationale:
+`references/dispatch-policy.md` § MAX_PARALLEL.
 
-- **Serial (1)** when the build is risky — items likely share code, or touch schema/migrations,
-  concurrency, security, or cross-cutting refactors. **This is also the default under doubt:**
-  parallelism is pure speed, so when unsure, run slow.
-- **Fan out (up to a conservative 3–4)** when the frontier is clearly disjoint and low-blast —
-  separate crates/modules, additive or mechanical work, no shared files.
-
-The parallel-merge + re-gate seam is still the one place a missed re-gate can silently land
-broken code on `main` as "done" — so the ceiling stays low and serial stays the safe fallback.
-Even at 1 the MERGE step runs the full `lock → rebase → re-gate → ff` path (a degenerate
-one-entry queue), so the merge discipline is exercised at any setting. (Serial-first was the
-*bring-up* posture — HV-84/85 proved the full machine including the parallel seam on a real
-run; the dial is now open.)
-
-**Pack-first is always serial, whatever `MAX_PARALLEL` you chose.** A packless coupled cluster takes **two ticks** — tick N
-composes `create-context-pack` to establish the pack, tick N+1 dispatches the now-packed batch
-— with **never more than one batch in flight** and no added concurrency. And because coupled leaves
-are ordered by their shared foundation's dependency edge, they never build as separate
-worktrees over an undecided architecture, so the cross-worktree semantic-conflict seam
-(invariant 2) cannot arise for them.
+**Pack-first is always serial**, whatever `MAX_PARALLEL` you chose: a packless coupled cluster takes
+two ticks (compose `create-context-pack`, then dispatch the now-packed batch), never >1 batch in
+flight — and because coupled leaves are ordered by their shared foundation's dependency edge, they
+never build as separate worktrees over an undecided architecture (invariant 2's seam can't arise).
 
 ## Convergence / fresh-session handoff
 

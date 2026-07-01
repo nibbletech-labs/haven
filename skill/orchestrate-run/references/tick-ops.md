@@ -114,16 +114,12 @@ agent given only `done_looks_like` + pack shared-requirements + the diff, runnin
 `build + lint + test` + an acceptance judgment, returning PASS / NEEDS-HUMAN / FAIL + evidence. The
 attended gate is a human plan-mode "go".
 
-**Composing `verify-acceptance` = FORWARDING its contract, because a spawned subagent does NOT inherit
-skills.** Read `skill/verify-acceptance` (its `SKILL.md` + `references/verdict-contract.md` +
-`references/evaluation-lens.md`) and **inline that contract into the verifier's prompt**: the
-PASS / NEEDS-HUMAN / FAIL definitions, the independence rule (judge from `done_looks_like` +
-shared-requirements + diff only — never the builder's reasoning), and the **exhaustive
-acceptance-clause walk**. "See `skill/verify-acceptance`" is *your* reading instruction; the verifier only
-knows what its prompt carries. The executor still does not **re-implement** the judgment — it
-forwards `verify-acceptance`'s own contract verbatim so the one judgment runs in the spawned agent. (Sibling:
-HV-148 — the same forward-into-a-non-inheriting-subagent fix on the build path.) **Collect the
-verdict explicitly** — an idle signal means *fetch the verdict*, never proceed on an absent one.
+**Forward `verify-acceptance`'s contract into the verifier's prompt** (it inherits no skill — why:
+`references/dispatch-policy.md` § GATE). Inline, from `skill/verify-acceptance`: the
+PASS / NEEDS-HUMAN / FAIL definitions (`references/verdict-contract.md`), the independence rule
+(judge from `done_looks_like` + shared-requirements + diff only), and the exhaustive
+acceptance-clause walk + lens (`references/evaluation-lens.md`). **Collect the verdict explicitly** —
+an idle signal means *fetch the verdict*, never proceed on an absent one.
 
 ## 8. Merge — serialized lock → rebase → re-gate → ff
 

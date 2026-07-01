@@ -94,6 +94,8 @@ and is fixed idempotently. The graph is truth; worktrees are reconcilable cache.
 ## Same path at any `MAX_PARALLEL`
 
 At `MAX_PARALLEL=1` there is at most one worktree and the lock is never contended, but the
-**exact same** create → gate → lock → rebase → re-gate → ff → complete path runs. Fanning out
-(`MAX_PARALLEL>1`) changes only how many worktrees exist at once and whether the lock is
-contended — not the merge discipline, which is proven from the first serial run.
+**exact same** create → gate → lock → rebase → re-gate → ff → complete path runs — and **even that
+one batch still gets its own worktree; never build in `<base>`** (invariant 4: at serial the
+isolation reads like overhead, which is exactly when it gets skipped and corrupts the primary
+checkout). Fanning out (`MAX_PARALLEL>1`) changes only how many worktrees exist at once and whether
+the lock is contended — not the merge discipline, which is proven from the first serial run.

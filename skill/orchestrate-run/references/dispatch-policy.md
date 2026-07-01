@@ -25,12 +25,8 @@ lock→rebase→re-gate→ff path.
   wider buys little, and a low cap bounds the blast radius of the one silent failure mode (a
   missed re-gate landing broken code on `main`). The human can always override the posture in
   plain language when kicking off the run ("this one's touchy, keep it serial" / "these are
-  independent, run them together").
-
-> Serial-first was the *bring-up* posture (HV-84/85): prove the whole machine — happy path,
-> loop, replan, failure, recovery, **and** the parallel merge/re-gate seam — before trusting
-> fan-out. That proving run is done (HV-85), so the dial is now the coordinator's judgment,
-> not a pinned `1`.
+  independent, run them together"). (Serial-first was the bring-up posture; HV-84/85 proved the
+  full machine incl. the parallel seam, so the dial is now open.)
 
 ## EFFORT — set on the *spawned build agent*, never on yourself
 
@@ -91,21 +87,17 @@ autonomous path — the real backstop is still the post-build verifier (§ GATE)
 
 ## GATE — how a batch is judged before merge
 
-- **Unattended (default for autonomous runs): compose the `verify-acceptance` skill.** The gate **is** the
-  standalone `verify-acceptance` skill (Mode 1) — a fresh verifier agent given **only** the leaf's
-  `done_looks_like` + the pack's shared-requirements + the diff (never the build agent's reasoning
-  or worktree narrative), running `build + lint + test` (exit-0) + an independent acceptance
-  judgment, and returning a **PASS / NEEDS-HUMAN / FAIL** verdict + evidence. **Read `skill/verify-acceptance`
-  (`SKILL.md` + `references/verdict-contract.md` + `references/evaluation-lens.md`) for the contract
-  and FORWARD it into the verifier's prompt** — the verifier is a spawned subagent that inherits no
-  skill (§ Dispatch-prompt quality below), so naming the skill reaches nothing; *"do not restate it
-  here"* means don't duplicate the contract in **this** doc, **not** withhold it from the verifier.
-  The executor **consumes** the verdict — it forwards `verify-acceptance`'s contract verbatim and never
-  re-implements the judgment. Only **PASS** merges; a
-  **FAIL** keeps the batch in the worktree → failure path (STRIKES below); a **NEEDS-HUMAN**
+- **Unattended (default for autonomous runs): compose the `verify-acceptance` skill.** The gate **is**
+  `verify-acceptance` (Mode 1) — a fresh verifier given **only** the leaf's `done_looks_like` + the
+  pack's shared-requirements + the diff (never the build agent's reasoning or worktree narrative),
+  running `build + lint + test` (exit-0) + an independent acceptance judgment, returning a
+  **PASS / NEEDS-HUMAN / FAIL** verdict + evidence. **The verifier inherits no skill, so FORWARD the
+  contract into its prompt** — read `skill/verify-acceptance` (`SKILL.md` + `references/verdict-contract.md`
+  + `references/evaluation-lens.md`) and inline it; naming the skill reaches nothing. Only **PASS**
+  merges; a **FAIL** keeps the batch in the worktree → failure path (STRIKES below); a **NEEDS-HUMAN**
   escalates straight to `handoff` (ambiguity won't clear on a blind retry). The verifier's
-  independence by construction is the load-bearing quality guarantee — deterministic exit-0 alone
-  is only partial cover (test adequacy + "does this meet `done_looks_like`" are judgment calls).
+  independence by construction is the load-bearing quality guarantee — deterministic exit-0 alone is
+  only partial cover ("does this meet `done_looks_like`" is a judgment call).
 - **Attended: native plan-mode human approval** per complex batch. Use when a person is driving
   and the batch warrants a human "go".
 
