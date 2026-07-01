@@ -35,8 +35,12 @@ direct is usually the better call.
   serial is just the safe fallback when the build is risky or unclear (the full risk rule lives in
   `orchestrate-run`'s `references/dispatch-policy.md`; HV-84/85 proved the machine, HV-241 opened
   the dial).
-- **Workers run at session parity.** A Build/Verify subagent inherits the **same model and the same
-  effort** as the orchestrating session — no separate dial, no silent downgrade (**HV-167**).
+- **Workers default to session parity — with an opt-in tier.** By default a Build/Verify subagent
+  inherits the **same model and effort** as the orchestrating session — no *silent* downgrade
+  (**HV-167**). A run may **opt into asymmetric tiering** at kickoff (a lighter build/plan agent, a
+  heavier validator), under one guardrail: the **verifier tier is never below the builder tier**, so
+  the judgment is never the thing downgraded (**HV-242** amends HV-167 — see `orchestrate-run`'s
+  `references/dispatch-policy.md` § MODEL_TIERS).
 - **Two different verifications — don't conflate them:**
   - **Code** — `build + lint + test` green, and "does the diff meet `done_looks_like`." That's the
     `verify-acceptance` skill (Mode 1), and it's the executor's per-leaf gate. The AI does this.

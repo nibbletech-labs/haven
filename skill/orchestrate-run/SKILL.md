@@ -20,8 +20,9 @@ description: >-
 You take a graph that's already **planned** (`orchestrate-plan`) — **packed**
 (`create-context-pack`), or with any still-packless coupled cluster packed first as you
 go — and **build it** — autonomously, batch by batch, until the AI-owned frontier is empty. You own the **loop / worktree / gate / merge**; you do
-**not** write code. The code work is **native plan mode + ultracode**, handed the
-pack; you dial its effort and gate and integrate its output. The two halves meet
+**not** write code. The code work is a **plan-first build agent** (ultracode-grade): handed
+the pack, it plans, has that plan validated, then builds (§ tick step 6); you dial its
+effort/model and gate and integrate its output. The two halves meet
 only at the graph.
 
 This is builder's `devteam`/`orchestrate` executor re-expressed natively: the graph
@@ -31,8 +32,8 @@ and every tick reorients from it.
 ## Where it sits (the family — meet only at the graph)
 
 `orchestrate-plan` (decompose a goal → graph) → `create-context-pack` (batch ready
-leaves under a container + a verify-first `spec` pack) → native **plan mode / ultracode**
-(the code) → **`orchestrate-run`** (this: loop, gate, worktree, merge, complete, converge).
+leaves under a container + a verify-first `spec` pack) → a **plan-first build agent**
+(ultracode-grade; the code) → **`orchestrate-run`** (this: loop, gate, worktree, merge, complete, converge).
 
 This executor is **one of four ways** Haven work gets driven — the most orchestrated end of the
 spectrum. It runs serial or parallel by the coordinator's per-run call (`MAX_PARALLEL`;
@@ -90,8 +91,10 @@ human-gated knowledge promotion — is in `references/executor-discipline.md`.
 0. **REORIENT + RECOVER.** Read the whole graph in one call (`haven graph` /
    `haven_graph`); resolve the project first if unknown. Then **reconcile** the graph's
    `in_progress` leaves against `git worktree list` (`references/worktree-merge.md`): an
-   `in_progress` leaf with a live build agent → leave it; with no live agent → **orphaned**
-   (crashed mid-build) → if its worktree holds a clean, gate-passing build resume at MERGE,
+   `in_progress` leaf with a live build agent → leave it; with no live agent → **orphaned** →
+   if its worktree holds a clean, gate-passing build resume at MERGE; else if the container has an
+   **approved `build-plan.md`** but the worktree has no build commits (crashed after plan-approval)
+   resume at **build** from that plan — a fresh agent reads it (invariant 3), don't re-plan blind;
    else prune the worktree and send the batch down the failure path (strike count survives
    in the container's fix-log); a worktree with no `in_progress` leaf → **stale** → prune.
    Do this **before** dispatching anything.
@@ -140,17 +143,35 @@ human-gated knowledge promotion — is in `references/executor-discipline.md`.
 5. **CLAIM.** Soft-claim every member of the batch: `haven_update_item {ref,
    status:in_progress}`, one call per leaf. This removes them from `next`, so a re-read
    this same tick won't re-pick them. **Claim before you spawn — never spawn before claim.**
-6. **DISPATCH.** Per batch, create an isolated worktree off `main`
-   (`references/worktree-merge.md`) and spawn **one** native build agent into it, handed:
-   the container's `context-pack.md` (`haven_get_artifact {ref:container, role:context-pack}`), the
-   members' `done_looks_like`, the **effort/model** and **gate mode** per
-   `references/dispatch-policy.md`, and — for each leaf — a **2–5 step self-check derived
-   from its `done_looks_like`** (a green global build is not proof a specific leaf's
-   acceptance is met). The agent is a pure executor: it builds, runs its self-check, and
-   reports pass/fail + evidence + any **scope finding** — it does **not** touch the graph.
-   If it discovers its member list is wrong / a dependency is missing, it **surfaces and
-   returns** — it must never silently overreach or stall (the Change-Request rule); you
-   decide next tick whether to re-pack, re-plan, or adjust the batch.
+6. **DISPATCH — plan → validate → build, on one retained-context agent.** Per batch, create
+   an isolated worktree off `main` (`references/worktree-merge.md`) and spawn **one** build agent
+   into it (at BUILD_TIER — `references/dispatch-policy.md` § MODEL_TIERS), **addressable** so you
+   can gate it mid-run without discarding its context. Hand it: the container's `context-pack.md`
+   (`haven_get_artifact {ref:container, role:context-pack}`), the members' `done_looks_like`, the
+   **effort/model** and **gate mode** per `references/dispatch-policy.md`, and — for each leaf — a
+   **2–5 step self-check derived from its `done_looks_like`** (a green global build is not proof a
+   specific leaf's acceptance is met). It is a pure executor: it never touches the graph.
+   - **6a Plan first.** For a complex/ultracode batch (the plan-gate dial —
+     `references/dispatch-policy.md` § PLAN-GATE; a **mechanical** batch skips 6a/6b and builds
+     directly), instruct the agent to **produce a build plan, write it as `build-plan.md` on the
+     container** (`role:scratch`, sibling to `fix-log.md` — `references/tick-ops.md` § 6), and
+     **not modify code**, then report and wait. Read-only here is *by instruction*, not a hard
+     sandbox — the accepted trade for retained context.
+   - **6b Plan-gate — fresh eyes, VERIFY_TIER.** Spawn a **separate** validator (never the build
+     agent — a same-context reviewer is structurally blind) given the plan + the pack's shared
+     requirements + each `done_looks_like`, returning **APPROVE / REVISE / REJECT** (criteria:
+     `references/executor-discipline.md` § The build plan). **APPROVE** → `SendMessage` the *same*
+     build agent "proceed". **REVISE** → `SendMessage` the specific gaps; it rewrites
+     `build-plan.md` and you re-gate. **REJECT** (structurally wrong / needs scope it can't
+     self-grant) → it's a Change Request, not a build → failure/replan path, no code written. This
+     AI gate replaces native plan mode's **human** gate on the autonomous path.
+   - **6c Build — retained context.** On APPROVE the same agent builds from its **live planning
+     context**; the `build-plan.md` artifact is the durable shadow (for the gate, for audit, and
+     for crash recovery — step 0), **not** the happy-path build input. It runs its self-check and
+     reports pass/fail + evidence + any **scope finding**. If it discovers its member list is
+     wrong / a dependency is missing, it **surfaces and returns** — never silently overreach or
+     stall (the Change-Request rule); you decide next tick whether to re-pack, re-plan, or adjust
+     the batch.
 7. **GATE — a fresh verifier, not the builder.** Run the gate **inside** the worktree.
    *Unattended:* spawn a **separate verifier agent** given only the leaf's `done_looks_like`
    + the pack's shared requirements + the diff — **not** the build agent's reasoning — which
@@ -178,11 +199,11 @@ human-gated knowledge promotion — is in `references/executor-discipline.md`.
    (the pack's "structurally-wrong → re-plan" escape, applied in the *run* loop). Remove
    the worktree; release the lock.
 
-**Collecting a spawned agent's result (build § 6, gate § 7).** A spawned agent often signals
-**idle/complete WITHOUT delivering its final report** — treat the idle signal as *"go fetch the
-report,"* never as the report itself. After any build or verifier agent goes idle, **explicitly
-retrieve and confirm its structured result** (the build self-check outcome / the
-PASS·NEEDS-HUMAN·FAIL verdict + evidence) — `SendMessage` to pull it when it didn't arrive — and
+**Collecting a spawned agent's result (build § 6c, plan-gate § 6b, gate § 7).** A spawned agent
+often signals **idle/complete WITHOUT delivering its final report** — treat the idle signal as
+*"go fetch the report,"* never as the report itself. After any build or validator/verifier agent
+goes idle, **explicitly retrieve and confirm its structured result** (the build self-check outcome
+/ the plan-gate APPROVE·REVISE·REJECT / the PASS·NEEDS-HUMAN·FAIL verdict + evidence) — `SendMessage` to pull it when it didn't arrive — and
 **never advance the tick on a missing or empty report**: a silent absent verdict must not be read
 as a pass. The loop waits for the *report*, not merely the completion notification.
 

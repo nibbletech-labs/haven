@@ -117,6 +117,37 @@ Then **wait — do not assume approval.** A build agent that hits a trigger must
 never silently stall. You — the single orchestrator — decide on the next tick whether
 to re-pack, re-plan, or adjust the member list. No self-granted scope expansion, ever.
 
+## The build plan — plan-first, validated before build
+
+For a complex / ultracode batch (the plan-gate dial — `references/dispatch-policy.md` § PLAN-GATE),
+the build agent **plans before it writes code**, and a **fresh validator** (VERIFY_TIER, never the
+builder) approves that plan first. This is an **AI** gate, not native plan mode's human gate — so the
+planning phase is read-only *by instruction* ("do not modify code until I approve"), not a hard
+sandbox. The accepted trade buys the thing that matters most: the agent that planned is the agent
+that builds, so the **full planning context is retained** (a plan doc is a lossy compression of it).
+
+**Artifact contract.** The plan is written as `build-plan.md` on the **batch container**
+(`role:scratch`, sibling to `fix-log.md` — there is no `plan` role; `scratch` is the container's
+working-artifact slot the orchestrator already reads). It is the **durable shadow**: read by the
+validator, by a human auditor, and by a fresh agent on crash-recovery (approved plan + no build
+commits → resume at build, not re-plan — SKILL § tick 0). On the **happy path the builder does not
+re-read it** — it builds from live context; the artifact exists for validation, audit, and recovery.
+
+**Plan-validation criteria** (the validator's APPROVE / REVISE / REJECT):
+
+1. **Covers every acceptance clause** of each member's `done_looks_like` — no clause unaddressed.
+2. **Stays strictly in envelope.** A plan that needs an unlisted dependency, a schema change, a new
+   service, or work beyond the member list is **not an approvable plan — it is a Change Request**
+   (§ The change-request envelope). REJECT and route it back; the agent may not self-grant scope.
+3. **Sequences TDD** for behavioral leaves — the failing-test-first order, per acceptance id
+   (§ TDD as a gate), is visible in the plan.
+4. **Is concrete** — names the key files / edges and the approach, passing the synthesis test
+   (`references/dispatch-policy.md` § Dispatch-prompt quality); a hand-wavy plan is a REVISE.
+
+**REVISE** returns the specific gaps to the *same* agent (it rewrites `build-plan.md`, you re-gate);
+**REJECT** sends the batch to the change-request / replan path with no code written; **APPROVE**
+releases the agent to build (tick step 6c).
+
 ## Batching heuristics — how a batch is composed
 
 When you compose a packless cluster into one batch (or hand a member set to

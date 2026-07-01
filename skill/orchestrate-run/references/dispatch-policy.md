@@ -34,7 +34,8 @@ lock→rebase→re-gate→ff path.
 
 ## EFFORT — set on the *spawned build agent*, never on yourself
 
-You control what you spawn, not your own effort. Map complexity → effort/model:
+You control what you spawn, not your own effort. Map complexity → effort (the *model* axis is
+§ MODEL_TIERS below):
 
 | signal | effort |
 |---|---|
@@ -46,6 +47,43 @@ Complexity signal = a node hint if present, else inferred from `done_looks_like`
 shared requirements. **Retry escalation (policy knob):** on a strike, you *may* bump effort
 (e.g. low→ultracode) for the retry — set this default per run; conservative default is to hold
 effort on the first retry and bump on the second.
+
+## MODEL_TIERS — which model runs the build vs the verifiers
+
+Two tiers, set at kickoff:
+
+- **BUILD_TIER** — the one plan+code agent (tick steps 6a/6c).
+- **VERIFY_TIER** — the fresh validators: the **plan-gate** (6b) and the **code verifier** (7).
+
+**Default: session parity.** Both tiers inherit the orchestrating session's model and effort — no
+separate dial, no *silent* downgrade (**HV-167**; the `haven` skill's `references/running-work.md`).
+
+**Opt-in asymmetric tiering** — a human sets it in plain language when kicking off the run ("build
+light, verify heavy"): BUILD_TIER may run a **lighter** model than VERIFY_TIER, spending the heavier
+model where the leverage is (the judgment), not on generation. Under **one guardrail, inviolable:**
+
+> **VERIFY_TIER ≥ BUILD_TIER, always.** The verifier is never below the builder, so the *judgment*
+> is never the thing downgraded — only the generation is. That is what keeps asymmetry compatible
+> with HV-167's fear (a *silent weakening of the gate*) instead of a reversal of it.
+
+This **amends HV-167** (which read "no separate dial"); the amendment + rationale is recorded on
+**HV-242**. Effort still maps per § EFFORT — MODEL_TIERS is the orthogonal *model* axis.
+
+## PLAN-GATE — validate the approach before any code (tick steps 6a/6b)
+
+A build agent **plans first** and has that plan validated **before it writes code** — catching a
+wrong approach before it costs a full build + a failed § GATE. Same on/off rule as TDD:
+
+- **On for complex / ultracode batches** (novel, cross-cutting, schema / security / concurrency).
+- **Optional for mechanical batches** — a rename / config edit has no approach worth gating; it
+  skips 6a/6b and builds directly (the degenerate path).
+
+The validator is **fresh eyes at VERIFY_TIER — never the build agent** (a same-context reviewer is
+structurally blind, exactly as for the code gate). Verdicts **APPROVE / REVISE / REJECT**; the
+plan-validation criteria (covers every acceptance clause, stays in envelope, sequences TDD, is
+concrete) are in `references/executor-discipline.md` § The build plan. This is the **AI** gate that
+replaces native plan mode's **human** gate on the autonomous path — the plan is read-only *by
+instruction*, and the real backstop is still the post-build verifier (§ GATE).
 
 ## GATE — how a batch is judged before merge
 

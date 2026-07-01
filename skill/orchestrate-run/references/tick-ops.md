@@ -92,6 +92,18 @@ If no concrete verification is possible, specify *what to review against the qua
 recipe is what the step-7 verifier re-runs independently (`references/dispatch-policy.md` § GATE /
 § self-check); a green global build is not proof a specific leaf's acceptance is met.
 
+**Plan-gate ops (plan-gate on — `references/dispatch-policy.md` § PLAN-GATE).** For a complex /
+ultracode batch the agent writes its plan to the **container** before building; you read it back for
+a **fresh** validator (never the builder). Write (the build agent) / read (you, for the gate):
+- CLI: `haven artifact add <CONTAINER> --role scratch --name build-plan.md --content "…" -p <P>` ·
+  read: `haven artifact get <CONTAINER> --role scratch --path build-plan.md -p <P>`
+- MCP: `haven_add_artifact {"project":"<P>","ref":"<CONTAINER>","role":"scratch","name":"build-plan.md","content":"…"}` ·
+  read: `haven_get_artifact {"project":"<P>","ref":"<CONTAINER>","role":"scratch"}`
+
+On **APPROVE** `SendMessage` the *same* build agent "proceed" (retained context — no re-spawn);
+**REVISE** returns the gaps for a rewrite + re-gate; **REJECT** routes to the failure / replan path.
+A **mechanical** batch skips this and builds directly.
+
 ## 7. Gate — compose the `verify-acceptance` skill (unattended) or plan-mode approval (attended)
 
 No Haven op — the unattended gate **is** the standalone `verify-acceptance` skill (Mode 1): a fresh verifier
