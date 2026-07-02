@@ -66,6 +66,34 @@ always reflects what is actually on `<base>`.
 > breaks at runtime). Skip it "to save time" and you ship green-per-worktree code that is
 > red-on-`<base>` — and because the loop is stateless, it has no memory anything is wrong.
 
+> **Applied-last-wins — why the re-gate re-runs *every* merged batch's tests, not just the incoming
+> one.** Some resources are integrated by git textually but **applied in sequence at runtime** —
+> append-only migration chains, `CREATE OR REPLACE` functions, seed scripts. Two batches can each edit
+> the same such object, rebase clean, and both pass in isolation, yet the last-applied version silently
+> clobbers the earlier one at apply time (App 3.0 scar: two streams each `REPLACE`-ing one SQL function).
+> A clean textual rebase proves **nothing** about apply-order semantics — so the post-rebase re-gate
+> suite must include **every already-merged batch's acceptance tests**, not only the incoming batch's;
+> that is the only check that catches an apply-order clobber. Prevention lives at pack time
+> (version-range assignment + highest-version-carries-all-hunks — see
+> `create-context-pack/references/pack-template.md` § 2 *Shared linear resources*).
+
+## Shared mutable infrastructure — serialize the stateful span (dispatch)
+
+Worktrees isolate the **repo**, not the world. Parallel streams each get their own checkout, but they
+can still share **one stateful service** — a local database/stack, an emulator, a shared dev server, a
+global cache: anything **reset, migrated, or seeded** during a build. Each stream stays green in
+isolation while they corrupt each other live (the scar: one local Supabase stack every stream's
+db-reset clobbers). The protocol, **same mkdir-spinlock mechanics as the merge lock**:
+
+- **Identify** shared infra at dispatch — the pack's key-files / infra notes are the tell.
+- **Serialize** access through **one lockfile per resource**: atomic `mkdir` = acquire, `rmdir` =
+  release (`.haven-run/.infra-lock-<resource>`), one holder at a time.
+- **Hold for the whole span** — reset → migrate → test — **never a brief grab**; the window that
+  corrupts is the entire stateful sequence, not any single command.
+- **RECOVER a stale lock:** a crashed holder leaves the dir behind, so prune a lock whose holder has
+  no live agent (same rule as the merge lock — § RECOVER below).
+- When **contention dominates wall-clock**, drop `MAX_PARALLEL` — don't fine-grain the locks.
+
 ## Cleanup
 
 After a successful merge **and** its completes, remove the worktree:

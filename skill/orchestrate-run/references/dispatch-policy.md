@@ -17,7 +17,10 @@ lock→rebase→re-gate→ff path.
   or involve schema/migrations, concurrency, security, or cross-cutting refactors — anywhere
   hidden coupling makes the re-gate the only thing between you and broken `main`. Don't stack
   that seam under concurrency. **When unsure, this is the default** — parallelism is pure
-  speed, so the safe choice under doubt is the slow one.
+  speed, so the safe choice under doubt is the slow one. **Shared mutable infrastructure**
+  (a local DB/stack, emulator, or dev server every stream resets or migrates) serializes those
+  spans regardless of this dial — lock it per resource, see `references/worktree-merge.md`
+  § Shared mutable infrastructure.
 - **Fan out when the frontier is clearly disjoint and low-blast.** Items in separate
   crates/modules, additive or mechanical work, no shared files — the case the re-gate almost
   never fires on.

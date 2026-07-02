@@ -84,6 +84,17 @@ Feature: <feature name>
     Then <expected outcome — specific error format>
     Test: <test/file/path_spec.ts>
 
+### 2b. Shared linear resources — assign version ranges up front  (name every one here)
+<some resources are **not** merged by git but **applied in sequence at runtime** — append-only
+migration chains, `CREATE OR REPLACE` functions, seed scripts. Two streams each REPLACE the same
+function: git merges clean, both are green in isolation, and the **highest version number silently
+clobbers the loser** at apply time (the App 3.0 scar). Pack rule: **name each shared linear resource
+here**, **assign each stream a version RANGE up front**, and require the final version of any
+multiply-edited object to **carry ALL streams' hunks** (highest-version-carries-all-hunks). Tag each
+claim **[VERIFY]** like every code-level assertion. This is the pack-time prevention; the runtime
+backstop is the post-rebase re-gate re-running every merged batch's tests —
+`orchestrate-run/references/worktree-merge.md` § Merge.>
+
 ## 3. External dependencies — the group's boundary
 <for each dependency that lands OUTSIDE this group:
 - DONE deps: name them + the output/acceptance the group can rely on (read-only context).
