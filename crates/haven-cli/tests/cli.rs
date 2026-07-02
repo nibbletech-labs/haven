@@ -2540,3 +2540,67 @@ fn cli_artifact_add_with_xref_round_trips_via_xref_read() {
     assert_eq!(report["outbound"][0]["target"], "o/r#1");
     assert_eq!(report["outbound"][0]["relation"], "mirror");
 }
+
+/// HV-265: with a run-shaped ai frontier (>= 5 committed-ready ai leaves) `next`
+/// advertises the orchestrate family — `--pretty` prints the line after the
+/// table and the default JSON wraps `{ items, advisory }`; with four leaves
+/// neither surfaces it (bare items array, no line).
+#[test]
+fn next_advertises_orchestrate_family_on_run_shaped_frontier() {
+    const ADVISORY: &str = "this is an orchestrate-run-shaped frontier";
+    let seed = |h: &Haven, n: usize| {
+        h.ok(&[
+            "setup",
+            "--project-key",
+            "haven",
+            "--project-title",
+            "Haven",
+            "--prefix",
+            "HV",
+        ]);
+        for i in 0..n {
+            h.json(&[
+                "item",
+                "add",
+                &format!("Leaf {i}"),
+                "--status",
+                "ready",
+                "--done-looks-like",
+                "done",
+                "--commit",
+                "--assign",
+                "ai",
+            ]);
+        }
+    };
+
+    // Five leaves → advisory in --pretty text and the default JSON `advisory` field.
+    let h = Haven::new();
+    seed(&h, 5);
+    let pretty = h.text(&["next", "--pretty"]);
+    assert!(
+        pretty.contains(ADVISORY),
+        "pretty next must print the advisory line: {pretty}",
+    );
+    let json = h.json(&["next"]);
+    assert_eq!(
+        json["items"].as_array().unwrap().len(),
+        5,
+        "items array stays intact under the wrapper: {json}",
+    );
+    assert!(
+        json["advisory"].as_str().unwrap().contains(ADVISORY),
+        "default JSON must carry the advisory: {json}",
+    );
+
+    // Four leaves → bare items array, no advisory, no line.
+    let h = Haven::new();
+    seed(&h, 4);
+    assert!(!h.text(&["next", "--pretty"]).contains(ADVISORY));
+    let json = h.json(&["next"]);
+    assert_eq!(
+        json.as_array().unwrap().len(),
+        4,
+        "below threshold next stays a bare items array: {json}",
+    );
+}

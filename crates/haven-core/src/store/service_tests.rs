@@ -3393,6 +3393,70 @@ fn prime_assembles_all_sections() {
     assert!(block.contains("HV-3"), "inbox floater missing: {block}");
 }
 
+/// HV-265: when the committed-ready ai-assigned frontier (exactly what
+/// `next --owner ai` returns) reaches ORCHESTRATE_ADVISORY_THRESHOLD leaves,
+/// `prime` advertises the orchestrate family — and `orchestrate_advisory`
+/// reports it — so an orchestrator does not hand-roll a dispatch loop. Below
+/// the threshold there is no line and no advisory.
+#[test]
+fn prime_advertises_orchestrate_family_on_run_shaped_frontier() {
+    // Seed exactly the threshold count of committed-ready ai leaves.
+    let s = store();
+    for i in 0..ORCHESTRATE_ADVISORY_THRESHOLD {
+        s.add_item(
+            None,
+            NewItem {
+                title: format!("Leaf {i}"),
+                done_looks_like: Some("done".into()),
+                status: Some(Status::Ready),
+                commit: true,
+                assign: Some(OwnerKind::Ai),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    }
+
+    // The frontier is exactly `next --owner ai`; at the threshold the advisory fires.
+    assert_eq!(
+        s.orchestrate_advisory(None).unwrap(),
+        Some(ORCHESTRATE_ADVISORY),
+        "at threshold the advisory is present",
+    );
+    let block = s.prime(None).unwrap().render();
+    assert!(
+        block.contains(ORCHESTRATE_ADVISORY),
+        "prime block must advertise the orchestrate family: {block}",
+    );
+
+    // Below the threshold: no advisory, no line. Fresh store with one fewer leaf.
+    let s = store();
+    for i in 0..ORCHESTRATE_ADVISORY_THRESHOLD - 1 {
+        s.add_item(
+            None,
+            NewItem {
+                title: format!("Leaf {i}"),
+                done_looks_like: Some("done".into()),
+                status: Some(Status::Ready),
+                commit: true,
+                assign: Some(OwnerKind::Ai),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    }
+    assert_eq!(
+        s.orchestrate_advisory(None).unwrap(),
+        None,
+        "below threshold there is no advisory",
+    );
+    let block = s.prime(None).unwrap().render();
+    assert!(
+        !block.contains(ORCHESTRATE_ADVISORY),
+        "prime block must not advertise below threshold: {block}",
+    );
+}
+
 // ---- item-level external references (HV-226) --------------------------------
 
 fn eref(store: &str, target: &str) -> ExternalRef {

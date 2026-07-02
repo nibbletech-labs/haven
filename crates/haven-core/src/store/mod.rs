@@ -39,7 +39,7 @@ pub use query::{
     DispatchArtifact, DispatchCandidate, DispatchContextItem, DispatchRecommendation,
     DispatchSummary, DocAnchor, GraphEdge, GroomingPressure, LineageDirection, LineageGraph,
     LineageLink, ProjectGraph, ProjectGraphPage, DEFAULT_DISPATCH_LIMIT, DEFAULT_NEXT_LIMIT,
-    GROOMING_NUDGE_THRESHOLD,
+    GROOMING_NUDGE_THRESHOLD, ORCHESTRATE_ADVISORY, ORCHESTRATE_ADVISORY_THRESHOLD,
 };
 
 /// Columns selected for an `Item`, in the order `item_from_row` expects. Joined

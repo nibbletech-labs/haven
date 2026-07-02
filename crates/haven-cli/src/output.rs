@@ -14,6 +14,14 @@ pub enum Output {
     Item(Item),
     AddOutcome(AddOutcome),
     Items(Vec<Item>),
+    /// `haven next`: the dispatch frontier plus the optional orchestrate-family
+    /// advisory (HV-265). Default JSON stays a bare items array unless the
+    /// advisory is present, when it becomes `{ items, advisory }` (parity with
+    /// MCP `haven_next`); `--pretty` prints the table then the advisory line.
+    NextFrontier {
+        items: Vec<Item>,
+        advisory: Option<String>,
+    },
     Project(Project),
     Projects(Vec<Project>),
     Json(Value),
@@ -49,6 +57,10 @@ impl Output {
             Output::Item(i) => serde_json::to_value(i).unwrap_or(Value::Null),
             Output::AddOutcome(o) => serde_json::to_value(o).unwrap_or(Value::Null),
             Output::Items(v) => serde_json::to_value(v).unwrap_or(Value::Null),
+            Output::NextFrontier { items, advisory } => match advisory {
+                Some(advisory) => serde_json::json!({ "items": items, "advisory": advisory }),
+                None => serde_json::to_value(items).unwrap_or(Value::Null),
+            },
             Output::Project(p) => serde_json::to_value(p).unwrap_or(Value::Null),
             Output::Projects(v) => serde_json::to_value(v).unwrap_or(Value::Null),
             Output::Json(v) => v.clone(),
@@ -72,6 +84,12 @@ impl Output {
                 }
             }
             Output::Items(v) => print!("{}", item_table(v)),
+            Output::NextFrontier { items, advisory } => {
+                print!("{}", item_table(items));
+                if let Some(advisory) = advisory {
+                    println!("\n⇒ {advisory}");
+                }
+            }
             Output::Project(p) => print!("{}", project_table(std::slice::from_ref(p))),
             Output::Projects(v) => print!("{}", project_table(v)),
             Output::Message(m) => println!("{m}"),

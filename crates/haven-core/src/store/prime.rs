@@ -92,6 +92,11 @@ pub struct Prime {
     /// A grooming nudge string when untriaged/stale work has piled up (HV-82).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub grooming_nudge: Option<String>,
+    /// The orchestrate-family advisory (HV-265) when the committed-ready ai
+    /// frontier is run-shaped (>= `ORCHESTRATE_ADVISORY_THRESHOLD` leaves);
+    /// `None` below the threshold, so the line is absent from the block.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub orchestrate_advisory: Option<String>,
 }
 
 /// The load-bearing conventions a fresh agent needs at session start. Kept tight
@@ -196,6 +201,9 @@ impl Store {
             inbox_untriaged: pressure.untriaged,
             inbox,
             grooming_nudge: pressure.nudge,
+            // HV-265: fold in the orchestrate-family advisory from its single
+            // source (the ai dispatch frontier), independent of the sections above.
+            orchestrate_advisory: self.orchestrate_advisory(project)?.map(str::to_string),
         })
     }
 
@@ -285,6 +293,11 @@ impl Prime {
                     self.queue_total - self.queue.len()
                 ));
             }
+        }
+        // The orchestrate-family advisory (HV-265) rides just under the queue it
+        // describes — present only on a run-shaped ai frontier.
+        if let Some(advisory) = &self.orchestrate_advisory {
+            out.push_str(&format!("  ⇒ {advisory}\n"));
         }
 
         // §3 In-progress / waiting, with owner + what it's waiting on.

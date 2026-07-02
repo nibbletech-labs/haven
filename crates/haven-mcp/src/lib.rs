@@ -795,7 +795,15 @@ fn dispatch_tool(store: &Store, name: &str, a: &Value) -> Result<Value> {
                 opt_str(a, "owner").map(OwnerKind::parse).transpose()?,
                 opt_i64(a, "limit").or(Some(DEFAULT_NEXT_LIMIT)),
             )?;
-            to_value(items.iter().map(McpItem::compact).collect::<Vec<_>>())
+            let rows = to_value(items.iter().map(McpItem::compact).collect::<Vec<_>>())?;
+            // HV-265: on a run-shaped ai frontier, wrap the (unchanged) items array
+            // with an `advisory` sibling — pointing at the orchestrate family — so
+            // an orchestrator does not hand-roll a dispatch loop. Below the
+            // threshold the wire shape stays the bare items array (HV-153).
+            match store.orchestrate_advisory(project)? {
+                Some(advisory) => Ok(json!({ "items": rows, "advisory": advisory })),
+                None => Ok(rows),
+            }
         }
         "haven_dispatch" => to_value(store.dispatch(
             project,
@@ -1436,6 +1444,7 @@ fn tools_list() -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use haven_core::{ORCHESTRATE_ADVISORY, ORCHESTRATE_ADVISORY_THRESHOLD};
 
     fn store() -> Store {
         // Reuse the CLI-independent path: a temp dir as content root + temp DB.
@@ -1470,6 +1479,19 @@ mod tests {
         // Unwrap the MCP text-content envelope back into JSON.
         let text = resp["result"]["content"][0]["text"].as_str().unwrap();
         serde_json::from_str(text).unwrap()
+    }
+
+    /// The `haven_next` items array, read from either wire shape: the bare items
+    /// array below the run-shaped threshold, or the `{ items, advisory }` wrapper
+    /// at/above it (HV-265). Tests about the frontier itself use this so the
+    /// advisory wrapper doesn't perturb them.
+    fn next_items(payload: &Value) -> Vec<Value> {
+        payload
+            .get("items")
+            .and_then(Value::as_array)
+            .or_else(|| payload.as_array())
+            .cloned()
+            .unwrap_or_default()
     }
 
     /// Drive `tools/call` through the telemetry chokepoint and return the line.
@@ -1755,6 +1777,79 @@ mod tests {
         }
     }
 
+    /// HV-265: on a run-shaped frontier (>= ORCHESTRATE_ADVISORY_THRESHOLD
+    /// committed-ready ai leaves) `haven_next` wraps its items array with an
+    /// `advisory` field and `haven_prime` advertises the orchestrate family;
+    /// below the threshold `haven_next` stays a bare items array (no advisory).
+    #[test]
+    fn next_and_prime_advertise_orchestrate_family_on_run_shaped_frontier() {
+        let s = store();
+        let mut calls = Vec::new();
+        for i in 0..ORCHESTRATE_ADVISORY_THRESHOLD {
+            calls.push(json!({"jsonrpc":"2.0","id":i,"method":"tools/call","params":{
+                "name":"haven_add_item",
+                "arguments":{"title":format!("Leaf {i}"),"status":"ready","commit":true,"assign":"ai","done_looks_like":"done"}
+            }}));
+        }
+        calls.push(
+            json!({"jsonrpc":"2.0","id":100,"method":"tools/call","params":{
+                "name":"haven_next","arguments":{}
+            }}),
+        );
+        calls.push(
+            json!({"jsonrpc":"2.0","id":101,"method":"tools/call","params":{
+                "name":"haven_prime","arguments":{}
+            }}),
+        );
+        let out = session(&s, &calls);
+
+        // The two reads follow the N add calls.
+        let next = tool_payload(&out[ORCHESTRATE_ADVISORY_THRESHOLD]);
+        assert_eq!(
+            next["items"].as_array().unwrap().len(),
+            ORCHESTRATE_ADVISORY_THRESHOLD,
+            "items array stays intact under the wrapper",
+        );
+        assert_eq!(
+            next["advisory"], ORCHESTRATE_ADVISORY,
+            "next carries the advisory on a run-shaped frontier",
+        );
+        let block = tool_payload(&out[ORCHESTRATE_ADVISORY_THRESHOLD + 1])["prime"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert!(
+            block.contains(ORCHESTRATE_ADVISORY),
+            "prime advertises the orchestrate family: {block}",
+        );
+
+        // Below the threshold: a bare items array with no advisory.
+        let s = store();
+        let mut calls = Vec::new();
+        for i in 0..ORCHESTRATE_ADVISORY_THRESHOLD - 1 {
+            calls.push(json!({"jsonrpc":"2.0","id":i,"method":"tools/call","params":{
+                "name":"haven_add_item",
+                "arguments":{"title":format!("Leaf {i}"),"status":"ready","commit":true,"assign":"ai","done_looks_like":"done"}
+            }}));
+        }
+        calls.push(
+            json!({"jsonrpc":"2.0","id":100,"method":"tools/call","params":{
+                "name":"haven_next","arguments":{}
+            }}),
+        );
+        let out = session(&s, &calls);
+        let next = tool_payload(out.last().unwrap());
+        assert_eq!(
+            next.as_array().unwrap().len(),
+            ORCHESTRATE_ADVISORY_THRESHOLD - 1,
+            "below threshold next stays a bare items array",
+        );
+        assert!(
+            next.get("advisory").is_none(),
+            "no advisory below threshold: {next}",
+        );
+    }
+
     /// HV-67: `due_at` over the MCP surface — set on add (full carries it),
     /// absent from the lean `next` compact row, cleared via `"none"`, and a
     /// malformed value rejected as an error.
@@ -1906,18 +2001,20 @@ mod tests {
         );
         let out = session(&s, &reqs);
 
+        // This wide frontier is run-shaped (HV-265), so haven_next wraps its items
+        // with an advisory; read the items array from either shape.
         assert_eq!(
-            tool_payload(&out[n]).as_array().unwrap().len(),
+            next_items(&tool_payload(&out[n])).len(),
             DEFAULT_NEXT_LIMIT as usize,
             "bare haven_next must cap at DEFAULT_NEXT_LIMIT"
         );
         assert_eq!(
-            tool_payload(&out[n + 1]).as_array().unwrap().len(),
+            next_items(&tool_payload(&out[n + 1])).len(),
             n,
             "an explicit larger limit overrides the default cap"
         );
         assert_eq!(
-            tool_payload(&out[n + 2]).as_array().unwrap().len(),
+            next_items(&tool_payload(&out[n + 2])).len(),
             5,
             "an explicit smaller limit is honoured"
         );

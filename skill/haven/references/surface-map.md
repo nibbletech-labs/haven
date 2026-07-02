@@ -147,7 +147,7 @@ haven mcp
 | `haven_xref` | **`ref`** — cross-store links on the node's artifacts: a sorted `{node, outbound[], inbound[]}` report (outbound xrefs + inbound backlinks); read-only |
 | `haven_get_item` | **`ref`**, `include?: ["edges","artifacts","lineage"]` — the full item (prose + includes); the detail door. A superseded/archived ref still returns the item but rides a `stale_ref` `{ref, resolved_to:[…]}` hint (the work moved — follow `resolved_to`) |
 | `haven_get_items` | **`refs`** (array, max 20), `include?: ["edges","artifacts","lineage"]` — selected refs in full, preserving input order and duplicates; stale refs ride `stale_ref` per item |
-| `haven_next` | `owner?, limit?` — compact items; `owner` filters ASSIGNMENT (`owner_kind = owner`), unassigned (NULL) excluded |
+| `haven_next` | `owner?, limit?` — compact items; `owner` filters ASSIGNMENT (`owner_kind = owner`), unassigned (NULL) excluded. On a run-shaped ai frontier (≥5 committed-ready ai leaves) the bare items array is wrapped `{items, advisory}`, the `advisory` pointing at the orchestrate-run skill (HV-265); absent below the threshold |
 | `haven_dispatch` | `owner?, limit?, scope?, explain?` — lean "what should I work on?" briefing: bounded `next` plus targeted candidate detail (`done_looks_like`, parent/group context, blocked dependents, artifact pointers); `scope` restricts candidates to live descendants of a parent/release/phase ref |
 | `haven_next_explain` | `owner?` — diagnose an empty queue (counts by reason + hint) |
 | `haven_rank` | **`ref`**, `before?` \| `after?` (exactly one), `rationale?` — reorder within a priority band (fine ordering) |
@@ -166,7 +166,7 @@ haven mcp
 | `haven_rm_artifact` | **`ref`**, one of `role?` \| `name?` \| `id?` — remove an artifact (row + backing file); an ambiguous `role` is refused |
 | `haven_mv_artifact` | **`ref`**, **`new_name`**, one of `role?` \| `name?` \| `id?` — rename the backing file (role/history preserved) |
 | `haven_status` | `project?` |
-| `haven_prime` | `project?` — one-shot session-context block (project state, committed queue with next-eligible flagged, in-progress/waiting incl. owner, core conventions, untriaged inbox) as a `prime` text block; read at session start instead of separate `status`/`next`/`list`/`inbox` calls |
+| `haven_prime` | `project?` — one-shot session-context block (project state, committed queue with next-eligible flagged, in-progress/waiting incl. owner, core conventions, untriaged inbox) as a `prime` text block; read at session start instead of separate `status`/`next`/`list`/`inbox` calls. On a run-shaped ai frontier (≥5 committed-ready ai leaves) the block carries one advisory line under the queue pointing at the orchestrate-run skill (HV-265) |
 | `haven_list_projects` | `include_archived?` — discover backlogs (hides archived unless `include_archived:true`; a deleted project is never listed) |
 | `haven_add_project` | **`key`**, **`title`**, `prefix?, description?` |
 | `haven_archive_project` | **`key`**, `rationale?, by?` — soft-archive a project: hides it from default listings and refuses writes into it, namespace stays reserved (key/prefix/counter untouched, refs never reused). Reversible. The project-level analogue of `haven_archive`; there is no hard-delete tool |

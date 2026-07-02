@@ -26,5 +26,6 @@ pub use store::{
     ImportItem, ImportOutcome, Include, Integrity, ItemFilter, ItemUpdate, LineageDirection,
     LineageGraph, LineageLink, NewArtifact, NewItem, Prime, PrimeActiveItem, PrimeInboxItem,
     PrimeQueueItem, ProjectArchive, ProjectGraph, ProjectGraphPage, RestoreReport, SimilarItem,
-    StaleRef, Store, WaitUpdate, DEFAULT_DISPATCH_LIMIT, DEFAULT_NEXT_LIMIT,
+    StaleRef, Store, WaitUpdate, DEFAULT_DISPATCH_LIMIT, DEFAULT_NEXT_LIMIT, ORCHESTRATE_ADVISORY,
+    ORCHESTRATE_ADVISORY_THRESHOLD,
 };

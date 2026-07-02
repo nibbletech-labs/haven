@@ -273,6 +273,14 @@ pub const DEFAULT_NEXT_LIMIT: i64 = 50;
 /// `next` because each candidate carries targeted detail.
 pub const DEFAULT_DISPATCH_LIMIT: i64 = 5;
 
+/// The committed-ready ai-assigned frontier size — exactly what `next --owner ai`
+/// returns — at or above which the dispatch surfaces (`prime`/`next`) advertise
+/// the orchestrate family (HV-265): a run-shaped frontier an orchestrator should
+/// dispatch through the `orchestrate-run` skill rather than hand-roll a loop over.
+pub const ORCHESTRATE_ADVISORY_THRESHOLD: usize = 5;
+/// The one advisory line `prime`/`next` append on a run-shaped frontier (HV-265).
+pub const ORCHESTRATE_ADVISORY: &str = "this is an orchestrate-run-shaped frontier — consult the orchestrate-run skill (+ create-context-pack) before hand-rolling a dispatch loop";
+
 /// The `haven next` dispatch filter: committed, ready, not waiting, with no open
 /// dependency (SPEC §1). Shared verbatim by `next` (which returns the items) and
 /// `next_explain`'s `count_dispatchable` (which counts them) so the diagnostic
@@ -590,6 +598,19 @@ impl Store {
         scope_id: Option<i64>,
     ) -> Result<i64> {
         self.count_next_where(project_id, owner, scope_id, DISPATCHABLE_PREDICATE)
+    }
+
+    /// The orchestrate-family advisory (HV-265): `Some(ORCHESTRATE_ADVISORY)` iff
+    /// the committed-ready ai-assigned frontier — exactly what `next --owner ai`
+    /// returns — is at least [`ORCHESTRATE_ADVISORY_THRESHOLD`] leaves, else
+    /// `None`. Reuses `count_dispatchable` with `owner = ai` so the count can
+    /// never disagree with the real dispatch queue (no re-derived predicate). A
+    /// property of the graph, not of any per-call query: independent of whatever
+    /// `--owner` a caller passed, `prime`/`next` fold it in from this one source.
+    pub fn orchestrate_advisory(&self, project: Option<&str>) -> Result<Option<&'static str>> {
+        let (project_id, _) = self.require_project(project)?;
+        let ai_frontier = self.count_dispatchable(project_id, Some(OwnerKind::Ai), None)? as usize;
+        Ok((ai_frontier >= ORCHESTRATE_ADVISORY_THRESHOLD).then_some(ORCHESTRATE_ADVISORY))
     }
 
     fn count_next_where(

@@ -1303,11 +1303,11 @@ fn run(cli: &Cli) -> Result<Output> {
                 Ok(Output::Json(s.next_explain(project, owner)?))
             } else {
                 // Bound the frontier by default (HV-194); an explicit --limit wins.
-                Ok(Output::Items(s.next(
-                    project,
-                    owner,
-                    a.limit.or(Some(DEFAULT_NEXT_LIMIT)),
-                )?))
+                let items = s.next(project, owner, a.limit.or(Some(DEFAULT_NEXT_LIMIT)))?;
+                // HV-265: fold in the orchestrate-family advisory on a run-shaped
+                // ai frontier (a property of the graph, not of this query's owner).
+                let advisory = s.orchestrate_advisory(project)?.map(str::to_string);
+                Ok(Output::NextFrontier { items, advisory })
             }
         }
         Command::Dispatch(a) => {
