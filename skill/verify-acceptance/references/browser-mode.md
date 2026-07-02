@@ -3,9 +3,9 @@
 This is the **live Mode-2 contract**. When a leaf's acceptance is user-facing runtime
 behaviour, `verify-acceptance` doesn't judge from the diff alone — it **drives the running
 app** and judges what the app actually does against the live `done_looks_like`. Mode 2 is
-**live for ad-hoc / attended use** (routed to automatically by acceptance type — see
-SKILL.md § Modes); the `orchestrate-run` gate-wiring lands separately (HV-262), so a code
-leaf is still never routed here.
+**live** — routed to automatically by acceptance type (SKILL.md § Modes), both for ad-hoc use
+and as `orchestrate-run`'s unattended gate on UI-acceptance leaves (HV-262). A pure code leaf
+is still never routed here.
 
 The contract is written **platform-neutral** — "drive the running app" — because the same
 judgment will drive an iOS simulator later (HV-263). **The browser is v1's only driver.**
@@ -76,6 +76,13 @@ Capture evidence as you go:
   requests for any check that fails, so the failure is diagnosable without a re-run.
 - Present the result as a **per-check PASS / CONCERN / FAIL table**, rolled up **per
   evaluation-lens** (a11y, design-eval, behavioural), then to the single verdict.
+
+**The verdict is invalid without its evidence bundle** — a bare "PASS" does not conform to
+this contract. A gate caller (e.g. `orchestrate-run`'s coordinator) treats a bundle-less
+verdict as absent and never merges on it; after the merge it files the bundle as a `delivery`
+artifact on the verified item in the run owner's Haven store, so unattended verdicts are
+auditable after the fact. Evidence goes to the graph, **never as files in the target repo's
+tree** — a later commit would publish it.
 
 ## The four-rung ladder (browser verdicts only)
 

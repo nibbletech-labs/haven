@@ -149,8 +149,10 @@ the verdict). But it trades the human gate, so it is **earned, not assumed**:
   resolution), the driver, evidence capture, the four-rung ladder (**PASS-WITH-ISSUES**,
   browser-only), and the flake discipline — is in `references/browser-mode.md`, judged with
   the a11y + design-eval lenses and the severity model in `references/evaluation-lens.md`.
-  Automatic routing runs ad hoc / attended today; the `orchestrate-run` gate-wiring lands
-  separately (HV-262), so a code-leaf gate is never routed to Mode 2 yet.
+  Automatic routing serves both ad-hoc use and `orchestrate-run`'s **unattended gate** (HV-262):
+  a UI-acceptance leaf gates via Mode 2 — only a clean PASS merges, and the verdict is invalid
+  without its evidence bundle (`references/browser-mode.md` § Judge + evidence). A pure code
+  leaf is still never routed to Mode 2.
 
 ## Convergence / fresh-session handoff
 
@@ -163,9 +165,7 @@ with `--replace`). v1 ships a manual resume: `/verify-acceptance <ref>`.
 Mode 2 is **live** (ad-hoc / attended — `references/browser-mode.md`); what stays deferred:
 **dev-server auto-start** on an unreachable URL (Mode 2 expects a reachable `dev_url` and
 escalates NEEDS-HUMAN otherwise); the **iOS-simulator driver** (HV-263 — the contract is
-platform-neutral, browser is v1's only driver); **`orchestrate-run` gate-wiring** for Mode 2
-(HV-262, gated on the attended proving record HV-261 — the dispatch-policy fence stays until
-it flips); the **coded flake-retry engine** (the 3-attempt / ≥30%-governor discipline ships
+platform-neutral, browser is v1's only driver); the **coded flake-retry engine** (the 3-attempt / ≥30%-governor discipline ships
 as prompt-level instructions, not a harness); co-located session / evidence dirs; exploratory
 checklists (focused acceptance is the gate); and the **persisted per-project trust-ramp
 store** for the auto-complete dial (the dial is a plain input in v1 — the store is HV-100).

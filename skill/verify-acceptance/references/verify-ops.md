@@ -81,6 +81,7 @@ A **browser (Mode 2)** verdict writes back through the **exact same ops and dial
 clean PASS with the dial explicitly on, or the fix-log + `handoff` escalation on
 NEEDS-HUMAN / FAIL. The verdict body carries the browser-mode rung (PASS / PASS-WITH-ISSUES /
 NEEDS-HUMAN / FAIL) and the screenshot / console evidence per `references/browser-mode.md`.
-**Until the HV-261 attended proving record exists, default browser verdicts to verdict-only
-(Posture A)** — auto-complete on a browser PASS is not yet earned, so the human/dispatcher
-completes.
+**Default browser verdicts to verdict-only (Posture A)** — auto-complete on a browser PASS
+stays behind the explicit dial. Trust in unattended browser verdicts is
+**calibration-through-evidence** (HV-262): the mandatory evidence bundle filed on the item is
+what lets the run's owner audit any verdict after the fact.

@@ -235,11 +235,16 @@ always-read and never routed** — the router trims mechanics, never safety.
    `references/dispatch-policy.md` § GATE). Run it **inside** the worktree.
    - *Unattended:* spawn a **separate verifier** given only the leaf's
      `done_looks_like`, the pack's shared requirements, and the diff — never the
-     builder's reasoning. It runs `build + lint + test` (exit-0), judges
-     acceptance, and returns **PASS / NEEDS-HUMAN / FAIL** plus evidence.
-     **Forward `verify-acceptance`'s contract into its prompt** — the verifier
-     inherits no skill (`references/dispatch-policy.md` § GATE covers what to
-     forward and why).
+     builder's reasoning. **Forward `verify-acceptance`'s contract into its
+     prompt, routed by acceptance type** — the verifier inherits no skill
+     (`references/dispatch-policy.md` § GATE covers what to forward and why).
+     A **code leaf** runs Mode 1: `build + lint + test` (exit-0) + an acceptance
+     judgment → **PASS / NEEDS-HUMAN / FAIL** plus evidence. A **UI-acceptance
+     leaf** runs Mode 2: the verifier drives the running app and returns a
+     four-rung verdict — **only a clean PASS merges** (PASS-WITH-ISSUES does
+     not), and the verdict is **invalid without its evidence bundle**
+     (per-clause results, screenshots, step transcript), which you file on the
+     leaf at COMPLETE — never into the target repo's tree.
    - *Attended:* native plan-mode human approval.
    - The verifier **fixes MINOR (mechanical / deterministic) issues inline** and
      re-runs the suite — not a strike. A **MAJOR** issue it must **not** self-fix:

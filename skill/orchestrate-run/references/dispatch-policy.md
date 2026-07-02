@@ -42,8 +42,8 @@ read, never skipped.**
 | fan-out 2–4 | § MAX_PARALLEL + `worktree-merge.md` § Shared mutable infrastructure + applied-last-wins | — |
 | session parity | § MODEL_TIERS default line only | the asymmetric-tiering block. *Tripwire: a human asks for "build light / verify heavy" mid-run → read § MODEL_TIERS first; VERIFY_TIER ≥ BUILD_TIER is inviolable.* |
 | build-light / verify-heavy | § MODEL_TIERS in full | — |
-| no UI leaves expected | — | `verify-acceptance`'s `browser-mode.md` + the lens's a11y / design-eval sections. *Tripwire: a leaf whose acceptance is user-facing UI enters the frontier → read `browser-mode.md` § Routing; a code-leaf gate is never routed to Mode 2 yet (HV-262), so UI-acceptance leaves gate attended or hand off to a human.* |
-| UI-acceptance leaves present | `browser-mode.md` § Routing + decide who drives (attended Mode 2, or handoff) | — |
+| no UI leaves expected | — | `verify-acceptance`'s `browser-mode.md` + the lens's a11y / design-eval sections. *Tripwire: a leaf whose acceptance is user-facing UI enters the frontier → read `browser-mode.md` § Routing + § GATE's Mode-2 forwarding before gating it.* |
+| UI-acceptance leaves present | `browser-mode.md` § Routing + § GATE's Mode-2 forwarding (unattended UI leaves gate via Mode 2; evidence bundle mandatory) | — |
 
 ## MAX_PARALLEL — how many independent batches run at once
 
@@ -132,18 +132,32 @@ autonomous path — the real backstop is still the post-build verifier (§ GATE)
 ## GATE — how a batch is judged before merge
 
 - **Unattended (default for autonomous runs): compose the `verify-acceptance` skill.** The gate **is**
-  `verify-acceptance` (Mode 1) — a fresh verifier given **only** the leaf's `done_looks_like` + the
-  pack's shared-requirements + the diff (never the build agent's reasoning or worktree narrative),
-  running `build + lint + test` (exit-0) + an independent acceptance judgment, returning a
-  **PASS / NEEDS-HUMAN / FAIL** verdict + evidence. **The verifier inherits no skill, so FORWARD the
-  contract into its prompt** — read `skill/verify-acceptance` (`SKILL.md` + `references/verdict-contract.md`
+  `verify-acceptance`, **routed by the leaf's acceptance type** — a fresh verifier given **only** the
+  leaf's `done_looks_like` + the pack's shared-requirements + the diff (never the build agent's
+  reasoning or worktree narrative). **The verifier inherits no skill, so FORWARD the contract into
+  its prompt** — read `skill/verify-acceptance` (`SKILL.md` + `references/verdict-contract.md`
   + `references/evaluation-lens.md`) and inline it; naming the skill reaches nothing. **Trim what you
-  forward to the leaf:** for a code leaf, inline the Mode-1 material only — the independence contract,
-  the verdict definitions, and the lens's code sections (exhaustive walk, 5-category checklist,
-  confidence filter, severity) — and skip the a11y + design-eval lenses unless the leaf's acceptance
-  is user-facing UI; **never** forward `browser-mode.md` for a code leaf (UI routing lands with
-  HV-262). Only **PASS**
-  merges; a **FAIL** keeps the batch in the worktree → failure path (STRIKES below); a **NEEDS-HUMAN**
+  forward to the leaf's mode:**
+  - **Code leaf → Mode 1.** Inline the Mode-1 material only — the independence contract, the
+    verdict definitions, and the lens's code sections (exhaustive walk, 5-category checklist,
+    confidence filter, severity); skip the a11y + design-eval lenses and `browser-mode.md`. It runs
+    `build + lint + test` (exit-0) + an independent acceptance judgment and returns
+    **PASS / NEEDS-HUMAN / FAIL** + evidence. Only **PASS** merges.
+  - **UI-acceptance leaf → Mode 2 (HV-262).** Also inline `browser-mode.md` (routing, ingestion
+    incl. `dev_url` resolution, driver, the four-rung ladder, flake discipline) + the lens's a11y
+    and design-eval sections. The verifier **drives the running app** and returns a **four-rung**
+    verdict: **only a clean PASS merges** — **PASS-WITH-ISSUES does not merge** (its per-check
+    table is the ready-made fix plan → failure path). A mixed leaf runs both suites and any
+    Mode-1 FAIL dominates.
+  - **Mode-2 evidence is mandatory — no evidence, no verdict.** A Mode-2 verdict must arrive with
+    its evidence bundle: the per-clause PASS/CONCERN/FAIL table, a screenshot of every checked
+    state, the step transcript, and console + network capture on failures. A bare "PASS" without
+    the bundle is an **absent verdict** — never merge on it (§ Don't peek's collection rule). After
+    the merge, **you, the coordinator — the sole graph writer — file the bundle on the leaf**
+    (`haven artifact add <leaf> --role delivery`), so the run's owner can audit any unattended
+    verdict after the fact. **Never write evidence into the target repo's tree** — a later commit
+    would publish screenshots of a private running app.
+  A **FAIL** keeps the batch in the worktree → failure path (STRIKES below); a **NEEDS-HUMAN**
   escalates straight to `handoff` (ambiguity won't clear on a blind retry). The verifier's
   independence by construction is the load-bearing quality guarantee — deterministic exit-0 alone is
   only partial cover ("does this meet `done_looks_like`" is a judgment call).

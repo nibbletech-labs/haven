@@ -109,20 +109,31 @@ directly.
 
 ## 7. Gate — compose the `verify-acceptance` skill (unattended) or plan-mode approval (attended)
 
-No Haven op — the unattended gate **is** the standalone `verify-acceptance` skill (Mode 1): a fresh verifier
-agent given only `done_looks_like` + pack shared-requirements + the diff, running
-`build + lint + test` + an acceptance judgment, returning PASS / NEEDS-HUMAN / FAIL + evidence. The
-attended gate is a human plan-mode "go".
+No Haven op at gate time — the unattended gate **is** the standalone `verify-acceptance` skill,
+routed by the leaf's acceptance type: a fresh verifier agent given only `done_looks_like` + pack
+shared-requirements + the diff. A **code leaf** runs Mode 1 (`build + lint + test` + acceptance
+judgment → PASS / NEEDS-HUMAN / FAIL + evidence); a **UI-acceptance leaf** runs Mode 2 (drives the
+running app → four-rung verdict; **only a clean PASS merges**). The attended gate is a human
+plan-mode "go".
 
 **Forward `verify-acceptance`'s contract into the verifier's prompt** (it inherits no skill — why:
-`references/dispatch-policy.md` § GATE). Inline, from `skill/verify-acceptance`: the
-PASS / NEEDS-HUMAN / FAIL definitions (`references/verdict-contract.md`), the independence rule
-(judge from `done_looks_like` + shared-requirements + diff only), and the exhaustive
-acceptance-clause walk + lens (`references/evaluation-lens.md`). **Trim to the leaf** (why:
+`references/dispatch-policy.md` § GATE). Inline, from `skill/verify-acceptance`: the verdict
+definitions (`references/verdict-contract.md`), the independence rule (judge from
+`done_looks_like` + shared-requirements + diff only), and the exhaustive acceptance-clause walk +
+lens (`references/evaluation-lens.md`). **Trim to the leaf's mode** (why:
 `references/dispatch-policy.md` § GATE): code leaf → the lens's code sections only, no a11y /
-design-eval material, never `browser-mode.md` for a code leaf (UI routing lands with HV-262).
-**Collect the verdict explicitly** —
-an idle signal means *fetch the verdict*, never proceed on an absent one.
+design-eval material, no `browser-mode.md`; UI-acceptance leaf → also `browser-mode.md` + the a11y /
+design-eval lens sections. **Collect the verdict explicitly** — an idle signal means *fetch the
+verdict*, never proceed on an absent one; **a Mode-2 verdict without its evidence bundle
+(per-clause table, screenshots, step transcript) is an absent verdict.**
+
+**Mode-2 evidence write-back (coordinator, after the merge, alongside step 9's complete):**
+
+- CLI: `haven artifact add <ref> --role delivery --file <bundle.md> -p <P>` (one call per file:
+  the bundle note + each screenshot; `--name` to keep them grouped, e.g. `verify-evidence.md`)
+- MCP: `haven_add_artifact {"project":"<P>","ref":"<ref>","role":"delivery","content":"<bundle>"}`
+- Evidence lands in the run owner's Haven store (`~/.haven/<project>/items/<ref>/`) — **never as
+  files committed into the target repo**.
 
 ## 8. Merge — serialized lock → rebase → re-gate → ff
 
