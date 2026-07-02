@@ -96,9 +96,17 @@ now (`haven graph` / `haven_get_item`), don't trust a copy. This is just the ind
 members and where to look. Each member REFERENCES the section-2a scenario IDs it must
 satisfy (it never re-states the Gherkin), and carries a verification approach
 (unit | integration | e2e | visual | manual — see "Per-item verification approach" below):
-- **<REF>** — <title>. Acceptance: node `done_looks_like` (live). Scenarios: SC-00x, SC-00y. Verification: <unit|integration|e2e|visual|manual>. Spec: `<REF>`'s `spec` artifact, if any. Depends on: <refs or none>. [VERIFY: <assumption>]
+- **<REF>** — <title>. Acceptance: node `done_looks_like` (live). Scenarios: SC-00x, SC-00y. Verification: <unit|integration|e2e|visual|manual>. Key files: <paths [VERIFY]>. Spec: `<REF>`'s `spec` artifact, if any. Depends on: <refs or none>. [VERIFY: <assumption>]
 - **<REF>** — …
 ```
+
+**Key files (the one execution overlay the pack carries).** Each member names the files it
+is expected to touch, `[VERIFY]`-tagged like every code-level claim. This is *information
+for the dispatcher*, not structure: `orchestrate-run`'s batching rule ("shared key files
+within a batch → ONE agent owns the evolving file state" —
+`orchestrate-run/references/executor-discipline.md` § Batching) reads it instead of
+re-deriving overlap. Do **NOT** convert file overlap into dependency edges — the
+dependency layer encodes real ordering only, and the executor folds batches by it.
 
 ---
 
@@ -183,93 +191,20 @@ e2e) are direct deterministic runs; visual (and non-automatable e2e) need a spaw
 tester; manual is the human gate. Tag every member so the verify step knows which path
 it falls into. See `references/pack-ops.md` for how the tag maps onto the verify call.
 
----
-
-## Requirements Index + Execution Graph  (derive from the bounded items)
-
-Once the canonical scenarios and the per-member acceptance are authored, **derive** the
-execution overlays from them (the index and graph are derived views, not authored
-separately):
-
-1. **Requirements Index.** One row per member summarising: its description, the
-   `SC-[ID]`s it references, its verification approach, its dependencies, its primary
-   key files, its **Type**, external deps, and status. This is the cross-referenced index
-   the dispatcher reads.
-2. **Conservative dependency heuristic.** When deriving dependencies between members,
-   be **conservative: if any file overlap, add a dependency.** Two members that touch the
-   same key file get a dependency edge even if no logical ordering is obvious — a spurious
-   edge is cheaper than a silent write-write race between parallel streams.
-3. **Execution Graph — parallel streams.** Group members into parallelizable **streams**
-   by their **dependencies + shared key files + Type**. Independent streams run in
-   parallel; a dependency chain runs in sequence within a stream. Example:
-
-   ```
-   Stream A: <REF-1> (backend) → <REF-2> (frontend)
-   Stream B: <REF-3> (full-stack)
-   ```
-
-4. **Type drives downstream skill loading.** Each member's **Type** — `backend` /
-   `frontend` / `full-stack` — drives what the downstream build agent loads:
-   - **frontend**: pages, screens, components, visual UI, user-facing interactions →
-     build agent loads the frontend reference material.
-   - **backend**: APIs, data models, server logic, CLI, infrastructure → no frontend material.
-   - **full-stack**: spans both (e.g. form + API endpoint + DB) → loads the frontend material too.
 
 ---
 
-## The `design-spec.json` machine-contract  (UI members only)
+## Retired overlays (2026-07-02, HV-257)
 
-For a group with UI components, the pack carries a **machine-readable design contract**
-alongside the prose. The split is load-bearing:
+Two builder-era sections were removed from this template rather than wired in:
 
-> The markdown design spec is the **source of truth for *intent***; the JSON is the
-> **source of truth for *contract***. They must agree.
-
-The JSON is the **dev-consumable subset** — only the fields the build agent needs to
-implement, not the whole design document. Per component it carries:
-
-- `name`
-- `states` (e.g. `["default", "hover", "focus", "loading", "empty", "error"]`)
-- `interactions` — each `{trigger, result}` (e.g. `{"trigger": "keyboard:Enter", "result": "navigate to detail view"}`)
-- `accessibility_contract`:
-  - `role` — ARIA role (or null for native semantic)
-  - `keyboard_pattern` — APG pattern reference, e.g. `"APG-listbox"`
-  - `aria` — array of ARIA attributes, e.g. `["aria-selected", "aria-current"]`
-  - `wcag_level` — one of `"A"`, `"AA"`, `"AAA"`
-
-**Required fields per component:** `name`, `states`, `interactions`,
-`accessibility_contract`. The build agent **halts with `ERROR: design-spec.json missing
-required field <path>` if any are missing.** Halt-on-missing-required-field is what makes
-the JSON a contract rather than a suggestion: an incomplete component contract stops the
-build instead of being silently filled in.
-
-Shape (the dev-consumable subset):
-
-```json
-{
-  "feature": "search-results",
-  "version": "1.0",
-  "platform": "web-saas",
-  "components": [
-    {
-      "name": "ResultRow",
-      "states": ["default", "hover", "focus", "loading", "empty", "error"],
-      "interactions": [
-        {"trigger": "click", "result": "navigate to detail view"},
-        {"trigger": "keyboard:Enter", "result": "navigate to detail view"}
-      ],
-      "accessibility_contract": {
-        "role": "listitem",
-        "keyboard_pattern": "APG-listbox",
-        "aria": ["aria-selected", "aria-current"],
-        "wcag_level": "AA"
-      }
-    }
-  ]
-}
-```
-
-For a greenfield UI build the JSON contract is **authored** as a design decision (a
-`[VERIFY]` item to lock with the human); for brownfield it is reconciled against the
-existing design system. Either way the markdown-intent / JSON-contract pair travels with
-the pack so the build agent reads one machine-checkable contract, not a 600-line prose doc.
+- **Requirements Index + Execution Graph** (a frozen per-member table and pre-computed
+  parallel streams) — superseded by the live graph: `orchestrate-run` derives batching
+  fresh each tick from dependency edges and `context_pack` pointers, and this suite's
+  design rule is live reads, never frozen copies. Only the **Key files** line (section 4)
+  survives — as information, never as edges.
+- **The `design-spec.json` machine-contract** (per-component states / interactions /
+  a11y contract, halt-on-missing-field) — real IP whose consumers (a build agent that
+  enforces it, a browser verifier that judges against it) arrive with `verify-acceptance`
+  **Mode 2**. The full contract text lives as a `design` artifact on **HV-139** and
+  returns to this template when Mode 2 lands.
