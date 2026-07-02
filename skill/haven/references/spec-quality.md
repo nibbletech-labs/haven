@@ -126,6 +126,14 @@ no backbone at all.
 > the node `why`, success in `done_looks_like`, then **Scope boundary** + **Constraints** +
 > free-form design.
 
+**UI leaf — the design detail carries (or points at) a component contract.** When a leaf's
+acceptance is user-facing UI behaviour, its `spec` design detail names the per-component
+design contract, or points at the pack's `design-spec.json`
+(`create-context-pack/references/pack-template.md` — *The design-spec.json machine-contract*).
+The bar: **states enumerated**, **interactions with their triggers**, and the
+**accessibility contract named** (role / keyboard pattern / ARIA / WCAG level). This is design
+depth living *inside* the spec, not a second artifact.
+
 ## Oversized → flag → bounce (don't split here)
 
 If an item is structurally too big — multiple user flows, multiple technical domains, 5+

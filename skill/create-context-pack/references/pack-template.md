@@ -95,6 +95,14 @@ claim **[VERIFY]** like every code-level assertion. This is the pack-time preven
 backstop is the post-rebase re-gate re-running every merged batch's tests —
 `orchestrate-run/references/worktree-merge.md` § Merge.>
 
+### 2c. Component design contract — `design-spec.json`  (UI members only; omit when the group has no UI)
+<when the group ships UI components, carry a machine-readable per-component contract
+alongside the prose — states, interactions, and an accessibility_contract per component.
+Write it ONCE here, or as a `design-spec.json` artifact on the container. Omit this section
+entirely when the group has no UI — its absence is NOT a gap. See "The design-spec.json
+machine-contract" below for the per-component fields, the required-field halt rule, the
+example, and who consumes it.>
+
 ## 3. External dependencies — the group's boundary
 <for each dependency that lands OUTSIDE this group:
 - DONE deps: name them + the output/acceptance the group can rely on (read-only context).
@@ -183,6 +191,74 @@ architecture/interface-contract material (section 2), never in the behaviour con
 
 ---
 
+## The design-spec.json machine-contract  (section 2c, in depth — UI members only)
+
+When (and **only** when) the group ships **UI components**, the pack carries a
+machine-readable design contract alongside the prose. Omit it for a group with no UI — its
+absence is **not** a gap. The intent/contract split is load-bearing:
+
+> The markdown design spec is the source of truth for *intent*; the JSON is the source of
+> truth for *contract*. They must agree.
+
+The JSON is the dev-consumable subset — only the fields the build agent needs to implement.
+Per component:
+
+- `name`
+- `states` — e.g. `["default", "hover", "focus", "loading", "empty", "error"]`
+- `interactions` — each `{trigger, result}`, e.g. `{"trigger": "keyboard:Enter", "result": "navigate to detail view"}`
+- `accessibility_contract`:
+  - `role` — ARIA role (or `null` for native semantic)
+  - `keyboard_pattern` — APG pattern reference, e.g. `"APG-listbox"`
+  - `aria` — array of ARIA attributes, e.g. `["aria-selected", "aria-current"]`
+  - `wcag_level` — one of `"A"`, `"AA"`, `"AAA"`
+
+**Required fields per component:** `name`, `states`, `interactions`, `accessibility_contract`.
+Halt-on-missing-required-field is what makes the JSON a *contract* rather than a suggestion:
+when the contract is present but a component is missing a required field, the consumer halts
+with `ERROR: design-spec.json missing required field <path>` instead of silently filling it
+in. This rule governs a contract that **exists** — it is **not** a demand that every pack
+carry one. A group with no UI carries no `design-spec.json`, and that absence is not an error.
+
+Example (dev-consumable subset):
+
+```json
+{
+  "feature": "search-results",
+  "version": "1.0",
+  "platform": "web-saas",
+  "components": [
+    {
+      "name": "ResultRow",
+      "states": ["default", "hover", "focus", "loading", "empty", "error"],
+      "interactions": [
+        {"trigger": "click", "result": "navigate to detail view"},
+        {"trigger": "keyboard:Enter", "result": "navigate to detail view"}
+      ],
+      "accessibility_contract": {
+        "role": "listitem",
+        "keyboard_pattern": "APG-listbox",
+        "aria": ["aria-selected", "aria-current"],
+        "wcag_level": "AA"
+      }
+    }
+  ]
+}
+```
+
+**Greenfield:** the JSON contract is authored as a design decision (a `[VERIFY]` item to
+lock with the human). **Brownfield:** reconciled against the existing design system.
+
+**Consumers.** Two skills read this contract, and both treat its absence as "the prose is
+the whole yardstick", never as a failure:
+
+- the **build agent** — halt-on-missing enforcement while implementing;
+- the **Mode-2 browser verifier** (`verify-acceptance` `references/browser-mode.md`) — walks
+  this contract as its **per-component checklist** (states, interactions,
+  accessibility_contract per component) when judging the running app. When no
+  `design-spec.json` is present, the prose `done_looks_like` is the whole yardstick.
+
+---
+
 ## Per-item verification approach  (tag at spec time)
 
 Every bounded item / member is tagged at spec time with **one verification approach**,
@@ -207,15 +283,17 @@ it falls into. See `references/pack-ops.md` for how the tag maps onto the verify
 
 ## Retired overlays (2026-07-02, HV-257)
 
-Two builder-era sections were removed from this template rather than wired in:
+Two builder-era sections were removed from this template rather than wired in. One has since
+**returned** (HV-260); the other stays retired:
 
 - **Requirements Index + Execution Graph** (a frozen per-member table and pre-computed
   parallel streams) — superseded by the live graph: `orchestrate-run` derives batching
   fresh each tick from dependency edges and `context_pack` pointers, and this suite's
   design rule is live reads, never frozen copies. Only the **Key files** line (section 4)
-  survives — as information, never as edges.
+  survives — as information, never as edges. **Stays retired.**
 - **The `design-spec.json` machine-contract** (per-component states / interactions /
-  a11y contract, halt-on-missing-field) — real IP whose consumers (a build agent that
-  enforces it, a browser verifier that judges against it) arrive with `verify-acceptance`
-  **Mode 2**. The full contract text lives as a `design` artifact on **HV-139** and
-  returns to this template when Mode 2 lands.
+  a11y contract, halt-on-missing-field) has **RETURNED** (HV-260): section 2c above and *The
+  design-spec.json machine-contract* in-depth. Its consumers are now live — a build agent
+  that enforces halt-on-missing, and the **Mode-2 browser verifier** that walks it as a
+  per-component checklist (`verify-acceptance/references/browser-mode.md`). The full
+  provenance stays as a `design` artifact on **HV-139**.

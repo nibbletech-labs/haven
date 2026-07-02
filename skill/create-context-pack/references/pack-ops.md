@@ -73,6 +73,13 @@ and tag each assumption `[VERIFY]`. Groom under-specified-but-coherent members *
 only a member that needs **decomposition** (structurally too big) → **STOP** and run
 `orchestrate-plan` on it first. Don't decompose here.
 
+**UI members.** A member whose acceptance is user-facing UI behaviour is tagged
+verification-approach `visual` / `e2e` (step 9) **and** gets its per-component design
+contract written or firmed — into the pack's `design-spec.json` section, or as a
+`design-spec.json` artifact on the container when the pack carries one. Fields and the
+halt-on-missing rule live in `references/pack-template.md` (*The design-spec.json
+machine-contract*); don't restate them here. Omit it for a member with no UI.
+
 **Clash check — single active pack per leaf.** `haven_get_item` returns a derived
 `context_pack` pointer (and `context_pack_clash`) on each leaf. Before claiming a member
 into this build batch, inspect it: if it already carries a `context_pack` pointing at a
@@ -118,6 +125,11 @@ write/firm a `spec` artifact on the member where it warrants one (workflow 10).
   (+ `haven artifact add <ref> --role spec --name spec.md --content "<…>" -p <P>` if it needs a spec)
 - MCP: `haven_update_item {"project":"<P>","ref":"<ref>","done_looks_like":"<…>"}`
   (+ `haven_add_artifact {"project":"<P>","ref":"<ref>","role":"spec","name":"spec.md","content":"<…>"}` if needed)
+
+For a **UI member**, also tag its verification approach `visual` / `e2e` and write/firm its
+per-component contract into the pack's `design-spec.json` section (or a `design-spec.json`
+artifact on the container) — fields and the halt-on-missing rule are in
+`references/pack-template.md` (*The design-spec.json machine-contract*), not restated here.
 
 **b. Wire real ordering** found in step 2 (one edge per call; `from`=blocked/consumer,
 `to`=blocker/producer; the store rejects cycles — don't pre-check):
