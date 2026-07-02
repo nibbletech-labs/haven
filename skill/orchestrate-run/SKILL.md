@@ -94,6 +94,28 @@ human-gated knowledge promotion — is in `references/executor-discipline.md`.
   worktree. If you find yourself editing a source file directly, stop — that's the
   build agent's job.
 
+## Kickoff — set the run config once, then route your reading
+
+A run starts with a **declared configuration**, never an implicit one. Four dials, set
+once per run: **attendance** (is a human watching?), **parallelism posture**
+(`MAX_PARALLEL`), **model posture** (session parity vs build-light/verify-heavy), and
+**UI-verification ownership** (any UI-acceptance leaves this run, and who gates them).
+Dial options, recommended defaults, and the reading router live in
+`references/dispatch-policy.md` § KICKOFF.
+
+- **Attended or ambiguous invocation → ask, once.** One `AskUserQuestion` carrying all
+  four dials, recommended defaults listed first. Never a second round of questions.
+- **Autonomous invocation → declare, don't ask.** Post a short **kickoff manifest** (the
+  chosen value per dial + the resulting reading plan) as your opening status message,
+  then start.
+
+**Each answer routes your reading.** The config decides which reference sections this
+run actually needs — load those, skip the rest (the router table is § KICKOFF). Every
+skipped section leaves a **one-line tripwire**: if the run's shape changes mid-flight
+(a second worktree goes in flight, a UI-acceptance leaf enters the frontier), stop and
+read the skipped section *before* acting on the change. **The four invariants above are
+always-read and never routed** — the router trims mechanics, never safety.
+
 ## The tick (one stateless pass; loop to convergence)
 
 0. **REORIENT + RECOVER.** Read the whole graph in one call (`haven graph` /

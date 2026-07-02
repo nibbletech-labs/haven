@@ -4,6 +4,47 @@
 *how gated* each batch runs, and how many run at once. It never reimplements the build or the
 review — it dials plan mode, ultracode, and the verifier. The knobs:
 
+## KICKOFF — set the dials once, then read only what the run needs
+
+Before tick 0 of a new run, resolve the **run config** — the four dials below. How you
+resolve it depends on who's watching:
+
+- **Attended, or ambiguous** (you can't tell whether a human is driving): ask **one**
+  `AskUserQuestion` carrying all four dials, recommended defaults first. One round only —
+  the defaults are safe, so an unanswered dial just takes its default.
+- **Autonomous**: **declare, don't ask.** Post a **kickoff manifest** as your opening
+  status message — per dial: the chosen value + one line of reasoning — plus the reading
+  plan it emits. Then start. A human reading the transcript later should see exactly what
+  posture the run chose and why.
+
+| dial | options (recommended first) | what it routes |
+|---|---|---|
+| **Attendance** | autonomous · attended | which § GATE path runs |
+| **Parallelism posture** | serial (1) · fan-out 2–4 | § MAX_PARALLEL + the parallel-seam material |
+| **Model posture** | session parity · build-light / verify-heavy | § MODEL_TIERS |
+| **UI verification** | none expected · UI-acceptance leaves present | `verify-acceptance` browser-mode routing |
+
+`EFFORT` and `PLAN-GATE` are **per-batch** calls (below), not kickoff dials — don't ask
+about them.
+
+**The reading router.** Each dial value emits a reading plan: load only the sections that
+config needs, skip the rest. Every skipped section keeps a **one-line tripwire** in this
+table (the always-read core) — when a tripwire fires mid-run, read the skipped section
+*before* acting. Anything not named here follows the normal lazy pattern: read a
+reference when its tick step arrives. **The SKILL.md invariants never route — always
+read, never skipped.**
+
+| config | read | skip — with tripwire |
+|---|---|---|
+| autonomous | § GATE unattended path + § Unattended ⇒ deterministic gate | plan-mode approval mechanics. *Tripwire: a human takes over mid-run → gate attended from that batch on.* |
+| attended | § GATE attended path | § Unattended ⇒ deterministic gate. *Tripwire: the human steps away and the run continues → the gate reverts to the deterministic verifier.* |
+| serial (1) | § MAX_PARALLEL serial bullet only | `worktree-merge.md` § Shared mutable infrastructure + the applied-last-wins class. *Tripwire: the moment a second worktree goes in flight → read both before dispatching it.* |
+| fan-out 2–4 | § MAX_PARALLEL + `worktree-merge.md` § Shared mutable infrastructure + applied-last-wins | — |
+| session parity | § MODEL_TIERS default line only | the asymmetric-tiering block. *Tripwire: a human asks for "build light / verify heavy" mid-run → read § MODEL_TIERS first; VERIFY_TIER ≥ BUILD_TIER is inviolable.* |
+| build-light / verify-heavy | § MODEL_TIERS in full | — |
+| no UI leaves expected | — | `verify-acceptance`'s `browser-mode.md` + the lens's a11y / design-eval sections. *Tripwire: a leaf whose acceptance is user-facing UI enters the frontier → read `browser-mode.md` § Routing; a code-leaf gate is never routed to Mode 2 yet (HV-262), so UI-acceptance leaves gate attended or hand off to a human.* |
+| UI-acceptance leaves present | `browser-mode.md` § Routing + decide who drives (attended Mode 2, or handoff) | — |
+
 ## MAX_PARALLEL — how many independent batches run at once
 
 **You choose this per run, from the build's coupling risk — it is not a fixed default.**
