@@ -59,8 +59,8 @@ detail — don't restate arguments from memory. The gotchas that bite here:
   wrong, the correction is plan mode's first **human-approved** step (see the
   verify-first pack). You only *enrich and prepare* — the human gate stays
   authoritative.
-- **Over MCP there is no sticky session** — pass `project` on every call, and
-  there's **no batch**: one entity per `haven_add_edge` / `haven_update_item` call.
+- **No batch over MCP** — one entity per `haven_add_edge` / `haven_update_item`
+  call. The per-call MCP shape is in `references/pack-ops.md`.
 
 ## The flow
 

@@ -63,64 +63,40 @@ Run every Haven interaction through these five steps:
 
 The mistakes that actually bite — internalise these:
 
-- **`next` is exact:** it returns only items that are **committed AND `ready` AND
-  not waiting AND have no open dependency.** Creating an item — or just marking it
-  `ready` — will *not* put it in `next`. Set both axes.
+- **`next` is exact, and the two axes are orthogonal.** `next` returns only items
+  that are **committed AND `ready` AND not waiting AND have no open dependency.**
+  Maturity (`status`) and commitment (`committed` + `priority`) are independent —
+  "make this ready" and "do this next" are different operations. Set both axes.
 - **Capture ≠ commit.** "Add to the backlog" creates a floating, uncommitted
   `discovery` node. Don't commit, prioritise, or wire it unless the user engages.
 - **`ready` requires `done_looks_like`.** An item with no acceptance can't be
-  verified or cleanly dispatched. Set it when you mark something `ready` — the
-  store now **enforces** this: a status→`ready` transition (or clearing
-  acceptance on a `ready` item) is refused without it. For *how* to write good
-  acceptance and specs — the quality bar, adaptive depth, and clarify-first vs
-  assume-and-tag — see `references/spec-quality.md`.
+  verified or cleanly dispatched. The store **enforces** this: a status→`ready`
+  transition (or clearing acceptance on a `ready` item) is refused without it.
+  For how to write good acceptance and specs, see `references/spec-quality.md`.
 - **Don't build an ungroomed item.** Before dispatching work to a builder
   (workflow 4), confirm it's `ready` with concrete `done_looks_like`; if not,
-  groom it first (workflow 3) or bounce to planning. Building an unverifiable
-  target is the mistake the acceptance contract exists to prevent.
+  groom it first (workflow 3) or bounce to planning.
 - **Empty `next` → diagnose, don't invent.** Call `next --explain` /
   `haven_next_explain`; it tells you *why* (uncommitted / not-ready / blocked /
   waiting / owner-mismatch). Never fabricate work.
-- **Multi-item delivery needs a container.** If the user asks to deliver several
-  items together ("this release", "ship these", "do the first three", "for
-  launch"), create or reuse a `release`/`phase` node and group the members before
-  dispatch. Then check for shared architecture/UX/API/data/test strategy. If
-  shared context exists, recommend a Context Pack when that workflow is available;
-  otherwise pause to clarify the integrated architecture and attach the result as
-  a `spec`/`decision` artifact on the container.
+- **Multi-item delivery needs a container.** "Ship these" / "this release" →
+  create or reuse a `release`/`phase` node, group the members, and run the
+  shared-context check before dispatch — the full playbook is workflow 5.
 - **Handoff and complete are atomic tools, not recipes.** Use `item handoff` /
   `haven_handoff` and `item complete` / `haven_complete_item` — don't hand-assemble
   assign + update + add_artifact (you'll do it inconsistently).
 - **Don't strand an item `in_progress` across a session boundary.** If you're
-  stopping and the item is now waiting on a person (a review, a decision, a
-  real-world action), **hand it off** — `haven_handoff` to `human` (set
-  `owner=human`, `wait=on_human`) — don't leave it `in_progress` with no live
-  owner. An `in_progress` item with nobody working it reads as active and hides
-  the fact that it's actually blocked on you.
-- **Archive, never delete.** There is no hard delete. "Drop it" = `archive
-  --rationale`; reversible via `reopen`. This holds for **projects** too: to
-  retire a whole backlog, `haven project archive <key>` (MCP
-  `haven_archive_project`) — it hides the project from default listings and
-  refuses writes into it, while keeping the namespace **fully reserved** (key,
-  ref_prefix and the ref counter untouched, so refs are never reused);
-  `haven project reopen <key>` restores it completely. There is **no
-  hard-delete tool for projects** in this release — archive *is* how you drop a
-  project. (A separate, guarded hard-delete that cascades rows + content is a
-  future, irreversible exception; archive is the everyday, safe, reversible
-  default — reach for archive, not delete.)
-- **The two axes are orthogonal.** Maturity (`status`) ≠ commitment (`committed` +
-  `priority`). "Make this ready" and "do this next" are different operations.
-- **On the CLI, commit/uncommit are their own verbs.** `haven item commit <ref>
-  [--priority N]` — `item update` does *not* take `--commit` (`--commit` exists
-  only on `item add`). Over MCP it's the opposite: one tool, `haven_update_item
-  {commit: true, …}`. Don't carry one surface's shape to the other.
-- **Explain judgment-driven priority moves.** When you change priority,
-  commitment, or fine rank because you made a product/backlog judgment, pass a
-  short rationale (`--rationale "…"` on CLI `item update --priority`,
-  `item commit`, `item uncommit`, `item rank`; `rationale` on MCP
-  `haven_update_item` / `haven_rank`). Haven records it as lineage so the order
-  still explains itself later.
-- **Over MCP, pass `project` on every call** — there is no sticky session.
+  stopping and the item now waits on a person, **hand it off** — `haven_handoff`
+  to `human` (`owner=human`, `wait=on_human`). An `in_progress` item with no live
+  owner reads as active and hides that it's actually blocked on you.
+- **Archive, never delete — items AND projects.** "Drop it" = `archive
+  --rationale`, reversible via `reopen`; `haven project archive <key>` retires a
+  whole backlog the same way (reversible, namespace stays reserved). There is no
+  hard delete — details in `references/surface-map.md`.
+- **The CLI and MCP surfaces diverge on verbs** — e.g. CLI `item commit`/`uncommit`
+  are their own verbs, while MCP folds them into `haven_update_item {commit:…}`.
+  Don't carry one surface's shape to the other: check the verb-divergence table
+  in `references/surface-map.md`.
 
 ## The one rule that matters most: structure vs content
 
@@ -237,9 +213,10 @@ a separate item.)
 - **Local (CLI):** `haven project list`, then `haven project use <key>` sets a
   sticky current project (or `haven project add` to create one).
 - **Remote (MCP):** `haven_list_projects` to discover, then **pass `project:
-  "<key>"` on every call** — selection is per-call, carried through the
-  conversation; there is no `haven_use_project`. `haven_add_project` creates one.
-  If a call errors with `project_required`, the message lists the available keys.
+  "<key>"` on every call** — there is no sticky session and no
+  `haven_use_project`; selection is per-call, carried through the conversation.
+  `haven_add_project` creates one. If a call errors with `project_required`, the
+  message lists the available keys.
 
 Settle this once per session; don't nag. One project per product/repo.
 
@@ -284,7 +261,7 @@ ai↔human handoff in workflow 8 — it keeps ownership and goes `in_progress`, 
 
 ## MCP quick reference (concrete payloads)
 
-Over MCP, pass `project` on every call. The common ops:
+The common ops (note every payload carries `project` — see *Selecting a project*):
 
 ```jsonc
 // Capture — floating, uncommitted, discovery (the default).
@@ -344,7 +321,9 @@ dispatch path: for "what should I work on?", use `dispatch` or
   agents; canonical graph/content remains under `~/.haven`.
 - **Always give a real `--rationale`** on evolve/archive/reopen — lineage exists to
   reconstruct intent ("spans two owners, splitting for independent dispatch", not
-  "too big").
+  "too big"). The same goes for judgment-driven priority, commitment, or rank
+  moves (`--rationale` on the CLI verbs; `rationale` on `haven_update_item` /
+  `haven_rank`) — Haven records it as lineage so the order explains itself later.
 - **Evolve, don't retitle-then-archive.** When two items are the same, or one
   replaces another (grooming, dedup), use **`haven_evolve supersede`** (or `merge`)
   with a rationale — it records a followable lineage edge from old → live. Quietly

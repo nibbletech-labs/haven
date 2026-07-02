@@ -62,7 +62,6 @@ in `references/evaluation-lens.md`. The rules that bite here:
   verdict evidence rides **`delivery`**, escalation rides **`scratch`** (`fix-log.md`).
 - **The yardstick is always the node's LIVE `done_looks_like`**, read per invocation via
   the graph — **never** a frozen copy. Re-grooming can't make a verdict drift.
-- **Over MCP there is no sticky session** — pass `project` on every call.
 
 ## The independence contract (the load-bearing rule)
 

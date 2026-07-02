@@ -44,34 +44,37 @@ inline often the better choice for *small* runs — see the `haven` skill's
 
 1. **SINGLE ORCHESTRATOR PER PROJECT.** You are the *sole* reader of `haven next
    --owner ai` and the *sole* writer of graph state. The per-batch build agents you
-   spawn are **pure executors**: handed an explicit member list + the pack, and
-   **forbidden to touch the graph** (no status flips, no edges, no completes). This is
-   what makes the soft claim race-free — setting a leaf `in_progress` drops it from the
-   frontier, and nothing else reads the frontier in the read→write gap. Haven has **no
-   atomic claim / lease** (a plain UPDATE, monotonic-LWW `revision`, WAL serializes
-   writers without surfacing a conflict), so safety is **topology**, not a lock. (The
-   atomic-claim verb is HV-24; it earns its place only if you ever drop this invariant.)
+   spawn are **pure executors**: they get an explicit member list plus the pack, and
+   they are **forbidden to touch the graph** — no status flips, no edges, no
+   completes. This is what makes the soft claim race-free: setting a leaf
+   `in_progress` drops it from the frontier, and nothing else reads the frontier in
+   the read→write gap. Haven has **no atomic claim / lease** — a claim is a plain
+   UPDATE with a monotonic last-writer-wins `revision`, and the write-ahead log
+   serializes writers without surfacing a conflict. So safety is **topology**, not
+   a lock. (The atomic-claim verb is HV-24; it earns its place only if you ever
+   drop this invariant.)
 
-2. **SERIALIZED MERGE QUEUE with a mandatory post-rebase re-gate.** Builds may fan out
-   into N worktrees, but merges to `main` fan **in** through one lockfile:
-   `lock → rebase onto current main → RE-GATE → fast-forward → complete`. The re-gate is
-   **inviolable** — the only thing that catches a semantic conflict a clean textual merge hid
-   (why: `references/worktree-merge.md`). Merge **before** complete, always — that keeps the one
-   crash window recoverable.
+2. **SERIALIZED MERGE QUEUE with a mandatory post-rebase re-gate.** Builds may fan
+   out into N worktrees, but merges to `main` fan **in** through one lockfile:
+   `lock → rebase onto current main → RE-GATE → fast-forward → complete`. The
+   re-gate is **inviolable**. It is the only thing that catches a semantic conflict
+   a clean textual merge hid (why: `references/worktree-merge.md`). Merge **before**
+   complete, always — that keeps the one crash window recoverable.
 
-3. **STATELESS REORIENT + graph↔worktree reconcile every tick.** The graph
-   (`in_progress` status), `git worktree list`, and a commit done-marker are the **only**
-   truth; nothing is held in session memory. Recovery is not a special mode — every tick
-   begins by reconciling, so a crash anywhere lands in a state the next tick fixes
-   idempotently. A cold session (context reset, `/loop` wake, another machine over MCP)
-   reorients perfectly by re-reading the graph.
+3. **STATELESS REORIENT + graph↔worktree reconcile every tick.** The **only** truth
+   is the graph (`in_progress` status), `git worktree list`, and a commit
+   done-marker. Nothing is held in session memory. Recovery is not a special mode:
+   every tick begins by reconciling, so a crash anywhere lands in a state the next
+   tick fixes idempotently. A cold session (context reset, `/loop` wake, another
+   machine over MCP) reorients perfectly by re-reading the graph.
 
-4. **WORKTREE ISOLATION — every build runs *off* `main`, never *in* it.** Each batch's plan /
-   build / fix agent works in its **own git worktree with its cwd inside it**
-   (`references/worktree-merge.md`); the shared **primary/session checkout is off-limits for
-   builds**. This holds **even at `MAX_PARALLEL=1`** — serial makes skipping it look harmless, but a
-   build in the primary checkout corrupts `main`, forfeits the disposable-failed-build property, and
-   breaks invariant 3's "`git worktree list` is truth". Isolate first, always.
+4. **WORKTREE ISOLATION — every build runs *off* `main`, never *in* it.** Each
+   batch's plan / build / fix agent works in its **own git worktree with its cwd
+   inside it** (`references/worktree-merge.md`). The shared **primary/session
+   checkout is off-limits for builds**. This holds **even at `MAX_PARALLEL=1`** —
+   serial makes skipping it look harmless, but a build in the primary checkout
+   corrupts `main`, forfeits the disposable-failed-build property, and breaks
+   invariant 3's "`git worktree list` is truth". Isolate first, always.
 
 ## Operating rules (inherit from the `haven` skill)
 
@@ -84,8 +87,9 @@ human-gated knowledge promotion — is in `references/executor-discipline.md`.
 
 - **Structure only through ops.** Mutate nodes/edges only via `haven …` / `haven_*`.
   The fix-log and any run notes are artifact **content**, never `body`.
-- **Over MCP there is no sticky session** — pass `project` on every call; **no batch** —
-  one entity per `haven_update_item` / `haven_complete_item` call, loop.
+- **No batch over MCP** — one entity per `haven_update_item` /
+  `haven_complete_item` call; loop. The per-call MCP shape is in
+  `references/tick-ops.md`.
 - **You never write code.** Every code edit happens inside a spawned build agent's
   worktree. If you find yourself editing a source file directly, stop — that's the
   build agent's job.
@@ -93,134 +97,172 @@ human-gated knowledge promotion — is in `references/executor-discipline.md`.
 ## The tick (one stateless pass; loop to convergence)
 
 0. **REORIENT + RECOVER.** Read the whole graph in one call (`haven graph` /
-   `haven_graph`); resolve the project first if unknown. Then **reconcile** the graph's
-   `in_progress` leaves against `git worktree list` (`references/worktree-merge.md`): an
-   `in_progress` leaf with a live build agent → leave it; with no live agent → **orphaned** →
-   if its worktree holds a clean, gate-passing build resume at MERGE; else if the container has an
-   **approved `build-plan.md`** but the worktree has no build commits (crashed after plan-approval)
-   resume at **build** from that plan — a fresh agent reads it (invariant 3), don't re-plan blind;
-   else prune the worktree and send the batch down the failure path (strike count survives
-   in the container's fix-log); a worktree with no `in_progress` leaf → **stale** → prune.
-   Do this **before** dispatching anything.
+   `haven_graph`); resolve the project first if unknown. Then **reconcile** the
+   graph's `in_progress` leaves against `git worktree list`
+   (`references/worktree-merge.md`). Do this **before** dispatching anything.
+   - An `in_progress` leaf with a live build agent → leave it.
+   - An `in_progress` leaf with no live agent is **orphaned**. Three cases:
+     - Its worktree holds a clean, gate-passing build → resume at MERGE (step 8).
+     - The container has an **approved `build-plan.md`** but the worktree has no
+       build commits (it crashed after plan-approval) → resume at **build**
+       (step 6c) from that plan. A fresh agent reads it (invariant 3) — don't
+       re-plan blind.
+     - Otherwise → prune the worktree and send the batch down the failure path.
+       The strike count survives in the container's fix-log.
+   - A worktree with no `in_progress` leaf is **stale** → prune it.
    - *Large-graph fallback.* Over MCP, `haven_graph` is bounded and reports
      `totals`, `omitted`, `limits`, and `truncated` for nodes, edges, and lineage.
-     If `truncated:true` means the graph slice is not enough for this tick, **reorient
-     from the frontier**: `haven list_items --status in_progress --owner ai` for the
-     RECOVER reconcile set, `haven next --owner ai` (step 1) for the dispatch queue,
-     then read only each **active container's** `context-pack` (steps 2/4). Same tick,
-     a smaller bounded slice until scoped graph reads land (HV-25/HV-195).
+     If `truncated:true` means the graph slice is not enough for this tick,
+     **reorient from the frontier** instead: `haven list_items --status
+     in_progress --owner ai` for the RECOVER reconcile set, `haven next --owner ai`
+     (step 1) for the dispatch queue, then read only each **active container's**
+     `context-pack` (steps 2/4). Same tick, a smaller bounded slice — until scoped
+     graph reads land (HV-25/HV-195).
 1. **FRONTIER.** The AI dispatch queue is exactly `haven next --owner ai`
    (DISPATCHABLE_PREDICATE: committed + `ready` + ≠anchor + `wait_state` NULL + no open
    dependency). This **inherently steps around** human-owned work and AI work blocked by
    an unfinished dependency. Trust the predicate; never re-derive it.
-2. **GROUP.** Fold the frontier two ways. **Packed leaves** fold by their derived
-   `context_pack.container` pointer (the fold key for already-packed work); a leaf with a
-   `context_pack_clash` (>1 packed container) is **skipped and surfaced**, never auto-picked.
-   **Packless leaves** have a NULL `context_pack.container`, so they carry no fold key —
-   tentatively cluster them by a **shared `depends_on` producer** (the build-time mirror of the
-   planner's foundation node): a packless multi-leaf cluster sharing one → **step 4 (packed
-   first)**. **Never fold by decomposition parent** (that auto-bundles independent siblings). A
-   packless leaf sharing no producer with others, or a packless **singleton**, → a degenerate
-   batch, built directly under the deterministic gate.
+2. **GROUP.** Fold the frontier two ways.
+   - **Packed leaves** fold by their derived `context_pack.container` pointer —
+     the fold key for already-packed work. A leaf with a `context_pack_clash`
+     (more than one packed container) is **skipped and surfaced**, never
+     auto-picked.
+   - **Packless leaves** have a NULL `context_pack.container`, so they carry no
+     fold key. Tentatively cluster them by a **shared `depends_on` producer**
+     (the build-time mirror of the planner's foundation node). A packless
+     multi-leaf cluster sharing one → **step 4 (packed first)**. A packless leaf
+     sharing no producer with others, or a packless **singleton**, → a degenerate
+     batch, built directly under the deterministic gate.
+   - **Never fold by decomposition parent** — that auto-bundles independent
+     siblings.
 3. **SELECT.** A batch is dispatchable **now** iff every member is in the ready frontier
    (no member has an open cross-batch dependency — dependent batches simply aren't ready
    yet, so they don't appear). Take up to **MAX_PARALLEL** independent batches — the count
    **you choose for this run** from its coupling risk (`references/dispatch-policy.md`; serial
    when risky or unsure, fan out when disjoint — see *Choosing parallelism* below).
-4. **ENSURE-PACKED — pack-first is a precondition of CLAIM, never a fallback after it.**
-   For an **already-packed** batch this is the cheap assertion: the container carries a `spec`
-   `context-pack.md` (the pointer guarantees it). For a **ready packless cluster whose members
-   share an architecture** (signalled by a shared `depends_on` producer — the build-time mirror
-   of the planner's foundation node — and confirmed by `create-context-pack`'s shared-context
-   assessment) → **pause
-   before claiming any member** and **compose `create-context-pack`** on the member-ref set
-   (it owns the grouping axis — resolving/creating the container, grooming, clash-checking, and
-   writing the pack), then **re-tick** so the members fold by their new `context_pack.container`
-   into one batch — and only **then** reach CLAIM. You hand over the member set as a dispatch
-   **hint**; you **never** pre-create the container, add grouping edges, or write a pack
-   yourself. `create-context-pack` may return **"simple batch — no pack"** (no shared
-   architecture) → those members proceed to CLAIM as ordinary singletons. (A packed batch only
-   ever holds **mutually-ready** members — step 3 excludes any leaf with an open dependency — so
-   it co-builds independent members that share a *brief*, never a dependent with its unmerged
-   foundation; that ordering is the **dependency edge's** job, not the pack's. The pack groups
-   the batch's shared **context** the verifier reads; it does not change dispatch granularity.)
+4. **ENSURE-PACKED.** Pack-first is a precondition of CLAIM, never a fallback
+   after it.
+   - For an **already-packed** batch this is the cheap assertion: the container
+     carries a `spec` `context-pack.md` (the pointer guarantees it).
+   - For a **ready packless cluster whose members share an architecture** —
+     signalled by a shared `depends_on` producer (the build-time mirror of the
+     planner's foundation node) and confirmed by `create-context-pack`'s
+     shared-context assessment — **pause before claiming any member** and
+     **compose `create-context-pack`** on the member-ref set. That skill owns the
+     grouping axis: resolving or creating the container, grooming, clash-checking,
+     and writing the pack. Then **re-tick** so the members fold by their new
+     `context_pack.container` into one batch — and only **then** reach CLAIM.
+   - You hand over the member set as a dispatch **hint**. You **never** pre-create
+     the container, add grouping edges, or write a pack yourself.
+   - `create-context-pack` may return **"simple batch — no pack"** (no shared
+     architecture) → those members proceed to CLAIM as ordinary singletons.
+   - A packed batch only ever holds **mutually-ready** members — step 3 excludes
+     any leaf with an open dependency. So it co-builds independent members that
+     share a *brief*, never a dependent with its unmerged foundation; that
+     ordering is the **dependency edge's** job, not the pack's. The pack groups
+     the batch's shared **context** the verifier reads; it does not change
+     dispatch granularity.
 5. **CLAIM.** Soft-claim every member of the batch: `haven_update_item {ref,
    status:in_progress}`, one call per leaf. This removes them from `next`, so a re-read
    this same tick won't re-pick them. **Claim before you spawn — never spawn before claim.**
-6. **DISPATCH — plan → validate-as-a-batch → build, on fresh agents you load with context.** Per
-   batch, create an isolated worktree off `main` and **spawn each agent with its cwd inside it — it
-   edits *there*, never the session checkout** (invariant 4; `references/worktree-merge.md`).
-   **You — the coordinator — own the full-context handoff:** a spawned agent knows only what its prompt carries
-   (`references/dispatch-policy.md` § Dispatch-prompt quality), so **synthesise full context into
-   every spawn**; do not rely on any agent staying alive across the gate (in practice the loop
-   spawns fresh at each phase). The plan artifact is the **hand-off medium** between phases, not a
-   recovery shadow.
-   - **6a Plan.** For a complex/ultracode batch (the plan-gate dial —
-     `references/dispatch-policy.md` § PLAN-GATE; a **mechanical** batch skips 6a/6b and builds
-     directly), spawn a **read-only plan agent** (BUILD_TIER — § MODEL_TIERS) handed the container's
-     `context-pack.md` (`haven_get_artifact {ref:container, role:context-pack}`), the members'
-     `done_looks_like`, and the envelope. It **produces a build plan, writes it as `build-plan.md`
-     on the container** (`role:scratch` — `references/tick-ops.md` § 6) and does **not** modify
-     code. The plan must pass the synthesis test *on its own* — rich enough that a fresh builder
+6. **DISPATCH — plan → validate-as-a-batch → build, on fresh agents you load with
+   context.** Per batch, create an isolated worktree off `main`. **Spawn each
+   agent with its cwd inside it — it edits *there*, never the session checkout**
+   (invariant 4; `references/worktree-merge.md`). **You — the coordinator — own
+   the full-context handoff.** A spawned agent knows only what its prompt carries
+   (`references/dispatch-policy.md` § Dispatch-prompt quality), so **synthesise
+   full context into every spawn**. Do not rely on any agent staying alive across
+   the gate — in practice the loop spawns fresh at each phase. The plan artifact
+   is the **hand-off medium** between phases, not a recovery shadow.
+   - **6a Plan.** For a complex/ultracode batch — the plan-gate dial,
+     `references/dispatch-policy.md` § PLAN-GATE; a **mechanical** batch skips
+     6a/6b and builds directly. Spawn a **read-only plan agent** (BUILD_TIER —
+     § MODEL_TIERS) handed: the container's `context-pack.md`
+     (`haven_get_artifact {ref:container, role:context-pack}`), the members'
+     `done_looks_like`, and the envelope. It **produces a build plan and writes
+     it as `build-plan.md` on the container** (`role:scratch` —
+     `references/tick-ops.md` § 6). It does **not** modify code. The plan must
+     pass the synthesis test *on its own* — rich enough that a fresh builder
      could execute from it plus the pack alone.
-   - **6b Plan-gate — validate the tick's plan(s) as a whole, fresh eyes at VERIFY_TIER.** Once the
-     plans are in, spawn a **separate** validator (never a plan/build agent — fresh eyes) over the
-     **plans together**: the whole-set view catches
-     cross-batch conflicts, shared-surface collisions, and duplication *before* any code is written.
-     Per plan it returns **APPROVE / REVISE / REJECT** (criteria: `references/executor-discipline.md`
-     § The build plan). **REVISE** → re-spawn a plan agent with the specific gaps + the prior
-     `build-plan.md` to rewrite, then re-gate. **REJECT** (structurally wrong / needs scope it can't
-     self-grant) → Change Request, not a build → failure/replan path, no code written. This AI gate
-     replaces native plan mode's **human** gate on the autonomous path.
-   - **6c Build.** For each APPROVEd plan, spawn a **fresh** build agent (BUILD_TIER) handed the
-     **full context you synthesised**: the `context-pack.md`, the members' `done_looks_like`, the
-     **approved `build-plan.md` as its primary brief**, and — per leaf — a **2–5 step self-check
-     derived from `done_looks_like`** (a green global build is not proof a specific leaf's
-     acceptance is met). It builds, runs its self-check, reports pass/fail + evidence + any **scope
-     finding**, and never touches the graph. If it finds its member list wrong / a dependency
-     missing, it **surfaces and returns** (the Change-Request rule); you decide next tick whether to
-     re-pack, re-plan, or adjust the batch. A fresh builder isn't context-*starved* — it can re-read
-     the code; the approved plan + your synthesis is what keeps re-exploration cheap.
-7. **GATE — a fresh verifier, not the builder** (independence is the point — why:
-   `references/dispatch-policy.md` § GATE). Run it **inside** the worktree. *Unattended:* spawn a
-   **separate verifier** given only the leaf's `done_looks_like` + the pack's shared requirements +
-   the diff (never the builder's reasoning); it runs `build + lint + test` (exit-0), judges
-   acceptance, and returns **PASS / NEEDS-HUMAN / FAIL** + evidence. **Forward `verify-acceptance`'s
-   contract into its prompt** — the verifier inherits no skill (`references/dispatch-policy.md`
-   § GATE covers what to forward and why). *Attended:* native plan-mode human approval. The verifier
-   **fixes MINOR (mechanical / deterministic) issues inline** and re-runs the suite (not a strike);
-   a **MAJOR** issue it must **not** self-fix — it writes a fix plan and the failure path dispatches
-   a fresh fix agent (boundary: `references/executor-discipline.md` § Verifier fixes; when unsure,
-   treat as major). It also **captures non-blocking nits** (acceptance met, nothing broken) to the
-   container's `punch-list.md` — never held to "eyeball later" — for the next checkpoint (§ tick 9;
-   `references/dispatch-policy.md` § CHECKPOINTS). A fail stays in the worktree — nothing merged,
-   siblings untouched → failure path (§ below).
-8. **MERGE (serialized).** Acquire the single merge lock; `rebase` the batch branch onto
-   current `main`; **re-run the deterministic gate post-rebase** (invariant 2); only a green re-gate
-   **fast-forwards** to `main`. Rebase conflict or red re-gate → do **not** merge, release the lock,
-   send the batch to the failure path; `main` and siblings stay clean. (`references/worktree-merge.md`.)
-9. **COMPLETE + REPLAN.** Only after the work is on `main`: `haven_complete_item {ref,
-   evidence}` per leaf — which returns `unblocked[]`. When a leaf made a non-obvious
-   integration/contract decision, also append a short `delivery`/`decision` artifact on it
-   so a downstream batch's build agent reads it. **Replan check:** if a completion's
-   evidence **contradicts** a downstream leaf's `done_looks_like` or makes it moot, do
-   **not** silently build the stale leaf — bounce that branch back to `orchestrate-plan`
-   (the pack's "structurally-wrong → re-plan" escape, applied in the *run* loop). Remove
-   the worktree; release the lock.
-   - **Checkpoint check — meaty, not every ticket.** If this completion closes a **meaty checkpoint**
-     (a whole-track event — `references/tick-ops.md` § 9d — never a minor subtask), run the checkpoint
-     cycle: **code review** (a fresh lens on the merged diff) **+ the scope's `punch-list.md`(s)** →
-     triage → **one batched fix pass** through the normal build → gate → merge (re-verified). Cadence,
-     review composition, the severity table, and why review ≠ the per-leaf gate:
-     `references/dispatch-policy.md` § CHECKPOINTS.
+   - **6b Plan-gate — validate the tick's plan(s) as a whole, fresh eyes at
+     VERIFY_TIER.** Once the plans are in, spawn a **separate** validator over
+     the **plans together** — never a plan/build agent; fresh eyes. The whole-set
+     view catches cross-batch conflicts, shared-surface collisions, and
+     duplication *before* any code is written. Per plan it returns
+     **APPROVE / REVISE / REJECT** (criteria: `references/executor-discipline.md`
+     § The build plan).
+     - **REVISE** → re-spawn a plan agent with the specific gaps plus the prior
+       `build-plan.md` to rewrite, then re-gate.
+     - **REJECT** (structurally wrong, or needs scope it can't self-grant) →
+       Change Request, not a build → failure/replan path, no code written.
+     - This AI gate replaces native plan mode's **human** gate on the autonomous
+       path.
+   - **6c Build.** For each APPROVEd plan, spawn a **fresh** build agent
+     (BUILD_TIER) handed the **full context you synthesised**: the
+     `context-pack.md`, the members' `done_looks_like`, the **approved
+     `build-plan.md` as its primary brief**, and — per leaf — a **2–5 step
+     self-check derived from `done_looks_like`** (a green global build is not
+     proof a specific leaf's acceptance is met). It builds, runs its self-check,
+     reports pass/fail + evidence + any **scope finding**, and never touches the
+     graph. If it finds its member list wrong or a dependency missing, it
+     **surfaces and returns** (the Change-Request rule); you decide next tick
+     whether to re-pack, re-plan, or adjust the batch. A fresh builder isn't
+     context-*starved* — it can re-read the code. The approved plan plus your
+     synthesis is what keeps re-exploration cheap.
+7. **GATE — a fresh verifier, not the builder.** Independence is the point (why:
+   `references/dispatch-policy.md` § GATE). Run it **inside** the worktree.
+   - *Unattended:* spawn a **separate verifier** given only the leaf's
+     `done_looks_like`, the pack's shared requirements, and the diff — never the
+     builder's reasoning. It runs `build + lint + test` (exit-0), judges
+     acceptance, and returns **PASS / NEEDS-HUMAN / FAIL** plus evidence.
+     **Forward `verify-acceptance`'s contract into its prompt** — the verifier
+     inherits no skill (`references/dispatch-policy.md` § GATE covers what to
+     forward and why).
+   - *Attended:* native plan-mode human approval.
+   - The verifier **fixes MINOR (mechanical / deterministic) issues inline** and
+     re-runs the suite — not a strike. A **MAJOR** issue it must **not** self-fix:
+     it writes a fix plan, and the failure path dispatches a fresh fix agent
+     (boundary: `references/executor-discipline.md` § Verifier fixes; when unsure,
+     treat as major).
+   - It also **captures non-blocking nits** (acceptance met, nothing broken) to
+     the container's `punch-list.md` — never held to "eyeball later" — for the
+     next checkpoint (§ tick 9; `references/dispatch-policy.md` § CHECKPOINTS).
+   - A fail stays in the worktree — nothing merged, siblings untouched → failure
+     path (§ below).
+8. **MERGE (serialized).** Acquire the single merge lock. `rebase` the batch
+   branch onto current `main`. **Re-run the deterministic gate post-rebase**
+   (invariant 2); only a green re-gate **fast-forwards** to `main`. On a rebase
+   conflict or a red re-gate, do **not** merge — release the lock and send the
+   batch to the failure path; `main` and siblings stay clean.
+   (`references/worktree-merge.md`.)
+9. **COMPLETE + REPLAN.** Only after the work is on `main`:
+   `haven_complete_item {ref, evidence}` per leaf — each returns `unblocked[]`.
+   When a leaf made a non-obvious integration/contract decision, also append a
+   short `delivery`/`decision` artifact on it, so a downstream batch's build
+   agent reads it.
+   - **Replan check.** If a completion's evidence **contradicts** a downstream
+     leaf's `done_looks_like`, or makes it moot, do **not** silently build the
+     stale leaf — bounce that branch back to `orchestrate-plan` (the pack's
+     "structurally-wrong → re-plan" escape, applied in the *run* loop).
+   - Remove the worktree; release the lock.
+   - **Checkpoint check — meaty, not every ticket.** If this completion closes a
+     **meaty checkpoint** (a whole-track event — `references/tick-ops.md` § 9d —
+     never a minor subtask), run the checkpoint cycle: **code review** (a fresh
+     lens on the merged diff) **plus the scope's `punch-list.md`(s)** → triage →
+     **one batched fix pass** through the normal build → gate → merge
+     (re-verified). Cadence, review composition, the severity table, and why
+     review ≠ the per-leaf gate: `references/dispatch-policy.md` § CHECKPOINTS.
 
-**Collecting a spawned agent's result (plan § 6a, plan-gate § 6b, build § 6c, gate § 7).** A spawned agent
-often signals **idle/complete WITHOUT delivering its final report** — treat the idle signal as
-*"go fetch the report,"* never as the report itself. After any build or validator/verifier agent
-goes idle, **explicitly retrieve and confirm its structured result** (the build self-check outcome
-/ the plan-gate APPROVE·REVISE·REJECT / the PASS·NEEDS-HUMAN·FAIL verdict + evidence) — `SendMessage` to pull it when it didn't arrive — and
-**never advance the tick on a missing or empty report**: a silent absent verdict must not be read
-as a pass. The loop waits for the *report*, not merely the completion notification.
+**Collecting a spawned agent's result (plan § 6a, plan-gate § 6b, build § 6c,
+gate § 7).** A spawned agent often signals **idle/complete WITHOUT delivering its
+final report**. Treat the idle signal as *"go fetch the report,"* never as the
+report itself. After any build, validator, or verifier agent goes idle,
+**explicitly retrieve and confirm its structured result**: the build self-check
+outcome, the plan-gate APPROVE·REVISE·REJECT, or the PASS·NEEDS-HUMAN·FAIL verdict
+plus evidence. Use `SendMessage` to pull it when it didn't arrive. **Never advance
+the tick on a missing or empty report** — a silent absent verdict must not be read
+as a pass. The loop waits for the *report*, not merely the completion
+notification.
 
 Loop to step 0. **Converge** when `haven next --owner ai` is empty **and** nothing is in
 flight → **promote any undrained `punch-list.md` items to floating Haven items** (`owner:ai`, low

@@ -50,7 +50,6 @@ The gotchas that bite the planner:
 - **Capture ≠ commit.** A bare node is floating/uncommitted/`discovery`. The
   planner *commits* leaves it seals (they're real, ordered work); it leaves
   genuine unknowns floating and surfaces them, rather than fabricating work.
-- **Over MCP there is no sticky session** — pass `project` on every call.
 - **Creative & strategic decisions are research-and-propose nodes, never quick
   questions.** A brand name, a visual aesthetic, a positioning, a platform choice —
   when the answer should be *earned* by studying comparables and trade-offs, mint it

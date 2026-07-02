@@ -169,7 +169,7 @@ haven mcp
 | `haven_prime` | `project?` — one-shot session-context block (project state, committed queue with next-eligible flagged, in-progress/waiting incl. owner, core conventions, untriaged inbox) as a `prime` text block; read at session start instead of separate `status`/`next`/`list`/`inbox` calls |
 | `haven_list_projects` | `include_archived?` — discover backlogs (hides archived unless `include_archived:true`; a deleted project is never listed) |
 | `haven_add_project` | **`key`**, **`title`**, `prefix?, description?` |
-| `haven_archive_project` | **`key`**, `rationale?, by?` — soft-archive a project: retire it, namespace stays reserved (key/prefix/counter untouched, refs never reused). Reversible. The project-level analogue of `haven_archive`; there is no hard-delete tool |
+| `haven_archive_project` | **`key`**, `rationale?, by?` — soft-archive a project: hides it from default listings and refuses writes into it, namespace stays reserved (key/prefix/counter untouched, refs never reused). Reversible. The project-level analogue of `haven_archive`; there is no hard-delete tool |
 | `haven_reopen_project` | **`key`**, `by?` — reopen an archived project (total restore; refs continue from the preserved counter) |
 | `haven_archive` | **`ref`**, `rationale?, by?` |
 | `haven_reopen` | **`ref`**, `rationale?, by?` |
