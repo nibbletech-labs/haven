@@ -138,16 +138,19 @@ the verdict). But it trades the human gate, so it is **earned, not assumed**:
 - **Mode 1 — code-level (v1, this skill):** `build + lint + test` (exit-0) + an independent
   acceptance judgment. This is exactly `orchestrate-run`'s current gate — extraction, not
   new capability.
-- **Mode 2 — runtime/browser QA (later, NOT in v1):** for a UI leaf, **verify is expected
-  to drive the running app** — open it in a real browser (natively, via Claude-in-Chrome),
-  exercise the behaviour, and judge acceptance *behaviourally* against the live
-  `done_looks_like`, not from the diff alone. This is an **expectation**, not a separate
-  tool: a leaf whose `done_looks_like` is a user-facing browser behaviour routes here; a
-  code/contract leaf stays in Mode 1. Browser checks use the flake discipline and the
-  **PASS-WITH-ISSUES** middle tier in `references/mode2-future.md` (fenced future
-  vocabulary — never forwarded for a Mode-1 gate), judged with the
-  a11y + design-eval lenses and the severity model in `references/evaluation-lens.md`. The
-  retry *engine* is out of v1 scope; the expectation and its contract are stated now.
+- **Mode 2 — runtime/browser QA (live for ad-hoc / attended use):** for a UI leaf, verify
+  **drives the running app** — opens it in a real browser (`agent-browser` CLI headless by
+  default, Claude-in-Chrome when attended), exercises the behaviour, and judges acceptance
+  *behaviourally* against the live `done_looks_like`, not from the diff alone. **Routing is
+  automatic by acceptance type:** a clause describing user-facing runtime behaviour routes
+  here; a code/contract clause stays in Mode 1; a mixed leaf runs both and rolls up (any
+  Mode-1 FAIL dominates). The full contract — routing, ingestion (live `done_looks_like`,
+  pack shared-requirements + `e2e`/`visual` scenarios, optional `design-spec.json`, `dev_url`
+  resolution), the driver, evidence capture, the four-rung ladder (**PASS-WITH-ISSUES**,
+  browser-only), and the flake discipline — is in `references/browser-mode.md`, judged with
+  the a11y + design-eval lenses and the severity model in `references/evaluation-lens.md`.
+  Automatic routing runs ad hoc / attended today; the `orchestrate-run` gate-wiring lands
+  separately (HV-262), so a code-leaf gate is never routed to Mode 2 yet.
 
 ## Convergence / fresh-session handoff
 
@@ -157,11 +160,15 @@ with `--replace`). v1 ships a manual resume: `/verify-acceptance <ref>`.
 
 ## Deferred / not in this skill
 
-Mode 2 (runtime/browser QA); the flake-retry engine (code tests are already deterministic
-— transient handling here is log-don't-count, not a retry harness); co-located session /
-evidence dirs; dev-server auto-start on an unreachable URL; exploratory checklists (focused
-acceptance is the gate); and the **persisted per-project trust-ramp store** for the
-auto-complete dial (the dial is a plain input in v1 — the store is HV-100). The executor-
-specific machinery the gate sits inside — the twice-run post-rebase re-gate, the serialized
-merge lock, strike-counting, MAX_PARALLEL, crash recovery — **stays in `orchestrate-run`**;
-this skill is the single judgment, never the loop.
+Mode 2 is **live** (ad-hoc / attended — `references/browser-mode.md`); what stays deferred:
+**dev-server auto-start** on an unreachable URL (Mode 2 expects a reachable `dev_url` and
+escalates NEEDS-HUMAN otherwise); the **iOS-simulator driver** (HV-263 — the contract is
+platform-neutral, browser is v1's only driver); **`orchestrate-run` gate-wiring** for Mode 2
+(HV-262, gated on the attended proving record HV-261 — the dispatch-policy fence stays until
+it flips); the **coded flake-retry engine** (the 3-attempt / ≥30%-governor discipline ships
+as prompt-level instructions, not a harness); co-located session / evidence dirs; exploratory
+checklists (focused acceptance is the gate); and the **persisted per-project trust-ramp
+store** for the auto-complete dial (the dial is a plain input in v1 — the store is HV-100).
+The executor-specific machinery the gate sits inside — the twice-run post-rebase re-gate, the
+serialized merge lock, strike-counting, MAX_PARALLEL, crash recovery — **stays in
+`orchestrate-run`**; this skill is the single judgment, never the loop.

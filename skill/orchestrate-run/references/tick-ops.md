@@ -120,7 +120,8 @@ PASS / NEEDS-HUMAN / FAIL definitions (`references/verdict-contract.md`), the in
 (judge from `done_looks_like` + shared-requirements + diff only), and the exhaustive
 acceptance-clause walk + lens (`references/evaluation-lens.md`). **Trim to the leaf** (why:
 `references/dispatch-policy.md` § GATE): code leaf → the lens's code sections only, no a11y /
-design-eval material, never `mode2-future.md`. **Collect the verdict explicitly** —
+design-eval material, never `browser-mode.md` for a code leaf (UI routing lands with HV-262).
+**Collect the verdict explicitly** —
 an idle signal means *fetch the verdict*, never proceed on an absent one.
 
 ## 8. Merge — serialized lock → rebase → re-gate → ff

@@ -64,9 +64,11 @@ For the code-level gate (Mode 1) there is no "pass-with-issues". Cosmetic nits r
 Two implementations of the gate would mean two judgments and a lost independence
 guarantee — there is one verifier, one verdict.
 
-## Mode 2 (future) — reserved browser-only vocabulary
+## Mode 2 (browser) — the live browser contract
 
-Mode 2 (runtime/browser QA — not in v1) reserves a browser-only **PASS-WITH-ISSUES**
-rung and a flake discipline. That material lives in `references/mode2-future.md`, a
-fenced future reference: it is **not** part of the v1 contract and is **never forwarded
-for a code-leaf (Mode 1) gate**.
+Mode 2 (runtime/browser QA) is **live** and adds a browser-only **PASS-WITH-ISSUES** rung on
+top of a four-rung ladder, plus a flake discipline. That contract lives in
+`references/browser-mode.md`. The **four-rung ladder applies only to browser-mode verdicts** —
+the **no-fourth-verdict rule above stands verbatim for the code-level (Mode 1) gate**:
+PASS-WITH-ISSUES is **never forwarded for, and never appears on, a code-leaf (Mode 1)
+verdict**.

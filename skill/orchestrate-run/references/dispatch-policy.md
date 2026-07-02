@@ -100,7 +100,8 @@ autonomous path — the real backstop is still the post-build verifier (§ GATE)
   forward to the leaf:** for a code leaf, inline the Mode-1 material only — the independence contract,
   the verdict definitions, and the lens's code sections (exhaustive walk, 5-category checklist,
   confidence filter, severity) — and skip the a11y + design-eval lenses unless the leaf's acceptance
-  is user-facing UI; **never** forward `mode2-future.md` (fenced future vocabulary). Only **PASS**
+  is user-facing UI; **never** forward `browser-mode.md` for a code leaf (UI routing lands with
+  HV-262). Only **PASS**
   merges; a **FAIL** keeps the batch in the worktree → failure path (STRIKES below); a **NEEDS-HUMAN**
   escalates straight to `handoff` (ambiguity won't clear on a blind retry). The verifier's
   independence by construction is the load-bearing quality guarantee — deterministic exit-0 alone is

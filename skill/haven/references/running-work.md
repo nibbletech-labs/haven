@@ -44,11 +44,13 @@ direct is usually the better call.
 - **Two different verifications — don't conflate them:**
   - **Code** — `build + lint + test` green, and "does the diff meet `done_looks_like`." That's the
     `verify-acceptance` skill (Mode 1), and it's the executor's per-leaf gate. The AI does this.
-  - **Functionality** — does the built thing actually *work* in use (front-end / runtime). That's a
-    **human** check today (you verify before it's trusted to land). The AI version is `verify-acceptance`
-    **Mode 2** (browser/runtime QA) — not built yet (**HV-139**); **HV-100** is the trust-ramp for
-    when it can stand in. The executor gates **code**, not functionality — functionality is still
-    yours.
+  - **Functionality** — does the built thing actually *work* in use (front-end / runtime). The AI
+    version is `verify-acceptance` **Mode 2** (browser/runtime QA), now **built and available
+    attended** (**HV-139**) — invoke it ad hoc on a UI leaf with a reachable `dev_url` and it drives
+    the running app. For an **unattended** executor run the **human** check is still the default: the
+    `orchestrate-run` gate-wiring (**HV-262**, gated on the attended proving record **HV-261**) and the
+    trust-ramp (**HV-100**) land separately, so until then the executor gates **code**, not
+    functionality — unattended functionality is still yours.
 - **Entry escape.** When `orchestrate-run` fires it first checks the executor is actually the right
   call for this work and checks with you before spawning, rather than running the full loop blindly
   (**HV-168**). So an eager trigger is fine — a wrong fire gets caught at the door.

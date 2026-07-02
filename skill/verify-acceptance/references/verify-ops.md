@@ -73,3 +73,14 @@ Returns `unblocked[]` (the items this completion freed):
 > Inside `orchestrate-run`, the executor owns completion (step 9) and the N-strike ceiling;
 > this skill returns the verdict and the executor consumes it. Ad hoc, the dial above
 > decides whether `verify-acceptance` itself completes or simply records the verdict.
+
+## Mode 2 (browser) write-back — same ops, same dial
+
+A **browser (Mode 2)** verdict writes back through the **exact same ops and dial** as Mode 1
+— a `delivery`-role `verdict.md` (Posture A, default), or `complete_item` on an unambiguous
+clean PASS with the dial explicitly on, or the fix-log + `handoff` escalation on
+NEEDS-HUMAN / FAIL. The verdict body carries the browser-mode rung (PASS / PASS-WITH-ISSUES /
+NEEDS-HUMAN / FAIL) and the screenshot / console evidence per `references/browser-mode.md`.
+**Until the HV-261 attended proving record exists, default browser verdicts to verdict-only
+(Posture A)** — auto-complete on a browser PASS is not yet earned, so the human/dispatcher
+completes.
