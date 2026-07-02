@@ -293,6 +293,41 @@ const SKILL_REGISTRY: &[Skill] = &[
     },
 ];
 
+/// Former haven-managed skill dir names, pruned on install: skills that were
+/// renamed or removed leave their old dir behind under `<agent>/skills/`
+/// (installs only ever overwrote), where a stale duplicate description keeps
+/// loading into every agent session. `verify` became `verify-acceptance`.
+/// Only names listed here (plus [`SKILL_REGISTRY`] members) are ever touched —
+/// a user's own skills are not ours to manage.
+const RETIRED_SKILL_DIRS: &[&str] = &["verify"];
+
+/// Remove retired haven-managed skill dirs (see [`RETIRED_SKILL_DIRS`]) from
+/// each agent skills root that is already present. Never creates a root, never
+/// follows a symlink (a symlinked entry is removed as a link, its target left
+/// alone), and never touches dirs outside the retired list. Returns the paths
+/// it removed.
+pub fn prune_retired_skill_dirs() -> Result<Vec<PathBuf>> {
+    let mut pruned = Vec::new();
+    for root in [claude_dir()?.join("skills"), agents_dir()?.join("skills")] {
+        if !root.is_dir() {
+            continue; // this agent was never set up here — not ours to create
+        }
+        for name in RETIRED_SKILL_DIRS {
+            let dir = root.join(name);
+            let Ok(meta) = std::fs::symlink_metadata(&dir) else {
+                continue;
+            };
+            if meta.is_dir() {
+                std::fs::remove_dir_all(&dir)?;
+            } else {
+                std::fs::remove_file(&dir)?;
+            }
+            pruned.push(dir);
+        }
+    }
+    Ok(pruned)
+}
+
 /// Skill names shipped in this binary, in registry order.
 pub fn skill_names() -> impl Iterator<Item = &'static str> {
     SKILL_REGISTRY.iter().map(|s| s.name)
@@ -315,17 +350,18 @@ pub fn skill_file_list(skill_name: &str) -> Vec<&'static str> {
 
 /// Install a skill's embedded snapshot to `<claude>/skills/<skill_name>/`.
 /// Idempotent — overwrites, since it's a versioned snapshot, not user-editable
-/// state. Returns the installed skill directory.
-pub fn ensure_skill_installed(skill_name: &str) -> Result<PathBuf> {
+/// state. Returns the installed skill directory plus the orphaned files the
+/// snapshot write pruned from it (see [`write_skill_snapshot`]).
+pub fn ensure_skill_installed(skill_name: &str) -> Result<(PathBuf, Vec<PathBuf>)> {
     let skill_dir = claude_dir()?.join("skills").join(skill_name);
-    write_skill_snapshot(skill_name, &skill_dir)?;
-    Ok(skill_dir)
+    let pruned = write_skill_snapshot(skill_name, &skill_dir)?;
+    Ok((skill_dir, pruned))
 }
 
-pub fn ensure_codex_skill_installed(skill_name: &str) -> Result<PathBuf> {
+pub fn ensure_codex_skill_installed(skill_name: &str) -> Result<(PathBuf, Vec<PathBuf>)> {
     let skill_dir = agents_dir()?.join("skills").join(skill_name);
-    write_skill_snapshot(skill_name, &skill_dir)?;
-    Ok(skill_dir)
+    let pruned = write_skill_snapshot(skill_name, &skill_dir)?;
+    Ok((skill_dir, pruned))
 }
 
 /// Which agent skill-dirs already exist for `skill_name`, as `(claude, codex)`.
@@ -339,7 +375,13 @@ pub fn skill_target_presence(skill_name: &str) -> Result<(bool, bool)> {
     Ok((claude, codex))
 }
 
-fn write_skill_snapshot(skill_name: &str, skill_dir: &Path) -> Result<()> {
+/// Write `skill_name`'s embedded snapshot into `skill_dir`, then prune any
+/// file already there that the snapshot no longer ships (a rename like
+/// `verify-ops.md` → `pack-ops.md` used to leave the old file behind forever)
+/// and drop subdirectories the pruning emptied. The dir is haven-managed in
+/// full, so anything not embedded is an orphan by definition. Returns the
+/// pruned file paths.
+fn write_skill_snapshot(skill_name: &str, skill_dir: &Path) -> Result<Vec<PathBuf>> {
     let files = skill_files(skill_name)
         .ok_or_else(|| HavenError::Invalid(format!("unknown skill: {skill_name}")))?;
     for (rel, contents) in files {
@@ -349,7 +391,47 @@ fn write_skill_snapshot(skill_name: &str, skill_dir: &Path) -> Result<()> {
         }
         std::fs::write(&dest, contents)?;
     }
-    Ok(())
+    let keep: std::collections::BTreeSet<&str> = files.iter().map(|(rel, _)| *rel).collect();
+    let mut pruned = Vec::new();
+    prune_orphan_files(skill_dir, "", &keep, &mut pruned)?;
+    Ok(pruned)
+}
+
+/// Delete every file under `dir` whose skill-relative path isn't in `keep`,
+/// recording deletions in `pruned`, and remove subdirectories left empty.
+/// Symlinks are never followed: a symlinked dir or file is treated as one
+/// orphaned entry and unlinked in place (its target untouched). Returns
+/// whether `dir` ended up empty (so the caller can remove it).
+fn prune_orphan_files(
+    dir: &Path,
+    rel_prefix: &str,
+    keep: &std::collections::BTreeSet<&str>,
+    pruned: &mut Vec<PathBuf>,
+) -> Result<bool> {
+    let mut empty = true;
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let rel = if rel_prefix.is_empty() {
+            name.to_string_lossy().into_owned()
+        } else {
+            format!("{rel_prefix}/{}", name.to_string_lossy())
+        };
+        // DirEntry::file_type never follows symlinks — a link reads as a link.
+        if entry.file_type()?.is_dir() {
+            if prune_orphan_files(&entry.path(), &rel, keep, pruned)? {
+                std::fs::remove_dir(entry.path())?;
+            } else {
+                empty = false;
+            }
+        } else if keep.contains(rel.as_str()) {
+            empty = false;
+        } else {
+            std::fs::remove_file(entry.path())?;
+            pruned.push(entry.path());
+        }
+    }
+    Ok(empty)
 }
 
 /// Refresh previously-installed skill snapshots that have drifted from the one
@@ -373,7 +455,7 @@ pub fn refresh_stale_skill_snapshots() -> Vec<PathBuf> {
                 continue;
             }
             match write_skill_snapshot(skill.name, &skill_dir) {
-                Ok(()) => refreshed.push(skill_dir),
+                Ok(_) => refreshed.push(skill_dir),
                 Err(e) => {
                     eprintln!(
                         "haven: skill refresh skipped ({}): {e}",

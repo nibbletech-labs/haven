@@ -411,6 +411,102 @@ fn skill_install_default_syncs_present_targets_without_creating_absent_ones() {
 }
 
 #[test]
+fn skill_install_prunes_retired_dirs_and_orphaned_files_claude() {
+    let h = Haven::new();
+    let skills = h.home.join(".claude/skills");
+
+    // A retired haven-managed skill dir (pre-rename `verify` → `verify-acceptance`).
+    let retired = skills.join("verify");
+    std::fs::create_dir_all(&retired).unwrap();
+    std::fs::write(retired.join("SKILL.md"), "stale pre-rename skill").unwrap();
+    // An orphaned file inside a managed skill dir (pre-rename `verify-ops.md`
+    // → `pack-ops.md`): overwrite-only installs used to leave it forever.
+    let stray = skills.join("create-context-pack/references/verify-ops.md");
+    std::fs::create_dir_all(stray.parent().unwrap()).unwrap();
+    std::fs::write(&stray, "renamed away").unwrap();
+    // A user's own skill — NOT haven-managed, must be untouched.
+    let own = skills.join("my-own-skill");
+    std::fs::create_dir_all(&own).unwrap();
+    std::fs::write(own.join("SKILL.md"), "not haven's").unwrap();
+
+    let out = h.json(&["skill", "install"]);
+
+    assert!(!retired.exists(), "retired `verify` dir must be pruned");
+    assert!(!stray.exists(), "orphaned snapshot file must be pruned");
+    // The real snapshot is intact — the rename target and the rest survive.
+    let ccp = skills.join("create-context-pack");
+    assert!(ccp.join("references/pack-ops.md").exists());
+    assert!(ccp.join("SKILL.md").exists());
+    assert!(ccp.join("references/pack-template.md").exists());
+    // Non-haven skills are never touched.
+    assert_eq!(
+        std::fs::read_to_string(own.join("SKILL.md")).unwrap(),
+        "not haven's"
+    );
+    // The JSON output names both removed paths.
+    let pruned: Vec<&str> = out["pruned"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    assert!(
+        pruned.iter().any(|p| p.ends_with(".claude/skills/verify")),
+        "pruned should name the retired dir: {pruned:?}"
+    );
+    assert!(
+        pruned
+            .iter()
+            .any(|p| p.ends_with("create-context-pack/references/verify-ops.md")),
+        "pruned should name the orphaned file: {pruned:?}"
+    );
+}
+
+#[test]
+fn skill_install_prunes_retired_dirs_and_orphaned_files_agents() {
+    let h = Haven::new();
+    let skills = h.home.join(".agents/skills");
+
+    let retired = skills.join("verify");
+    std::fs::create_dir_all(&retired).unwrap();
+    std::fs::write(retired.join("SKILL.md"), "stale pre-rename skill").unwrap();
+    let stray = skills.join("create-context-pack/references/verify-ops.md");
+    std::fs::create_dir_all(stray.parent().unwrap()).unwrap();
+    std::fs::write(&stray, "renamed away").unwrap();
+    let own = skills.join("my-own-skill");
+    std::fs::create_dir_all(&own).unwrap();
+    std::fs::write(own.join("SKILL.md"), "not haven's").unwrap();
+
+    let out = h.json(&["skill", "install"]);
+
+    assert!(!retired.exists(), "retired `verify` dir must be pruned");
+    assert!(!stray.exists(), "orphaned snapshot file must be pruned");
+    let ccp = skills.join("create-context-pack");
+    assert!(ccp.join("references/pack-ops.md").exists());
+    assert!(ccp.join("SKILL.md").exists());
+    assert_eq!(
+        std::fs::read_to_string(own.join("SKILL.md")).unwrap(),
+        "not haven's"
+    );
+    let pruned: Vec<&str> = out["pruned"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    assert!(
+        pruned.iter().any(|p| p.ends_with(".agents/skills/verify")),
+        "pruned should name the retired dir: {pruned:?}"
+    );
+    assert!(
+        pruned
+            .iter()
+            .any(|p| p.ends_with("create-context-pack/references/verify-ops.md")),
+        "pruned should name the orphaned file: {pruned:?}"
+    );
+}
+
+#[test]
 fn setup_and_doctor_are_stable_across_current_directories() {
     let h = Haven::new();
     let dir_a = h.home.join("dir-a");

@@ -1856,11 +1856,22 @@ fn cmd_setup(
     // paths, and keep a `skill` headline (the Claude `haven` path) for back-compat.
     let mut claude_skills = serde_json::Map::new();
     let mut codex_skills = serde_json::Map::new();
+    let mut pruned: Vec<String> = Vec::new();
     if !no_skill {
+        // Same cleanup as `haven skill install`: drop retired haven-managed
+        // skill dirs from any target root that already exists (best-effort —
+        // setup keeps going and reports, like the installs below).
+        match config::prune_retired_skill_dirs() {
+            Ok(dirs) => pruned.extend(dirs.iter().map(|p| p.display().to_string())),
+            Err(e) => warnings.push(format!("retired-skill prune skipped: {e}")),
+        }
         for name in config::skill_names() {
             if agent.includes_claude() {
                 let v = match config::ensure_skill_installed(name) {
-                    Ok(p) => p.display().to_string(),
+                    Ok((p, orphans)) => {
+                        pruned.extend(orphans.iter().map(|p| p.display().to_string()));
+                        p.display().to_string()
+                    }
                     Err(e) => {
                         warnings.push(format!("Claude skill `{name}` install skipped: {e}"));
                         format!("skipped: {e}")
@@ -1870,7 +1881,10 @@ fn cmd_setup(
             }
             if agent.includes_codex() {
                 let v = match config::ensure_codex_skill_installed(name) {
-                    Ok(p) => p.display().to_string(),
+                    Ok((p, orphans)) => {
+                        pruned.extend(orphans.iter().map(|p| p.display().to_string()));
+                        p.display().to_string()
+                    }
                     Err(e) => {
                         warnings.push(format!("Codex skill `{name}` install skipped: {e}"));
                         format!("skipped: {e}")
@@ -1923,6 +1937,7 @@ fn cmd_setup(
         "claude_skills": claude_skills,
         "codex_mcp_config": codex_mcp_config,
         "codex_skills": codex_skills,
+        "pruned": pruned,
         "current_project": current_project,
         "project_created": project_created,
         "warnings": warnings,
@@ -1967,6 +1982,13 @@ fn cmd_skill(cmd: &SkillCmd) -> Result<Output> {
             };
             let mut installed = serde_json::Map::new();
             let mut files = serde_json::Map::new();
+            // Retired haven-managed skill dirs (renamed/removed skills, e.g. the
+            // pre-rename `verify`) are removed from every present target root —
+            // install is the natural moment stale copies get cleaned up.
+            let mut pruned: Vec<String> = config::prune_retired_skill_dirs()?
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect();
             for name in names {
                 // Which agent targets to (re)write for this skill?
                 //  - explicit `--agent`: force exactly that target set;
@@ -1984,20 +2006,20 @@ fn cmd_skill(cmd: &SkillCmd) -> Result<Output> {
                     },
                 };
                 if want_claude {
+                    let (dir, orphans) = config::ensure_skill_installed(name)?;
                     installed.insert(
                         format!("claude_{name}"),
-                        serde_json::json!(config::ensure_skill_installed(name)?
-                            .display()
-                            .to_string()),
+                        serde_json::json!(dir.display().to_string()),
                     );
+                    pruned.extend(orphans.iter().map(|p| p.display().to_string()));
                 }
                 if want_codex {
+                    let (dir, orphans) = config::ensure_codex_skill_installed(name)?;
                     installed.insert(
                         format!("codex_{name}"),
-                        serde_json::json!(config::ensure_codex_skill_installed(name)?
-                            .display()
-                            .to_string()),
+                        serde_json::json!(dir.display().to_string()),
                     );
+                    pruned.extend(orphans.iter().map(|p| p.display().to_string()));
                 }
                 files.insert(
                     name.to_string(),
@@ -2007,6 +2029,7 @@ fn cmd_skill(cmd: &SkillCmd) -> Result<Output> {
             Ok(Output::Json(serde_json::json!({
                 "installed": installed,
                 "files": files,
+                "pruned": pruned,
             })))
         }
     }
