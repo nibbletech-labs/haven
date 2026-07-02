@@ -209,6 +209,10 @@ feeds a **fresh fix agent** dispatched through the plan-first pipeline (§ 6), a
 ## Convergence-time ops
 
 - **Promote undrained punch-list survivors** to floating items (§ 9e) so no non-blocking finding is lost.
+- **Post-run audit (the ratchet):** file the run-vs-skill deltas as **one floating item** —
+  CLI `haven item add "orchestrate-run audit: <run>" -p <P>` (uncommitted floater; one-line body,
+  detail as a `research` artifact on it). Nothing to report is a fine outcome — skip the item, not
+  the diff.
 - **Report the remaining AI queue / human queue:** `haven next --owner ai` / `--owner human`.
 - **Container progress:** `rollup_state` rides the step-0 graph read (Dormant|Queued|Active|Done).
 - **Follow a stale ref** from a resume note: CLI `haven evolve resolve <ref> -p <P>` · MCP

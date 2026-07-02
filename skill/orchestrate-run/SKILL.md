@@ -76,6 +76,16 @@ inline often the better choice for *small* runs — see the `haven` skill's
    corrupts `main`, forfeits the disposable-failed-build property, and breaks
    invariant 3's "`git worktree list` is truth". Isolate first, always.
 
+## Deviation protocol — declared, never silent
+
+The tick below is a **reference procedure**: one known-good way to satisfy the invariants,
+not the only way. When reality demands it, you may deviate — but a deviation is **declared,
+never silent**: say what you're doing differently, **name the invariant that covers the
+gap**, and record it (a line in the kickoff manifest when known up front; in the run's
+status notes when it arises mid-run). The plan is authoritative, but reality wins — record
+the deviation. A deviation you *can't* cover with an invariant isn't a deviation — it's a
+stop-and-escalate.
+
 ## Operating rules (inherit from the `haven` skill)
 
 Read the `haven` skill's `references/surface-map.md` (CLI⇄MCP) for op detail — don't
@@ -294,7 +304,13 @@ notification.
 Loop to step 0. **Converge** when `haven next --owner ai` is empty **and** nothing is in
 flight → **promote any undrained `punch-list.md` items to floating Haven items** (`owner:ai`, low
 priority, xref the source leaf) so nothing is lost (`references/tick-ops.md` § Convergence-time),
-then report blocked-on-human items (`next --owner human` / `wait_state on_human`) and any
+then **run the post-run audit — the ratchet**: diff what this run actually did against what
+this skill prescribes (deviations declared, tripwires fired or missed, failures nothing
+covers, places the model outperformed the procedure) and **file the deltas as one floating
+research item** on the project (capture, don't structure — `references/tick-ops.md`
+§ Convergence-time; nothing-to-report skips the item, never the diff). The ratchet is how
+this skill ages: it changes on run evidence, never on speculation. Then report
+blocked-on-human items (`next --owner human` / `wait_state on_human`) and any
 strike-escalated items, then stop (inline) or sleep (`/loop`, v4).
 
 When you surface progress to a person — mid-run status, a merge-gate pause, the convergence
