@@ -299,7 +299,13 @@ outcome, the plan-gate APPROVE·REVISE·REJECT, or the PASS·NEEDS-HUMAN·FAIL v
 plus evidence. Use `SendMessage` to pull it when it didn't arrive. **Never advance
 the tick on a missing or empty report** — a silent absent verdict must not be read
 as a pass. The loop waits for the *report*, not merely the completion
-notification.
+notification. **After two failed pulls the agent is unrecoverable — stop messaging
+it and read objective state instead** (worktree + done-marker + graph status,
+`references/worktree-merge.md` § RECOVER): a builder's narrative is a convenience,
+never the gate's input, so a dead builder with a done-marker proceeds to the gate;
+no done-marker means the build did not finish — redispatch fresh in the same
+worktree. A *verifier's* verdict has no objective-state substitute: two failed
+pulls there mean spawn a fresh verifier, never infer the verdict.
 
 Loop to step 0. **Converge** when `haven next --owner ai` is empty **and** nothing is in
 flight → **promote any undrained `punch-list.md` items to floating Haven items** (`owner:ai`, low

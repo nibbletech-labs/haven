@@ -276,7 +276,9 @@ Once a batch is dispatched, **do not read the agent's working files mid-flight**
 predict or fabricate its results**. Wait for completion — then **explicitly retrieve and confirm
 the agent's report before processing it**: an idle/completion signal is **not** the report (agents
 frequently go idle without delivering one), so `SendMessage` to pull the structured result and
-**never advance on an absent or empty verdict** (a silent missing verdict must not read as a pass).
+**never advance on an absent or empty verdict** (a silent missing verdict must not read as a pass);
+after two failed pulls the agent is unrecoverable — switch to objective state per SKILL.md
+§ Collecting a spawned agent's result (builders: done-marker decides; verifiers: respawn fresh).
 Peeking tempts you to act on a half-written state (which the stateless reorient does not model)
 and racing tempts you to invent a verdict the verifier hasn't returned — both poison the one
 truth the loop trusts. The graph's `in_progress` status, the worktree, and the done-marker are
