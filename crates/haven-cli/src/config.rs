@@ -391,10 +391,40 @@ fn write_skill_snapshot(skill_name: &str, skill_dir: &Path) -> Result<Vec<PathBu
         }
         std::fs::write(&dest, contents)?;
     }
-    let keep: std::collections::BTreeSet<&str> = files.iter().map(|(rel, _)| *rel).collect();
+    write_provenance_marker(skill_dir)?;
+    let mut keep: std::collections::BTreeSet<&str> = files.iter().map(|(rel, _)| *rel).collect();
+    // The provenance marker is install metadata, not snapshot content — written by us,
+    // never pruned as an orphan.
+    keep.insert(PROVENANCE_MARKER);
     let mut pruned = Vec::new();
     prune_orphan_files(skill_dir, "", &keep, &mut pruned)?;
     Ok(pruned)
+}
+
+/// The `.provenance.json` marker filename (superskills PROVENANCE.md convention, v1).
+const PROVENANCE_MARKER: &str = ".provenance.json";
+
+/// Stamp `skill_dir` with a provenance marker: haven owns this directory, at this
+/// binary's version, refreshed by `haven setup`.
+///
+/// The marker is the cross-tool convention from superskills' `PROVENANCE.md`: any
+/// inventory tool (e.g. `superskills list`) can read who installed the directory and
+/// how it stays fresh, instead of classifying it as an unknown. Overwritten on every
+/// snapshot write so `owner_version` always matches the installed binary.
+fn write_provenance_marker(skill_dir: &Path) -> Result<()> {
+    let marker = serde_json::json!({
+        "version": 1,
+        "owner": "haven",
+        "owner_version": env!("CARGO_PKG_VERSION"),
+        "installed_at": haven_core::now_rfc3339(),
+        "refresh": "haven setup",
+        "source": "embedded",
+    });
+    let mut out = serde_json::to_string_pretty(&marker)
+        .expect("static marker JSON serialises infallibly");
+    out.push('\n');
+    std::fs::write(skill_dir.join(PROVENANCE_MARKER), out)?;
+    Ok(())
 }
 
 /// Delete every file under `dir` whose skill-relative path isn't in `keep`,

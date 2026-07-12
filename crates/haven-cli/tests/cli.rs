@@ -411,6 +411,28 @@ fn skill_install_default_syncs_present_targets_without_creating_absent_ones() {
 }
 
 #[test]
+fn skill_install_stamps_provenance_markers() {
+    // HV-282: every haven-managed skill dir carries a `.provenance.json` marker
+    // (superskills PROVENANCE.md convention) saying haven owns it and how it refreshes.
+    let h = Haven::new();
+    h.json(&["skill", "install"]);
+
+    let marker_path = h.home.join(".claude/skills/haven/.provenance.json");
+    let marker: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&marker_path).unwrap()).unwrap();
+    assert_eq!(marker["version"], 1);
+    assert_eq!(marker["owner"], "haven");
+    assert_eq!(marker["owner_version"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(marker["refresh"], "haven setup");
+    assert_eq!(marker["source"], "embedded");
+
+    // The marker is install metadata, not snapshot content: a re-install must keep it
+    // (never prune it as an orphan), refreshed in place.
+    h.json(&["skill", "install"]);
+    assert!(marker_path.exists(), "marker survives a snapshot rewrite");
+}
+
+#[test]
 fn skill_install_prunes_retired_dirs_and_orphaned_files_claude() {
     let h = Haven::new();
     let skills = h.home.join(".claude/skills");

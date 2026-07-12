@@ -15,6 +15,7 @@ pub mod sortkey;
 pub mod store;
 pub mod telemetry;
 mod time;
+pub use time::now_rfc3339;
 mod util;
 
 pub use error::{HavenError, Result};

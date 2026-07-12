@@ -34,6 +34,18 @@ pub(crate) fn utc_stamp(secs: i64) -> String {
     format!("{y:04}{m:02}{d:02}T{h:02}{mi:02}{s:02}Z")
 }
 
+/// Now as an RFC 3339 UTC stamp `"YYYY-MM-DDTHH:MM:SSZ"` — for the
+/// `.provenance.json` skill markers (superskills PROVENANCE.md convention),
+/// which want interchange-standard timestamps rather than the filesystem-safe
+/// [`utc_stamp`] form.
+pub fn now_rfc3339() -> String {
+    let secs = now_secs();
+    let (y, m, d) = civil_from_days(secs.div_euclid(86_400));
+    let sod = secs.rem_euclid(86_400);
+    let (h, mi, s) = (sod / 3600, (sod % 3600) / 60, sod % 60);
+    format!("{y:04}-{m:02}-{d:02}T{h:02}:{mi:02}:{s:02}Z")
+}
+
 /// Days since 1970-01-01 -> `(year, month, day)`, UTC. Howard Hinnant
 /// `civil_from_days`.
 pub(crate) fn civil_from_days(z: i64) -> (i64, u32, u32) {
