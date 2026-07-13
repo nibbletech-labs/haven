@@ -307,6 +307,14 @@ no done-marker means the build did not finish — redispatch fresh in the same
 worktree. A *verifier's* verdict has no objective-state substitute: two failed
 pulls there mean spawn a fresh verifier, never infer the verdict.
 
+**Heartbeat for UI/sim-driving agents.** These die *silently mid-work* (a zombie
+UI timer keeps counting while the agent is gone — SE-540 hit this three times in
+one run). Enforce an **evidence heartbeat**: ~10 minutes with no new evidence
+(screenshot/file mtime in the agent's evidence dir) → treat the agent as dead —
+kill it and either respawn fresh or have the coordinator drive the remaining
+steps inline. Never wait on an idle signal from a driving agent that has stopped
+producing evidence.
+
 Loop to step 0. **Converge** when `haven next --owner ai` is empty **and** nothing is in
 flight → **promote any undrained `punch-list.md` items to floating Haven items** (`owner:ai`, low
 priority, xref the source leaf) so nothing is lost (`references/tick-ops.md` § Convergence-time),

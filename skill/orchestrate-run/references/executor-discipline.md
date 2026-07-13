@@ -179,6 +179,13 @@ own judgment. The line is *deterministic vs judgment*, not *small vs big*:
 **When the verifier can't tell which it is, it treats the issue as major** (report, don't fix) — the
 same conservative default as "when unsure, serial".
 
+**Coordinator rulings that change a wire payload/contract are never "minor".** Before ruling a
+field dropped, renamed, or reshaped (even as a cleanup), check every consumer's decode contract —
+a client with a strict decode fails whole-payload on the change (SE-540: a strict-trim ruling
+broke the app's hard decode and cost an acceptance FAIL). Payload-changing rulings get a
+decode-contract check first, or they go down the normal plan/build path instead of being ruled
+inline.
+
 ## The punch-list & checkpoint drain — non-blocking findings, aggregated not eyeballed
 
 A gate can PASS while the verifier still notices **non-blocking** issues — a quality nit, a small

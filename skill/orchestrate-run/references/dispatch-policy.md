@@ -117,7 +117,11 @@ Same on/off rule as TDD:
 
 - **On for complex / ultracode batches** (novel, cross-cutting, schema / security / concurrency).
 - **Optional for mechanical batches** — a rename / config edit has no approach worth gating; it
-  skips 6a/6b and builds directly (the degenerate path).
+  skips 6a/6b and builds directly (the degenerate path). **But never neither:** a "mechanical"
+  batch that skips the plan-gate MUST get an adversarial verifier at § GATE (probe cases the
+  builder didn't write). Two runs independently proved the trap — "trivial" widenings and SQL
+  re-derivations hid real regressions that neither the builder's own probes nor a bare suite
+  run caught (SE-512 finding 7, SE-540).
 
 The validator is **fresh eyes at VERIFY_TIER — never a plan/build agent** (a same-context reviewer
 is structurally blind, exactly as for the code gate), and it judges the tick's **plans as a whole**
@@ -142,7 +146,10 @@ autonomous path — the real backstop is still the post-build verifier (§ GATE)
     verdict definitions, and the lens's code sections (exhaustive walk, 5-category checklist,
     confidence filter, severity); skip the a11y + design-eval lenses and `browser-mode.md`. It runs
     `build + lint + test` (exit-0) + an independent acceptance judgment and returns
-    **PASS / NEEDS-HUMAN / FAIL** + evidence. Only **PASS** merges.
+    **PASS / NEEDS-HUMAN / FAIL** + evidence. Only **PASS** merges. Every verifier prompt
+    includes: **"probe cases the builder didn't write"** — an explicit adversarial edge-case
+    sweep (units/ranges/legacy shapes the diff implies but doesn't test). It demonstrably
+    catches what builder self-checks structurally can't (SE-512: the dropped-'year' regression).
   - **UI-acceptance leaf → Mode 2 (HV-262).** Also inline `browser-mode.md` (routing, ingestion
     incl. `dev_url` resolution, driver, the four-rung ladder, flake discipline) + the lens's a11y
     and design-eval sections. The verifier **drives the running app** and returns a **four-rung**
@@ -269,6 +276,10 @@ off**. Never delegate understanding.
 Apply it to *every* spawn — the build agent, the verifier, the fixer. The pack's `context-pack.md`
 is most of this synthesis pre-done; your job is to forward it whole plus the leaf-specific edges,
 not to gesture at it.
+
+One delivery clause in every verifier/reporter brief: **"your final message must BE the report
+delivery (SendMessage), not prose about it"** — agents repeatedly end with the report as plain
+final text instead (SE-503: 4+ times in one wave); the pull recovers it but costs a round-trip.
 
 ## Don't peek, don't race
 
