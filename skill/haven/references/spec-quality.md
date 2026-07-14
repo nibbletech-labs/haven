@@ -122,8 +122,8 @@ whatever structure fits. Thin items lean on the backbone to fight the blank page
 lean. Don't impose a rigid five-section template, and don't dead-end at "just write a file" with
 no backbone at all.
 
-> Worked example of this shape: HV-86's own `spec` artifact (`items/HV-86/spec.md`) — problem in
-> the node `why`, success in `done_looks_like`, then **Scope boundary** + **Constraints** +
+> The shape in practice: problem in the node `why`, success in `done_looks_like`, then a
+> `spec` artifact (`items/<ref>/spec.md`) carrying **Scope boundary** + **Constraints** +
 > free-form design.
 
 **UI leaf — the design detail carries (or points at) a component contract.** When a leaf's

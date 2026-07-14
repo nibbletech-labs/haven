@@ -572,13 +572,13 @@ done."
 haven item handoff HV-1 --to human \
   --note "Cache implemented; p95 verify 3ms. One open call: TTL defaulted to 10m — confirm before ship."
 # → owner=human, status=blocked, wait=on_human, handoff artifact under notes/.
-# HV-1 drops out of `next` until Tom acts — correct.
+# HV-1 drops out of `next` until the human acts — correct.
 ```
 
 **User (later):** "TTL's fine. Done."
 
 ```bash
-# Tom confirms → complete it with evidence; this also reports what it unblocked.
+# The human confirms → complete it with evidence; this also reports what it unblocked.
 haven item complete HV-1 --evidence "TTL reviewed and accepted at 10m. Shipping."
 # → status=done; unblocked: [HV-4 ship gate, …] if anything depended on HV-1.
 ```

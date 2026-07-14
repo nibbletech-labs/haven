@@ -46,11 +46,11 @@ Acquire the lock, then for the one batch holding it:
 # 2. rebase onto whatever main is NOW (a sibling may have merged since this batch branched)
 git -C .haven-run/<C> fetch <base> 2>/dev/null; git -C .haven-run/<C> rebase <base>
 #    GATE ON THE REBASE'S OWN EXIT before anything else — never chain `rebase; re-gate`
-#    unconditionally: a suite run against a half-rebased, conflicted tree is meaningless
-#    (SE-503: only a hard BUILD FAILED exposed one). `rebase && re-gate`, always.
+#    unconditionally: a suite run against a half-rebased, conflicted tree is meaningless.
+#    `rebase && re-gate`, always.
 #    THEN verify the branch ref actually moved: a worktree rebase can finish on a DETACHED
 #    HEAD with exit 0 and a success banner while run/<C> still points at the pre-rebase
-#    commit (SE-512). Check `git -C .haven-run/<C> branch --show-current` = run/<C> and the
+#    commit. Check `git -C .haven-run/<C> branch --show-current` = run/<C> and the
 #    ref equals HEAD; fix with `git -C .haven-run/<C> checkout -B run/<C> <rebased-tip>`.
 # 3. RE-GATE post-rebase — re-run the deterministic gate on the rebased tree.
 #    This is INVIOLABLE: it catches semantic conflicts a clean textual merge hid.
@@ -62,7 +62,7 @@ git -C <base-worktree> merge --ff-only run/<C>
 
 **Rebase conflict:** first try a dedicated **integration agent** with a semantic brief —
 "main's structure wins; re-express this batch's feature on top" — then re-gate as normal
-(SE-503: clean twice on conflicts where siblings had rewritten the same files). If it can't
+(this resolves cleanly even when siblings have rewritten the same files). If it can't
 resolve cleanly, **or on a red re-gate** → abort the
 rebase (`git rebase --abort`), do **not** merge, **release the lock**, and send the batch to
 the failure path (fix-log + retry/strike, `references/tick-ops.md`). `<base>` and every

@@ -64,8 +64,7 @@ retries forever. (Default ceiling 2–3, a per-run dial in `references/dispatch-
 
 A hung command is the one failure the running agent's judgment cannot be trusted to
 catch — the agent that most needs a ceiling is the one deep in a debugging spiral,
-silently waiting (a Servo run lost hours to a single stuck test with no ceiling). So
-the core rule is **mechanical, not judgmental**:
+silently waiting on a stuck test. So the core rule is **mechanical, not judgmental**:
 
 - **Every long-running command gets an explicit ceiling and an observable log.** Run
   build/test/e2e commands wrapped — `timeout <ceiling> <cmd> 2>&1 | tee -a
@@ -209,8 +208,8 @@ same conservative default as "when unsure, serial".
 
 **Coordinator rulings that change a wire payload/contract are never "minor".** Before ruling a
 field dropped, renamed, or reshaped (even as a cleanup), check every consumer's decode contract —
-a client with a strict decode fails whole-payload on the change (SE-540: a strict-trim ruling
-broke the app's hard decode and cost an acceptance FAIL). Payload-changing rulings get a
+a client with a strict decode fails whole-payload on the change (a strict-trim ruling can
+break a consumer's hard decode and cost an acceptance FAIL). Payload-changing rulings get a
 decode-contract check first, or they go down the normal plan/build path instead of being ruled
 inline.
 
@@ -271,7 +270,7 @@ approval** — never silently.
 In native terms: a non-obvious integration/contract decision is recorded as a
 `delivery` / `decision` artifact on the completed leaf (`references/tick-ops.md` § 9b)
 so a downstream batch's build agent reads it — that is *in-graph* and automatic. But
-folding it up into the project's **durable design docs** (e.g. Haven's own `HV-20`
-living-docs anchor) is a **human gate**: surface the draft, name what it would change,
+folding it up into the project's **durable design docs** (e.g. a living-docs anchor
+node) is a **human gate**: surface the draft, name what it would change,
 and wait for the go. Drafts are cheap and automatic; promotion is deliberate and
 approved.

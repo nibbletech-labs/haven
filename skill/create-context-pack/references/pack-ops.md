@@ -36,7 +36,7 @@ pick the pack's home by comparing your target set to that container's **full** m
   - **Strip any live pack off the broad phase.** If the broad phase already carries a
     `context-pack` artifact, remove it — `haven artifact rm <BROAD> --role context-pack
     --name context-pack.md` (or `--id <pid>` if duplicated) — else its still-grouped members
-    keep resolving `context_pack` to a now-mis-scoped pack (HV-75). Any "moved to
+    keep resolving `context_pack` to a now-mis-scoped pack. Any "moved to
     `<BATCH>`" breadcrumb goes in a **non-`context-pack`** artifact or the container body,
     never a `context-pack` artifact (`haven doctor` flags such a tombstone via `context_pack_integrity`).
   - CLI: `haven item add "<batch title> — dev batch" --type phase -p <P>` → returns

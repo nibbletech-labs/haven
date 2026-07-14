@@ -121,7 +121,7 @@ inside the executor, `orchestrate-run` already owns completion at step 9 and jus
 the verdict). But it trades the human gate, so it is **earned, not assumed**:
 
 - **In v1 the dial is a skill INPUT, default OFF.** There is **no persisted per-project
-  trust store yet** (that store is a separate follow-on, HV-100) — so Posture B is a
+  trust store yet** (that store is a separate follow-on) — so Posture B is a
   deliberate per-call/per-run choice, never a silent default.
 - Flip it on per project only after the verifier's PASS verdicts have **demonstrably
   matched human sign-off on a real sample** (prove-before-trust — the discovery gate's
@@ -149,7 +149,7 @@ the verdict). But it trades the human gate, so it is **earned, not assumed**:
   resolution), the driver, evidence capture, the four-rung ladder (**PASS-WITH-ISSUES**,
   browser-only), and the flake discipline — is in `references/browser-mode.md`, judged with
   the a11y + design-eval lenses and the severity model in `references/evaluation-lens.md`.
-  Automatic routing serves both ad-hoc use and `orchestrate-run`'s **unattended gate** (HV-262):
+  Automatic routing serves both ad-hoc use and `orchestrate-run`'s **unattended gate**:
   a UI-acceptance leaf gates via Mode 2 — only a clean PASS merges, and the verdict is invalid
   without its evidence bundle (`references/browser-mode.md` § Judge + evidence). A pure code
   leaf is still never routed to Mode 2.
@@ -164,11 +164,12 @@ with `--replace`). v1 ships a manual resume: `/verify-acceptance <ref>`.
 
 Mode 2 is **live** (ad-hoc / attended — `references/browser-mode.md`); what stays deferred:
 **dev-server auto-start** on an unreachable URL (Mode 2 expects a reachable `dev_url` and
-escalates NEEDS-HUMAN otherwise); the **iOS-simulator driver** (HV-263 — the contract is
+escalates NEEDS-HUMAN otherwise); the **iOS-simulator driver** (the contract is
 platform-neutral, browser is v1's only driver); the **coded flake-retry engine** (the 3-attempt / ≥30%-governor discipline ships
 as prompt-level instructions, not a harness); co-located session / evidence dirs; exploratory
 checklists (focused acceptance is the gate); and the **persisted per-project trust-ramp
-store** for the auto-complete dial (the dial is a plain input in v1 — the store is HV-100).
+store** for the auto-complete dial (the dial is a plain input in v1 — the store is a
+follow-on).
 The executor-specific machinery the gate sits inside — the twice-run post-rebase re-gate, the
 serialized merge lock, strike-counting, MAX_PARALLEL, crash recovery — **stays in
 `orchestrate-run`**; this skill is the single judgment, never the loop.

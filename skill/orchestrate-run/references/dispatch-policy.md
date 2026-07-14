@@ -69,7 +69,7 @@ lock→rebase→re-gate→ff path.
   wider buys little, and a low cap bounds the blast radius of the one silent failure mode (a
   missed re-gate landing broken code on `main`). The human can always override the posture in
   plain language when kicking off the run ("this one's touchy, keep it serial" / "these are
-  independent, run them together"). (Serial-first was the bring-up posture; HV-84/85 proved the
+  independent, run them together"). (Serial-first was the bring-up posture; live runs proved the
   full machine incl. the parallel seam, so the dial is now open.)
 
 ## EFFORT — set on the *spawned build agent*, never on yourself
@@ -96,7 +96,7 @@ Two tiers, set at kickoff:
 - **VERIFY_TIER** — the fresh validators: the **plan-gate** (6b) and the **code verifier** (7).
 
 **Default: session parity.** Both tiers inherit the orchestrating session's model and effort — no
-separate dial, no *silent* downgrade (**HV-167**; the `haven` skill's `references/running-work.md`).
+separate dial, no *silent* downgrade (the `haven` skill's `references/running-work.md`).
 
 **Opt-in asymmetric tiering** — a human sets it in plain language when kicking off the run ("build
 light, verify heavy"): BUILD_TIER may run a **lighter** model than VERIFY_TIER, spending the heavier
@@ -104,10 +104,10 @@ model where the leverage is (the judgment), not on generation. Under **one guard
 
 > **VERIFY_TIER ≥ BUILD_TIER, always.** The verifier is never below the builder, so the *judgment*
 > is never the thing downgraded — only the generation is. That is what keeps asymmetry compatible
-> with HV-167's fear (a *silent weakening of the gate*) instead of a reversal of it.
+> with the parity rule's fear (a *silent weakening of the gate*) instead of a reversal of it.
 
-This **amends HV-167** (which read "no separate dial"); the amendment + rationale is recorded on
-**HV-242**. Effort still maps per § EFFORT — MODEL_TIERS is the orthogonal *model* axis.
+This deliberately relaxes an earlier "no separate dial" rule — human-opted, never silent.
+Effort still maps per § EFFORT — MODEL_TIERS is the orthogonal *model* axis.
 
 ## PLAN-GATE — validate the approach before any code (tick steps 6a/6b)
 
@@ -121,7 +121,7 @@ Same on/off rule as TDD:
   batch that skips the plan-gate MUST get an adversarial verifier at § GATE (probe cases the
   builder didn't write). Two runs independently proved the trap — "trivial" widenings and SQL
   re-derivations hid real regressions that neither the builder's own probes nor a bare suite
-  run caught (SE-512 finding 7, SE-540).
+  run caught.
 
 The validator is **fresh eyes at VERIFY_TIER — never a plan/build agent** (a same-context reviewer
 is structurally blind, exactly as for the code gate), and it judges the tick's **plans as a whole**
@@ -151,13 +151,14 @@ autonomous path — the real backstop is still the post-build verifier (§ GATE)
     **PASS / NEEDS-HUMAN / FAIL** + evidence. Only **PASS** merges. Every verifier prompt
     includes: **"probe cases the builder didn't write"** — an explicit adversarial edge-case
     sweep (units/ranges/legacy shapes the diff implies but doesn't test). It demonstrably
-    catches what builder self-checks structurally can't (SE-512: the dropped-'year' regression).
-  - **UI-acceptance leaf → Mode 2 (HV-262).** Also inline `browser-mode.md` (routing, ingestion
+    catches what builder self-checks structurally can't (e.g. a dropped-unit regression only
+    an adversarial probe surfaced).
+  - **UI-acceptance leaf → Mode 2.** Also inline `browser-mode.md` (routing, ingestion
     incl. `dev_url` resolution, driver, the four-rung ladder, flake discipline) + the lens's a11y
     and design-eval sections. The verifier **drives the running app** and returns a **four-rung**
     verdict: **only a clean PASS merges** — **PASS-WITH-ISSUES does not merge** (its per-check
     table is the ready-made fix plan → failure path). A mixed leaf runs both suites and any
-    Mode-1 FAIL dominates. The Mode-2 contract is **platform-neutral** (HV-263): when the
+    Mode-1 FAIL dominates. The Mode-2 contract is **platform-neutral**: when the
     leaf's runtime isn't a browser (e.g. an iOS simulator), forward the session's **installed
     driving playbook** for that platform in place of the browser driver — the platform skill
     owns the driving lore (timeboxes, per-interaction strikes, input traps); never restate it
@@ -285,7 +286,7 @@ not to gesture at it.
 
 One delivery clause in every verifier/reporter brief: **"your final message must BE the report
 delivery (SendMessage), not prose about it"** — agents repeatedly end with the report as plain
-final text instead (SE-503: 4+ times in one wave); the pull recovers it but costs a round-trip.
+final text instead; the pull recovers it but costs a round-trip.
 
 ## Don't peek, don't race
 

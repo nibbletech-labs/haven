@@ -85,8 +85,8 @@ pack's section layout + the verbatim preamble are in `references/pack-template.m
      - **The broad phase must NOT keep a live `context-pack` artifact.** If it already
        holds one (e.g. from an earlier whole-phase prep), **remove it** —
        `haven artifact rm <broad-phase> --role context-pack --name context-pack.md` (or
-       `--id` if duplicated). A stale pack left on the broad phase misroutes the pointer
-       (HV-75): every still-grouped member resolves its `context_pack` to that pack
+       `--id` if duplicated). A stale pack left on the broad phase misroutes the
+       pointer: every still-grouped member resolves its `context_pack` to that pack
        (now a dead redirect). If you want a "moved to `<BATCH>`" breadcrumb, record it
        as a **non-`context-pack`** artifact (a `scratch` note) or in the container body —
        **never** as a `context-pack` artifact (a prose "MOVED" note left as the pack is

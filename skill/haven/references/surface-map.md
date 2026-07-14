@@ -35,7 +35,7 @@ values error.
   `none` to clear.
 - **Artifact role** (`--role`): `spec`, `research`, `design`, `decision`,
   `handoff`, `vision`, `source`, `delivery`, `scratch`, `context-pack` (the
-  build-ready brief on a grouping container — HV-124; resolution keys on the role).
+  build-ready brief on a grouping container; resolution keys on the role).
 - **Artifact kind** (`--kind`, usually inferred): `file`, `external`, `delivery`.
 
 **Global CLI flags:** `--project/-p <key>` (defaults to the current project),
@@ -81,7 +81,7 @@ haven item complete <ref> [--evidence "…"] [--role delivery] [--by]
 haven item rank <ref> [--before <ref>] [--after <ref>] [--rationale "…"]
 haven item archive <ref>… [--rationale "…"]  # one or more refs (grooming)
 haven item reopen  <ref> [--rationale "…"]
-# Item-level external references (handoff locator for Jira/Linear/GitHub work — HV-226)
+# Item-level external references (handoff locator for Jira/Linear/GitHub work)
 haven item extref add  <ref> --store <s> --target <t> [--url] [--status] [--canonical] [--receipt "…"] [--no-in-progress]
                                             # upsert by (store,target); flips item in_progress unless --no-in-progress;
                                             # leaves owner/wait untouched (NOT the ai↔human handoff)
@@ -119,7 +119,7 @@ haven artifact add <ref> --role <role> [--file <path> | --content "…"] [--name
                          [--xref-relation <r> --xref-store <s> --xref-target <t> [--xref-canonical]]
                          # --name sets the destination filename (also for --file);
                          # --replace overwrites an existing same-path artifact in place;
-                         # --xref-* writes a typed metadata.xref[] entry (HV-229)
+                         # --xref-* writes a typed metadata.xref[] entry
 haven artifact list <ref> [--role <role>]
 haven artifact get  <ref> [--role <role>] [--path <relpath>]
 haven artifact rm   <ref> (--role <r> | --name <f> | --id <pid>)   # remove row + file
@@ -147,7 +147,7 @@ haven mcp
 | `haven_xref` | **`ref`** — cross-store links on the node's artifacts: a sorted `{node, outbound[], inbound[]}` report (outbound xrefs + inbound backlinks); read-only |
 | `haven_get_item` | **`ref`**, `include?: ["edges","artifacts","lineage"]` — the full item (prose + includes); the detail door. A superseded/archived ref still returns the item but rides a `stale_ref` `{ref, resolved_to:[…]}` hint (the work moved — follow `resolved_to`) |
 | `haven_get_items` | **`refs`** (array, max 20), `include?: ["edges","artifacts","lineage"]` — selected refs in full, preserving input order and duplicates; stale refs ride `stale_ref` per item |
-| `haven_next` | `owner?, limit?` — compact items; `owner` filters ASSIGNMENT (`owner_kind = owner`), unassigned (NULL) excluded. On a run-shaped ai frontier (≥5 committed-ready ai leaves) the bare items array is wrapped `{items, advisory}`, the `advisory` pointing at the orchestrate-run skill (HV-265); absent below the threshold |
+| `haven_next` | `owner?, limit?` — compact items; `owner` filters ASSIGNMENT (`owner_kind = owner`), unassigned (NULL) excluded. On a run-shaped ai frontier (≥5 committed-ready ai leaves) the bare items array is wrapped `{items, advisory}`, the `advisory` pointing at the orchestrate-run skill; absent below the threshold |
 | `haven_dispatch` | `owner?, limit?, scope?, explain?` — lean "what should I work on?" briefing: bounded `next` plus targeted candidate detail (`done_looks_like`, parent/group context, blocked dependents, artifact pointers); `scope` restricts candidates to live descendants of a parent/release/phase ref |
 | `haven_next_explain` | `owner?` — diagnose an empty queue (counts by reason + hint) |
 | `haven_rank` | **`ref`**, `before?` \| `after?` (exactly one), `rationale?` — reorder within a priority band (fine ordering) |
@@ -162,11 +162,11 @@ haven mcp
 | `haven_graph` | `lineage?, all?, include_acceptance?, node_limit?, edge_limit?, lineage_limit?` — bounded MCP graph read (compact nodes + `{kind,from,to}` edges); each node carries a boolean `has_acceptance` flag (the sealed/unsealed signal) instead of the `done_looks_like` prose — pull the text per-node via `haven_get_item`, or pass `include_acceptance:true` to ride it on the nodes in one read (verify/dispatch); live nodes only unless `all`; defaults/hard caps are 100 nodes, 250 edges, 250 lineage links, and the response carries `totals`, `omitted`, `limits`, and `truncated` |
 | `haven_docs` | `project?` — live project-doc anchors and their artifacts |
 | `haven_get_artifact` | **`ref`**, `role?, path?` |
-| `haven_add_artifact` | **`ref`**, **`role`**, `kind?, content?, name?, replace?, path?, uri?, title?, from?, to?, by?, metadata?` — `name` sets the destination filename (also for `path`); `replace?` overwrites a same-path artifact in place (default: collision is rejected); `metadata?` carries the typed `xref[]` payload, validated on write (HV-229 — closed the public write gap) |
+| `haven_add_artifact` | **`ref`**, **`role`**, `kind?, content?, name?, replace?, path?, uri?, title?, from?, to?, by?, metadata?` — `name` sets the destination filename (also for `path`); `replace?` overwrites a same-path artifact in place (default: collision is rejected); `metadata?` carries the typed `xref[]` payload, validated on write |
 | `haven_rm_artifact` | **`ref`**, one of `role?` \| `name?` \| `id?` — remove an artifact (row + backing file); an ambiguous `role` is refused |
 | `haven_mv_artifact` | **`ref`**, **`new_name`**, one of `role?` \| `name?` \| `id?` — rename the backing file (role/history preserved) |
 | `haven_status` | `project?` |
-| `haven_prime` | `project?` — one-shot session-context block (project state, committed queue with next-eligible flagged, in-progress/waiting incl. owner, core conventions, untriaged inbox) as a `prime` text block; read at session start instead of separate `status`/`next`/`list`/`inbox` calls. On a run-shaped ai frontier (≥5 committed-ready ai leaves) the block carries one advisory line under the queue pointing at the orchestrate-run skill (HV-265) |
+| `haven_prime` | `project?` — one-shot session-context block (project state, committed queue with next-eligible flagged, in-progress/waiting incl. owner, core conventions, untriaged inbox) as a `prime` text block; read at session start instead of separate `status`/`next`/`list`/`inbox` calls. On a run-shaped ai frontier (≥5 committed-ready ai leaves) the block carries one advisory line under the queue pointing at the orchestrate-run skill |
 | `haven_list_projects` | `include_archived?` — discover backlogs (hides archived unless `include_archived:true`; a deleted project is never listed) |
 | `haven_add_project` | **`key`**, **`title`**, `prefix?, description?` |
 | `haven_archive_project` | **`key`**, `rationale?, by?` — soft-archive a project: hides it from default listings and refuses writes into it, namespace stays reserved (key/prefix/counter untouched, refs never reused). Reversible. The project-level analogue of `haven_archive`; there is no hard-delete tool |
@@ -254,7 +254,7 @@ The same *word* can live at a different level on each surface, so a verb guessed
 from one surface fails on the other. The CLI nests item lifecycle under `item …`;
 the MCP keeps every tool **flat** (`haven_get_item`, `haven_archive`, …). The CLI
 intercepts the common wrong guesses and answers with an error naming the exact
-corrective command (HV-158) — you don't have to memorise the table, but here it is.
+corrective command — you don't have to memorise the table, but here it is.
 
 | You might type | What's correct | Note |
 |---|---|---|

@@ -29,11 +29,11 @@ MCP `haven_list_projects`. (RECOVER reconciles this against `git worktree list` 
 the **frontier** instead:
 
 - RECOVER set (the `in_progress` leaves to reconcile): `haven list_items --status in_progress --owner ai -p <P>` / `haven_list_items {"project":"<P>","status":"in_progress","owner":"ai"}`
-- Dispatch queue: step 1 (`haven next --owner ai`, bounded by default — HV-194).
+- Dispatch queue: step 1 (`haven next --owner ai`, bounded by default).
 - Per-batch context: read only each **active container's** context-pack (steps 2/4), not every node.
 
 This is the same tick over a smaller bounded slice. It's what you fall back to until
-a scoped graph read (HV-195) lands.
+a scoped graph read lands.
 
 ## 1. Frontier — the AI dispatch queue
 

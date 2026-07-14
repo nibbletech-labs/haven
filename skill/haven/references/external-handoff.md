@@ -1,4 +1,4 @@
-# External-system handoff — Jira / Linear / GitHub (HV-221)
+# External-system handoff — Jira / Linear / GitHub
 
 Hand a Haven item off to an external PM/dev system (Jira, Linear, GitHub, …) and
 track it while it runs there — **without** Haven owning a native integration. The
@@ -93,7 +93,7 @@ haven item complete HV-12 --evidence "PROJ-9 closed Done; PR acme/svc#88 merged"
   verifies nothing about the external ticket — the AI is the integration point, under
   the user's setup and prompt.
 - **Not a batch export.** Handoff is item-by-item; there is no "export these N items"
-  container (that idea was tried and dropped — HV-223).
+  container (that idea was tried and dropped).
 - **Not the ai↔human `handoff`.** That verb (workflow 8) is a different axis — *who
   owns* the item — and flips the owner and parks it `on_human`. External handoff keeps
   ownership and goes `in_progress`. Don't reach for `haven item handoff` here.

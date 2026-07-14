@@ -281,10 +281,10 @@ it falls into. See `references/pack-ops.md` for how the tag maps onto the verify
 
 ---
 
-## Retired overlays (2026-07-02, HV-257)
+## Retired overlays (2026-07-02)
 
 Two builder-era sections were removed from this template rather than wired in. One has since
-**returned** (HV-260); the other stays retired:
+**returned**; the other stays retired:
 
 - **Requirements Index + Execution Graph** (a frozen per-member table and pre-computed
   parallel streams) — superseded by the live graph: `orchestrate-run` derives batching
@@ -292,8 +292,7 @@ Two builder-era sections were removed from this template rather than wired in. O
   design rule is live reads, never frozen copies. Only the **Key files** line (section 4)
   survives — as information, never as edges. **Stays retired.**
 - **The `design-spec.json` machine-contract** (per-component states / interactions /
-  a11y contract, halt-on-missing-field) has **RETURNED** (HV-260): section 2c above and *The
+  a11y contract, halt-on-missing-field) has **RETURNED**: section 2c above and *The
   design-spec.json machine-contract* in-depth. Its consumers are now live — a build agent
   that enforces halt-on-missing, and the **Mode-2 browser verifier** that walks it as a
-  per-component checklist (`verify-acceptance/references/browser-mode.md`). The full
-  provenance stays as a `design` artifact on **HV-139**.
+  per-component checklist (`verify-acceptance/references/browser-mode.md`).

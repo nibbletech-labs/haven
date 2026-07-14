@@ -36,7 +36,7 @@ leaves under a container + a verify-first `spec` pack) → a **plan-first build 
 This executor is **one of four ways** Haven work gets driven — the most orchestrated end of the
 spectrum. It runs serial or parallel by the coordinator's per-run call (`MAX_PARALLEL`;
 `references/dispatch-policy.md`). For when to reach for it
-vs the inline / solo-plan-mode paths — and the build-subagent parity caveat (HV-167) that makes
+vs the inline / solo-plan-mode paths — and the build-subagent parity caveat that makes
 inline often the better choice for *small* runs — see the `haven` skill's
 `references/running-work.md`.
 
@@ -51,8 +51,8 @@ inline often the better choice for *small* runs — see the `haven` skill's
    the read→write gap. Haven has **no atomic claim / lease** — a claim is a plain
    UPDATE with a monotonic last-writer-wins `revision`, and the write-ahead log
    serializes writers without surfacing a conflict. So safety is **topology**, not
-   a lock. (The atomic-claim verb is HV-24; it earns its place only if you ever
-   drop this invariant.)
+   a lock. (An atomic-claim verb stays deferred; it earns its place only if you
+   ever drop this invariant.)
 
 2. **SERIALIZED MERGE QUEUE with a mandatory post-rebase re-gate.** Builds may fan
    out into N worktrees, but merges to `main` fan **in** through one lockfile:
@@ -149,7 +149,7 @@ always-read and never routed** — the router trims mechanics, never safety.
      in_progress --owner ai` for the RECOVER reconcile set, `haven next --owner ai`
      (step 1) for the dispatch queue, then read only each **active container's**
      `context-pack` (steps 2/4). Same tick, a smaller bounded slice — until scoped
-     graph reads land (HV-25/HV-195).
+     graph reads land.
 1. **FRONTIER.** The AI dispatch queue is exactly `haven next --owner ai`
    (DISPATCHABLE_PREDICATE: committed + `ready` + ≠anchor + `wait_state` NULL + no open
    dependency). This **inherently steps around** human-owned work and AI work blocked by
@@ -310,8 +310,8 @@ worktree. A *verifier's* verdict has no objective-state substitute: two failed
 pulls there mean spawn a fresh verifier, never infer the verdict.
 
 **Evidence watchdog — every dispatched agent, not just UI.** Agents die *silently
-mid-work* (a zombie UI timer keeps counting while the agent is gone — SE-540 hit
-this three times in one run), and a builder wedged on a hung command looks
+mid-work* (a zombie UI timer can keep counting while the agent is gone), and a
+builder wedged on a hung command looks
 identical from outside. So every dispatched agent must leave **observable evidence
 while it works**: tee'd command logs for builders/verifiers
 (`references/executor-discipline.md` § Command liveness), screenshot/evidence-file
@@ -387,7 +387,7 @@ tick (never mid-tick) before handing off, and the harness auto-compact is the ba
 
 ## Deferred to v4 / not in this skill
 
-The `/loop` wrapper for fully-unattended autonomy; an atomic CAS-claim / lease (HV-24) —
+The `/loop` wrapper for fully-unattended autonomy; an atomic CAS-claim / lease —
 needed only for true multi-orchestrator, not for single-orchestrator + N worktrees; a
 gate-before-complete store contract — redundant while one trusted orchestrator binds
 complete to merge-after-green by convention. A mutable run-state field on the node is

@@ -4,11 +4,11 @@ This is the **live Mode-2 contract**. When a leaf's acceptance is user-facing ru
 behaviour, `verify-acceptance` doesn't judge from the diff alone — it **drives the running
 app** and judges what the app actually does against the live `done_looks_like`. Mode 2 is
 **live** — routed to automatically by acceptance type (SKILL.md § Modes), both for ad-hoc use
-and as `orchestrate-run`'s unattended gate on UI-acceptance leaves (HV-262). A pure code leaf
+and as `orchestrate-run`'s unattended gate on UI-acceptance leaves. A pure code leaf
 is still never routed here.
 
 The contract is written **platform-neutral** — "drive the running app" — because the same
-judgment will drive an iOS simulator later (HV-263). **The browser is v1's only driver.**
+judgment will drive an iOS simulator later. **The browser is v1's only driver.**
 
 ## Routing — which clauses come here
 

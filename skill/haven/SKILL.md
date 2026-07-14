@@ -177,9 +177,9 @@ cost of a lost next-step is a derailed resume. Capture wins.
 - **pure status** (what merely happened, changing nothing ahead) ⇒ **neither**.
 
 An **off-project** stray never lands silently in the current project — route it to
-the **HV-108 universal-capture sink** instead.
+the **universal-capture sink** instead.
 
-**Read half (HV-23, already built — consumed, not rebuilt).** `haven prime`
+**Read half (already built — consumed, not rebuilt).** `haven prime`
 surfaces this swept inbox on resume; the sweep is the *write* half of that loop.
 The write half does **not** depend on, gate, or rebuild prime — it just feeds
 prime's already-built derived inbox view. There's **no new mechanic**: the drain
@@ -286,7 +286,7 @@ haven_claim        {"project":"haven","ref":"HV-1"}        // owner defaults to 
 haven_handoff      {"project":"haven","ref":"HV-1","to":"human",
                     "note":"Implemented; review the rate-limit defaults."}
 haven_complete_item{"project":"haven","ref":"HV-1","evidence":"cargo test: ok"}
-// External-system handoff (HV-226): record the locator for work executing in
+// External-system handoff: record the locator for work executing in
 // Jira/Linear/GitHub + flip in_progress (owner/wait untouched — NOT haven_handoff).
 haven_set_extref   {"project":"haven","ref":"HV-1","store":"jira","target":"PROJ-9","url":"https://…"}
 haven_find_extref  {"project":"haven","target":"PROJ-9"}   // reverse lookup: which item carries it

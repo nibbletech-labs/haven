@@ -83,5 +83,5 @@ NEEDS-HUMAN / FAIL. The verdict body carries the browser-mode rung (PASS / PASS-
 NEEDS-HUMAN / FAIL) and the screenshot / console evidence per `references/browser-mode.md`.
 **Default browser verdicts to verdict-only (Posture A)** — auto-complete on a browser PASS
 stays behind the explicit dial. Trust in unattended browser verdicts is
-**calibration-through-evidence** (HV-262): the mandatory evidence bundle filed on the item is
+**calibration-through-evidence**: the mandatory evidence bundle filed on the item is
 what lets the run's owner audit any verdict after the fact.
