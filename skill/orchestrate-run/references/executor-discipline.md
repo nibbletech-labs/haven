@@ -60,11 +60,16 @@ the AI frontier strictly shrinks, so the loop provably converges — no acceptan
 retries forever. (Default ceiling 2–3, a per-run dial in `references/dispatch-policy.md`
 § STRIKES; the *escalates-to-a-human-with-the-log* shape is fixed.)
 
-## Command liveness — what keeps commands to minutes, not hours
+## Command liveness — observable always, ceilinged as backstop
 
-A hung command is the one failure the running agent's judgment cannot be trusted to
-catch — the agent that most needs a ceiling is the one deep in a debugging spiral,
-silently waiting on a stuck test. So the core rule is **mechanical, not judgmental**:
+The audited failure behind this section was **invisibility, not a runaway command**:
+the "test stuck for hours" had in fact passed in well under a second — buffered
+output plus a stalled coordinator made a *finished* command indistinguishable from a
+hung one, and the hours went to waiting on a question nobody could answer from
+outside. So the primary rule is observability (the tee'd log below), the ceiling is
+the backstop for the rarer true hang, and both are **mechanical, not judgmental** —
+the agent deepest in a debugging spiral is the one least likely to apply either by
+judgment:
 
 - **Every long-running command gets an explicit ceiling and an observable log.** Run
   build/test/e2e commands wrapped — `timeout <ceiling> <cmd> 2>&1 | tee -a

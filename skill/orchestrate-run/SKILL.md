@@ -119,6 +119,21 @@ Dial options, recommended defaults, and the reading router live in
   chosen value per dial + the resulting reading plan) as your opening status message,
   then start.
 
+**Unattended-run preflight.** When attendance is autonomous (or the run will outlast
+the human's attention — overnight counts), two environment guards before the first
+dispatch; both are measured, recurring stall sources the loop cannot recover from by
+itself:
+
+- **Keep the host awake.** An unattended run stalls silently when the machine sleeps
+  (audited runs lost 1–2 hours mid-tick to exactly this). On macOS start
+  `caffeinate -dims` as a background task at kickoff and kill it at convergence;
+  otherwise confirm the host's power policy. Note it in the kickoff manifest.
+- **Pre-approve the routine command surface.** The run must not depend on live
+  permission adjudication: allowlist its routine commands (the `haven` CLI, git, the
+  project's build/test tools) in project settings before dispatching. An
+  auto-permission outage otherwise blocks a one-second command for many minutes
+  mid-run (audited: 14 minutes on a single routine CLI call).
+
 **Each answer routes your reading.** The config decides which reference sections this
 run actually needs — load those, skip the rest (the router table is § KICKOFF). Every
 skipped section leaves a **one-line tripwire**: if the run's shape changes mid-flight

@@ -420,8 +420,8 @@ fn write_provenance_marker(skill_dir: &Path) -> Result<()> {
         "refresh": "haven setup",
         "source": "embedded",
     });
-    let mut out = serde_json::to_string_pretty(&marker)
-        .expect("static marker JSON serialises infallibly");
+    let mut out =
+        serde_json::to_string_pretty(&marker).expect("static marker JSON serialises infallibly");
     out.push('\n');
     std::fs::write(skill_dir.join(PROVENANCE_MARKER), out)?;
     Ok(())
