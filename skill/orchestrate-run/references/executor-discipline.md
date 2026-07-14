@@ -60,6 +60,34 @@ the AI frontier strictly shrinks, so the loop provably converges — no acceptan
 retries forever. (Default ceiling 2–3, a per-run dial in `references/dispatch-policy.md`
 § STRIKES; the *escalates-to-a-human-with-the-log* shape is fixed.)
 
+## Command liveness — what keeps commands to minutes, not hours
+
+A hung command is the one failure the running agent's judgment cannot be trusted to
+catch — the agent that most needs a ceiling is the one deep in a debugging spiral,
+silently waiting (a Servo run lost hours to a single stuck test with no ceiling). So
+the core rule is **mechanical, not judgmental**:
+
+- **Every long-running command gets an explicit ceiling and an observable log.** Run
+  build/test/e2e commands wrapped — `timeout <ceiling> <cmd> 2>&1 | tee -a
+  <worktree>/.orch/cmd.log` — or via the harness's background execution with a hard
+  kill deadline. A stuck test then dies at the ceiling regardless of what the agent is
+  thinking, and the log's mtime is the agent's **liveness evidence**: the coordinator's
+  watchdog (SKILL.md § Evidence watchdog) watches it, and a silent agent with a stale
+  log gets killed.
+- **Ceilings are relative, not global.** Set them per command type against the known
+  baseline (a ~3-minute suite gets ~10; a cold build gets more) — never one hard-coded
+  number. Log the expected runtime + ceiling on one line *before* the command starts.
+- **A timeout is a datum, not a diagnosis.** Inspect the log and process state before
+  concluding "hang" — buffered output and a slow-but-alive suite look identical from
+  outside. At the ceiling, kill the **whole process group** and keep the log.
+- **Never rerun an identical timeout.** A retry must name what changed (narrowed to one
+  test, cleared state, changed env); otherwise isolate and bisect instead of re-waiting.
+
+**Strike scopes don't cross-count.** A command timeout/retry is not a fix-attempt
+strike (§ the 3-strike breaker counts per *acceptance id*), and a platform driving
+skill's per-interaction strike rule (e.g. a sim playbook's three-failed-taps rule) is a
+third scope again. Each escalates on its own ladder.
+
 ## TDD as a gate — RED before GREEN, binary and non-bypassable
 
 For a **behavioral** code leaf, translate the acceptance (the leaf's `done_looks_like`,

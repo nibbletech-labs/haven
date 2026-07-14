@@ -234,7 +234,9 @@ always-read and never routed** — the router trims mechanics, never safety.
      `context-pack.md`, the members' `done_looks_like`, the **approved
      `build-plan.md` as its primary brief**, and — per leaf — a **2–5 step
      self-check derived from `done_looks_like`** (a green global build is not
-     proof a specific leaf's acceptance is met). It builds, runs its self-check,
+     proof a specific leaf's acceptance is met), plus the **command-liveness
+     contract** (`references/executor-discipline.md` § Command liveness: every
+     long command ceilinged + tee'd, never rerun an identical timeout). It builds, runs its self-check,
      reports pass/fail + evidence + any **scope finding**, and never touches the
      graph. If it finds its member list wrong or a dependency missing, it
      **surfaces and returns** (the Change-Request rule); you decide next tick
@@ -307,13 +309,28 @@ no done-marker means the build did not finish — redispatch fresh in the same
 worktree. A *verifier's* verdict has no objective-state substitute: two failed
 pulls there mean spawn a fresh verifier, never infer the verdict.
 
-**Heartbeat for UI/sim-driving agents.** These die *silently mid-work* (a zombie
-UI timer keeps counting while the agent is gone — SE-540 hit this three times in
-one run). Enforce an **evidence heartbeat**: ~10 minutes with no new evidence
-(screenshot/file mtime in the agent's evidence dir) → treat the agent as dead —
-kill it and either respawn fresh or have the coordinator drive the remaining
-steps inline. Never wait on an idle signal from a driving agent that has stopped
+**Evidence watchdog — every dispatched agent, not just UI.** Agents die *silently
+mid-work* (a zombie UI timer keeps counting while the agent is gone — SE-540 hit
+this three times in one run), and a builder wedged on a hung command looks
+identical from outside. So every dispatched agent must leave **observable evidence
+while it works**: tee'd command logs for builders/verifiers
+(`references/executor-discipline.md` § Command liveness), screenshot/evidence-file
+mtimes for UI drives. No mtime movement for N minutes (~10 for a UI drive; a
+builder's declared command ceiling plus slack) → treat the agent as dead — kill it
+and recover from objective state (§ above), respawn fresh, or drive the remaining
+steps inline. Never wait on an idle signal from an agent that has stopped
 producing evidence.
+
+**Resumed or interrupted coordinator turn → audit before diagnosing.** When your
+own turn was aborted or resumed (a steer, a crash, a `/loop` wake), your first
+action is an **age audit of every in-flight agent**: which completed while you
+were gone, which have reports waiting, which have stale evidence — and collect the
+waiting results *before* any new dispatch or any "is it stuck?" judgment. An agent
+with a long wall-clock but only minutes of recorded command time is usually a
+**suspended coordinator, not a stuck agent** (seen live: a verifier "ran" for an
+hour — it had finished in minutes; the aborted root turn never consumed the
+completion). Diagnose from objective state — completion signal, report presence,
+evidence mtimes — before killing anything.
 
 Loop to step 0. **Converge** when `haven next --owner ai` is empty **and** nothing is in
 flight → **promote any undrained `punch-list.md` items to floating Haven items** (`owner:ai`, low

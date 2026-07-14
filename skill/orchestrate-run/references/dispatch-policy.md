@@ -140,7 +140,9 @@ autonomous path — the real backstop is still the post-build verifier (§ GATE)
   leaf's `done_looks_like` + the pack's shared-requirements + the diff (never the build agent's
   reasoning or worktree narrative). **The verifier inherits no skill, so FORWARD the contract into
   its prompt** — read `skill/verify-acceptance` (`SKILL.md` + `references/verdict-contract.md`
-  + `references/evaluation-lens.md`) and inline it; naming the skill reaches nothing. **Trim what you
+  + `references/evaluation-lens.md`) and inline it; naming the skill reaches nothing. Forward the
+  **command-liveness contract** too (`executor-discipline.md` § Command liveness) — a verifier runs
+  the same suites a builder does and hangs the same way. **Trim what you
   forward to the leaf's mode:**
   - **Code leaf → Mode 1.** Inline the Mode-1 material only — the independence contract, the
     verdict definitions, and the lens's code sections (exhaustive walk, 5-category checklist,
@@ -155,7 +157,11 @@ autonomous path — the real backstop is still the post-build verifier (§ GATE)
     and design-eval sections. The verifier **drives the running app** and returns a **four-rung**
     verdict: **only a clean PASS merges** — **PASS-WITH-ISSUES does not merge** (its per-check
     table is the ready-made fix plan → failure path). A mixed leaf runs both suites and any
-    Mode-1 FAIL dominates.
+    Mode-1 FAIL dominates. The Mode-2 contract is **platform-neutral** (HV-263): when the
+    leaf's runtime isn't a browser (e.g. an iOS simulator), forward the session's **installed
+    driving playbook** for that platform in place of the browser driver — the platform skill
+    owns the driving lore (timeboxes, per-interaction strikes, input traps); never restate it
+    inline here.
   - **Mode-2 evidence is mandatory — no evidence, no verdict.** A Mode-2 verdict must arrive with
     its evidence bundle: the per-clause PASS/CONCERN/FAIL table, a screenshot of every checked
     state, the step transcript, and console + network capture on failures. A bare "PASS" without
