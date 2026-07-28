@@ -294,16 +294,24 @@ haven_find_extref  {"project":"haven","target":"PROJ-9"}   // reverse lookup: wh
 haven_add_edge     {"project":"haven","kind":"dependency","from":"HV-2","to":"HV-1"}
 haven_resolve_live {"project":"haven","ref":"HV-9"}   // old ref → live descendant
 haven_docs         {"project":"haven"}                // anchor docs + artifacts
-// Graph read — bounded over MCP, full over CLI; use totals/omitted to detect truncation.
-haven_graph        {"project":"haven"}                // compact live nodes + edges; MCP caps 100 nodes/250 edges/250 lineage; all:true for dead nodes
+// Graph read — bounded on BOTH surfaces; read `truncated` before trusting it as whole.
+haven_graph        {"project":"haven"}                // compact live nodes + edges; caps 100 nodes/1000 edges/250 lineage; all:true for dead nodes
 ```
 
 **Reasoning over the whole backlog** (reorganising, fixing dependencies, rendering
-a graph view) — prefer `haven graph` when you have a local CLI and need the full
-export. `haven_graph` over MCP is transport-safe by default: it returns a bounded
-slice with `totals`, `omitted`, `limits`, and `truncated` for nodes, edges, and
-lineage, so a mature graph degrades instead of failing whole. This is not the
-dispatch path: for "what should I work on?", use `dispatch` or
+a graph view). Both surfaces are **bounded by default** — CLI `haven graph` applies
+the same caps as `haven_graph`, and only `haven graph --full` is a complete export.
+Either way the response carries `totals`, `omitted`, `limits`, and `truncated` for
+nodes, edges, and lineage, so a mature graph degrades instead of failing whole.
+**Check `truncated` before concluding anything from an absence** — "this container
+has no children" is a claim about the store, and a capped read cannot support it.
+
+Edges are *not* limited to the node slice: when the node cap bites you still get
+the whole edge list, and any endpoint an edge cites but the payload doesn't carry
+is named in `dangling_refs` (fetch those with `get_items`). If the edge cap itself
+bites, `edges_omitted_by_kind` says which kinds were cut.
+
+This is not the dispatch path: for "what should I work on?", use `dispatch` or
 `prime`/`next`/targeted `item get` reads.
 
 ## Standing cautions

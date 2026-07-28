@@ -508,6 +508,157 @@ fn project_graph_returns_all_nodes_and_edges_in_one_call() {
     assert!(s.project_graph(None, false).unwrap().lineage.is_empty());
 }
 
+/// HV-290: the node cap must not take edges down with it. Reproduces the shape
+/// that caused the real-world misreport — a container whose children all sort
+/// past `node_limit`. Before the fix the parent was in the payload, the children
+/// were outside it, so every decomposition edge vanished while the response
+/// still presented its edge list as the whole story.
+#[test]
+fn graph_page_keeps_edges_whose_endpoints_fell_outside_the_node_slice() {
+    let s = store();
+    let parent = container(&s, "Packet", NodeType::Phase); // HV-1
+    for i in 0..5 {
+        let child = add(&s, &format!("Child {i}")); // HV-2..HV-6
+        s.decompose(None, &parent.reference, &child.reference, false)
+            .unwrap();
+    }
+    s.depend(None, "HV-3", "HV-2", false).unwrap();
+
+    // A node cap that admits only a fraction of the graph.
+    let page = s
+        .project_graph_page(None, false, false, 2, usize::MAX, usize::MAX)
+        .unwrap();
+
+    assert_eq!(page.nodes.len(), 2, "the node cap still bites");
+    assert_eq!(page.totals.nodes, 6);
+    assert_eq!(page.omitted.nodes, 4);
+
+    // ...but every edge survives, and nothing is reported as omitted.
+    assert_eq!(
+        page.edges.len(),
+        6,
+        "5 decomposition + 1 dependency edge must all survive the node cap"
+    );
+    assert_eq!(
+        page.edges
+            .iter()
+            .filter(|e| e.kind == EdgeKind::Decomposition)
+            .count(),
+        5,
+        "decomposition is the kind the old node-slice coupling destroyed"
+    );
+    assert_eq!(page.totals.edges, 6);
+    assert_eq!(page.omitted.edges, 0);
+    assert!(page.edges_omitted_by_kind.is_empty());
+
+    // Truncation is declared, and the endpoints the payload cites but does not
+    // carry are named so a consumer can fetch them instead of guessing.
+    assert!(page.truncated, "a capped page must never read as complete");
+    let payload: Vec<&str> = page.nodes.iter().map(|n| n.reference.as_str()).collect();
+    for r in &page.dangling_refs {
+        assert!(
+            !payload.contains(&r.as_str()),
+            "{r} is in the node payload and must not be listed as dangling"
+        );
+    }
+    for e in &page.edges {
+        for endpoint in [&e.from, &e.to] {
+            assert!(
+                payload.contains(&endpoint.as_str()) || page.dangling_refs.contains(endpoint),
+                "{endpoint} is cited by an edge but is neither in the payload nor flagged dangling"
+            );
+        }
+    }
+}
+
+/// HV-290: when the *edge* cap is what bites, say so per kind. The cap consumes
+/// kinds in payload order, so a bare total hides that it ate one kind entirely.
+#[test]
+fn graph_page_reports_which_edge_kinds_the_cap_ate() {
+    let s = store();
+    let parent = container(&s, "Packet", NodeType::Phase); // HV-1
+    let release = container(&s, "v1", NodeType::Release); // HV-2
+    for i in 0..3 {
+        let child = add(&s, &format!("Child {i}")); // HV-3..HV-5
+        s.decompose(None, &parent.reference, &child.reference, false)
+            .unwrap();
+    }
+    s.depend(None, "HV-4", "HV-3", false).unwrap();
+    s.group(None, &release.reference, &parent.reference, false)
+        .unwrap();
+
+    // 3 decomposition + 1 dependency + 1 grouping = 5; keep only the first 3.
+    let page = s
+        .project_graph_page(None, false, false, usize::MAX, 3, usize::MAX)
+        .unwrap();
+
+    assert_eq!(page.edges.len(), 3);
+    assert_eq!(page.totals.edges, 5);
+    assert_eq!(page.omitted.edges, 2);
+    assert!(page.truncated);
+    assert_eq!(page.edges_omitted_by_kind.decomposition, 0);
+    assert_eq!(page.edges_omitted_by_kind.dependency, 1);
+    assert_eq!(page.edges_omitted_by_kind.grouping, 1);
+    // The whole node payload is present, so nothing dangles.
+    assert!(page.dangling_refs.is_empty());
+}
+
+/// HV-290: an uncapped page reports `limits: null` (not `usize::MAX`) and must
+/// not claim truncation. The pre-envelope flat totals stay put.
+#[test]
+fn graph_page_uncapped_reports_null_limits_and_no_truncation() {
+    let s = store();
+    let parent = container(&s, "Packet", NodeType::Phase);
+    let child = add(&s, "Child");
+    s.decompose(None, &parent.reference, &child.reference, false)
+        .unwrap();
+
+    let page = s
+        .project_graph_page(None, false, false, usize::MAX, usize::MAX, usize::MAX)
+        .unwrap();
+    assert!(!page.truncated);
+    assert_eq!(page.limits.nodes, None);
+    assert_eq!(page.limits.edges, None);
+    assert_eq!(page.limits.lineage, None);
+    assert!(page.dangling_refs.is_empty());
+
+    let json = serde_json::to_value(&page).unwrap();
+    assert!(json["limits"]["nodes"].is_null());
+    assert_eq!(json["truncated"], false);
+    assert_eq!(json["node_total"].as_u64(), Some(2));
+    assert_eq!(json["edge_total"].as_u64(), Some(1));
+}
+
+/// HV-290: the live-only view still drops edges onto dead nodes — that filter is
+/// deliberate (HV-53) and must survive the node-slice decoupling.
+#[test]
+fn graph_page_still_drops_edges_onto_dead_nodes() {
+    let s = store();
+    let parent = container(&s, "Packet", NodeType::Phase); // HV-1
+    let keep = add(&s, "Keep"); // HV-2
+    let doomed = add(&s, "Doomed"); // HV-3
+    s.decompose(None, &parent.reference, &keep.reference, false)
+        .unwrap();
+    s.decompose(None, &parent.reference, &doomed.reference, false)
+        .unwrap();
+    s.archive_item(None, &doomed.reference, Some("not needed"), None)
+        .unwrap();
+
+    // Live-only, uncapped: the edge onto the archived node is gone.
+    let live = s
+        .project_graph_page(None, false, false, usize::MAX, usize::MAX, usize::MAX)
+        .unwrap();
+    assert_eq!(live.totals.edges, 1);
+    assert!(live.edges.iter().all(|e| e.to != "HV-3"));
+    assert!(!live.truncated, "a dead-node filter is not truncation");
+
+    // With `all`, it comes back.
+    let all = s
+        .project_graph_page(None, false, true, usize::MAX, usize::MAX, usize::MAX)
+        .unwrap();
+    assert_eq!(all.totals.edges, 2);
+}
+
 #[test]
 fn add_mints_sequential_refs_and_defaults() {
     let s = store();

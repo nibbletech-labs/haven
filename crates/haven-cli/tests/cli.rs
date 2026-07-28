@@ -2223,6 +2223,41 @@ fn graph_excludes_archived_superseded_by_default_all_includes() {
     );
 }
 
+/// HV-290: `haven graph` applies the same caps as `haven_graph`, so it must
+/// carry the same honesty envelope. It previously emitted only the flat
+/// `*_total` fields, so a consumer checking `truncated`/`omitted` found nothing
+/// there and read a capped response as a complete one.
+#[test]
+fn graph_carries_the_truncation_envelope() {
+    let h = demo();
+    h.json(&["item", "add", "Packet", "--type", "phase", "-p", "demo"]); // DM-1
+    h.json(&["item", "add", "Child", "-p", "demo"]); // DM-2
+    h.ok(&["decompose", "DM-1", "--into", "DM-2", "-p", "demo"]);
+
+    let g = h.json(&["graph", "-p", "demo"]);
+    // The envelope exists and says "complete" truthfully.
+    assert_eq!(g["truncated"], false);
+    assert_eq!(g["totals"]["nodes"].as_u64(), Some(2));
+    assert_eq!(g["totals"]["edges"].as_u64(), Some(1));
+    assert_eq!(g["omitted"]["nodes"].as_u64(), Some(0));
+    assert_eq!(g["omitted"]["edges"].as_u64(), Some(0));
+    // Default caps are reported so a consumer can see what it is up against.
+    assert_eq!(g["limits"]["nodes"].as_u64(), Some(100));
+    assert_eq!(g["limits"]["edges"].as_u64(), Some(1000));
+    // Flat totals stay — shipped skills read them.
+    assert_eq!(g["node_total"].as_u64(), Some(2));
+    assert_eq!(g["edge_total"].as_u64(), Some(1));
+    // Nothing dangles and no kind was cut, so neither field is emitted.
+    assert!(g.get("dangling_refs").is_none());
+    assert!(g.get("edges_omitted_by_kind").is_none());
+
+    // `--full` lifts the caps, and says so with null rather than a huge number.
+    let full = h.json(&["graph", "--full", "-p", "demo"]);
+    assert_eq!(full["truncated"], false);
+    assert!(full["limits"]["nodes"].is_null());
+    assert!(full["limits"]["edges"].is_null());
+}
+
 #[test]
 fn item_list_hides_archived_superseded_by_default_all_includes() {
     let h = store_with_dead_items();

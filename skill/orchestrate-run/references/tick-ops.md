@@ -23,10 +23,20 @@ read drives the whole tick. Resolve the project first if unknown: CLI `haven pro
 MCP `haven_list_projects`. (RECOVER reconciles this against `git worktree list` — see
 `references/worktree-merge.md`.)
 
-**Large-graph fallback.** Over MCP, `haven_graph` is bounded by default and reports
-`totals`, `omitted`, `limits`, and `truncated` for nodes, edges, and lineage. If
-`truncated:true` means the graph slice is not enough for this tick, reorient from
-the **frontier** instead:
+**Large-graph fallback.** `haven_graph` **and** CLI `haven graph` are bounded by
+default (only `haven graph --full` is a complete export) and report `totals`,
+`omitted`, `limits`, and `truncated` for nodes, edges, and lineage.
+
+**Never argue from an absence in a truncated graph.** "This container has no
+children", "nothing depends on this", "these items aren't in their packet" are
+claims about the *store*, and a capped read cannot support any of them — check
+`truncated`, then confirm against the item itself (`haven_get_item` with
+`include:["edges"]`) or `haven graph --full`. Edges do survive the node cap, and
+endpoints an edge cites but the payload doesn't carry are named in `dangling_refs`
+— so a ref appearing there means *fetch it*, not *it doesn't exist*.
+
+If `truncated:true` means the graph slice is still not enough for this tick,
+reorient from the **frontier** instead:
 
 - RECOVER set (the `in_progress` leaves to reconcile): `haven list_items --status in_progress --owner ai -p <P>` / `haven_list_items {"project":"<P>","status":"in_progress","owner":"ai"}`
 - Dispatch queue: step 1 (`haven next --owner ai`, bounded by default).

@@ -77,12 +77,17 @@ struct RpcError {
 /// Default page size for `haven_list_items` when the caller passes no `limit`.
 /// `total` is always returned, so a truncated page is never silent.
 const DEFAULT_LIST_LIMIT: i64 = 100;
-/// Default/hard node cap for `haven_graph` over MCP. The CLI graph export stays
-/// full-fidelity; MCP is bounded so a mature graph degrades with omission
-/// metadata instead of blowing the transport response.
+/// Default/hard node cap for `haven_graph` over MCP. Nodes are the expensive
+/// part of the payload, so this is the cap that actually protects the transport;
+/// a mature graph degrades with omission metadata instead of blowing the
+/// response. (The CLI applies the same cap unless `--full`.)
 const DEFAULT_GRAPH_NODE_LIMIT: i64 = DEFAULT_LIST_LIMIT;
-/// Default/hard structural edge cap for `haven_graph` over MCP.
-const DEFAULT_GRAPH_EDGE_LIMIT: i64 = 250;
+/// Default/hard structural edge cap for `haven_graph` over MCP. Set well above
+/// the node cap on purpose: an edge is a `{kind, from, to}` ref triple costing a
+/// fraction of a node, and edges *are* the structure the graph read exists to
+/// convey. Capping them near the node count is what made whole edge kinds vanish
+/// from mature graphs (HV-290).
+const DEFAULT_GRAPH_EDGE_LIMIT: i64 = 1000;
 /// Default/hard lineage link cap for `haven_graph` over MCP.
 const DEFAULT_GRAPH_LINEAGE_LIMIT: i64 = 250;
 /// Hard cap for full batch item hydration over MCP. Full items include prose and
@@ -1042,33 +1047,39 @@ fn dispatch_tool(store: &Store, name: &str, a: &Value) -> Result<Value> {
                 .iter()
                 .map(|n| McpItem::graph_node(n, include_acceptance))
                 .collect();
-            let node_count = nodes.len();
-            let edge_count = g.edges.len();
-            let lineage_count = g.lineage.len();
-            let node_omitted = g.node_total.saturating_sub(node_count);
-            let edge_omitted = g.edge_total.saturating_sub(edge_count);
-            let lineage_omitted = g.lineage_total.saturating_sub(lineage_count);
+            // Totals/omitted/truncated come straight off the store page rather
+            // than being recomputed here — the CLI and MCP now read one
+            // envelope, which is what let them drift apart (HV-290).
             let mut out = json!({
                 "project": &g.project,
                 "nodes": nodes,
                 "edges": &g.edges,
                 "totals": {
-                    "nodes": g.node_total,
-                    "edges": g.edge_total,
-                    "lineage": g.lineage_total,
+                    "nodes": g.totals.nodes,
+                    "edges": g.totals.edges,
+                    "lineage": g.totals.lineage,
                 },
                 "omitted": {
-                    "nodes": node_omitted,
-                    "edges": edge_omitted,
-                    "lineage": lineage_omitted,
+                    "nodes": g.omitted.nodes,
+                    "edges": g.omitted.edges,
+                    "lineage": g.omitted.lineage,
                 },
                 "limits": {
                     "nodes": node_limit,
                     "edges": edge_limit,
                     "lineage": lineage_limit,
                 },
-                "truncated": node_omitted > 0 || edge_omitted > 0 || lineage_omitted > 0,
+                "truncated": g.truncated,
             });
+            // Which kind the edge cap ate, and which endpoints the payload cites
+            // but doesn't carry — both absent when they don't apply, so a lean
+            // read stays lean.
+            if !g.edges_omitted_by_kind.is_empty() {
+                out["edges_omitted_by_kind"] = to_value(g.edges_omitted_by_kind)?;
+            }
+            if !g.dangling_refs.is_empty() {
+                out["dangling_refs"] = to_value(&g.dangling_refs)?;
+            }
             // Preserve the original default contract: lineage is absent unless it
             // was requested. When requested, include even an empty array if links
             // existed but were omitted so the cap is visible beside metadata.
@@ -1398,8 +1409,8 @@ fn tools_list() -> Value {
           "inputSchema": obj(json!({"ref":{"type":"string"},"project":{"type":"string"}}), json!(["ref"])) },
         { "name": "haven_search", "description": "Full-text search over item title/body. Returns compact MCP items (identity + axes, no prose/machine fields); fetch detail with haven_get_item or haven_get_items for selected hits.",
           "inputSchema": obj(json!({"query":{"type":"string"},"project":{"type":"string"},"limit":{"type":"integer"}}), json!(["query"])) },
-        { "name": "haven_graph", "description": "The project work-graph in one bounded MCP read: compact nodes plus a flat edge list ({kind, from, to}, same shape as haven_add_edge), and optionally lineage links. The default/hard caps are 100 nodes, 250 edges, and 250 lineage links; responses include totals, omitted counts, limits, and truncated so large graphs degrade instead of failing whole. Use smaller node_limit/edge_limit/lineage_limit values for tighter slices. Nodes are compact (identity + axes + a boolean has_acceptance flag — fetch the done_looks_like prose and other detail per-node via haven_get_item, OR pass include_acceptance:true to ride each node's done_looks_like text in one read, e.g. to judge acceptance across a subtree) and live-only by default — pass all:true to include superseded/archived nodes.",
-          "inputSchema": obj(json!({"project":{"type":"string"},"lineage":{"type":"boolean"},"all":{"type":"boolean"},"include_acceptance":{"type":"boolean","description":"Ride each node's done_looks_like text on the graph (instead of the lean has_acceptance flag) — for judging acceptance across the graph in one read."},"node_limit":{"type":"integer","minimum":0,"maximum":100,"description":"Max nodes returned; defaults to and is clamped at 100."},"edge_limit":{"type":"integer","minimum":0,"maximum":250,"description":"Max structural edges returned; defaults to and is clamped at 250."},"lineage_limit":{"type":"integer","minimum":0,"maximum":250,"description":"Max lineage links returned when lineage:true; defaults to and is clamped at 250."}}), json!([])) },
+        { "name": "haven_graph", "description": "The project work-graph in one bounded MCP read: compact nodes plus a flat edge list ({kind, from, to}, same shape as haven_add_edge), and optionally lineage links. The default/hard caps are 100 nodes, 1000 edges, and 250 lineage links; responses include totals, omitted counts, limits, and truncated so large graphs degrade instead of failing whole. Edges are NOT limited to the node slice: when the node cap bites you still get the full structure, and any endpoint cited by an edge but missing from the node payload is listed in dangling_refs (fetch those with haven_get_items). If the edge cap itself bites, edges_omitted_by_kind reports which kinds were cut. Use smaller node_limit/edge_limit/lineage_limit values for tighter slices. Nodes are compact (identity + axes + a boolean has_acceptance flag — fetch the done_looks_like prose and other detail per-node via haven_get_item, OR pass include_acceptance:true to ride each node's done_looks_like text in one read, e.g. to judge acceptance across a subtree) and live-only by default — pass all:true to include superseded/archived nodes.",
+          "inputSchema": obj(json!({"project":{"type":"string"},"lineage":{"type":"boolean"},"all":{"type":"boolean"},"include_acceptance":{"type":"boolean","description":"Ride each node's done_looks_like text on the graph (instead of the lean has_acceptance flag) — for judging acceptance across the graph in one read."},"node_limit":{"type":"integer","minimum":0,"maximum":100,"description":"Max nodes returned; defaults to and is clamped at 100."},"edge_limit":{"type":"integer","minimum":0,"maximum":1000,"description":"Max structural edges returned; defaults to and is clamped at 1000. Independent of node_limit."},"lineage_limit":{"type":"integer","minimum":0,"maximum":250,"description":"Max lineage links returned when lineage:true; defaults to and is clamped at 250."}}), json!([])) },
         { "name": "haven_docs", "description": "List live project living-doc anchors and their artifacts. Use this instead of hard-coding a docs ref.",
           "inputSchema": obj(json!({"project":{"type":"string"}}), json!([])) },
         { "name": "haven_get_artifact", "description": "Read an artifact's content (local or lazy-pulled).",
@@ -2175,6 +2186,74 @@ mod tests {
         assert_eq!(g["totals"]["lineage"].as_u64(), Some(0));
         assert_eq!(g["omitted"]["lineage"].as_u64(), Some(0));
         assert_eq!(g["truncated"], true);
+    }
+
+    /// HV-290: at the MCP surface, a node cap must leave the edge list whole and
+    /// name the endpoints it could not carry. This is the read that drives every
+    /// `orchestrate-run` tick — a container reported with no children is read as
+    /// a container that HAS no children.
+    #[test]
+    fn graph_node_cap_keeps_edges_and_names_dangling_endpoints() {
+        let s = store();
+        let mut calls = vec![
+            json!({"jsonrpc":"2.0","id":0,"method":"tools/call","params":{
+                "name":"haven_add_item","arguments":{"title":"Packet","type":"phase"}
+            }}),
+        ];
+        // Four children, each decomposed under HV-1.
+        for i in 1..=4 {
+            calls.push(
+                json!({"jsonrpc":"2.0","id":i,"method":"tools/call","params":{
+                    "name":"haven_add_item","arguments":{"title":format!("Child {i}")}
+                }}),
+            );
+            calls.push(
+                json!({"jsonrpc":"2.0","id":100+i,"method":"tools/call","params":{
+                    "name":"haven_add_edge",
+                    "arguments":{"kind":"decomposition","from":"HV-1","to":format!("HV-{}", i + 1)}
+                }}),
+            );
+        }
+        calls.push(
+            json!({"jsonrpc":"2.0","id":9,"method":"tools/call","params":{
+                "name":"haven_graph","arguments":{"node_limit":2}
+            }}),
+        );
+        let out = session(&s, &calls);
+        let g = tool_payload(out.last().unwrap());
+
+        let nodes = g["nodes"].as_array().unwrap();
+        assert_eq!(nodes.len(), 2, "the node cap bites");
+        assert_eq!(g["omitted"]["nodes"].as_u64(), Some(3));
+        assert_eq!(g["truncated"], true);
+
+        // Every decomposition edge survives the node cap.
+        assert_eq!(
+            g["edges"].as_array().unwrap().len(),
+            4,
+            "edges must not be filtered to the node slice: {}",
+            g["edges"]
+        );
+        assert_eq!(g["omitted"]["edges"].as_u64(), Some(0));
+        assert!(g.get("edges_omitted_by_kind").is_none());
+
+        // The endpoints the payload cites but does not carry are named.
+        let payload: Vec<&str> = nodes.iter().map(|n| n["ref"].as_str().unwrap()).collect();
+        let dangling: Vec<&str> = g["dangling_refs"]
+            .as_array()
+            .expect("dangling_refs present when edges reach outside the node slice")
+            .iter()
+            .map(|r| r.as_str().unwrap())
+            .collect();
+        assert!(!dangling.is_empty());
+        for e in g["edges"].as_array().unwrap() {
+            for endpoint in [e["from"].as_str().unwrap(), e["to"].as_str().unwrap()] {
+                assert!(
+                    payload.contains(&endpoint) || dangling.contains(&endpoint),
+                    "{endpoint} is cited by an edge but neither carried nor flagged"
+                );
+            }
+        }
     }
 
     #[test]

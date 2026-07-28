@@ -157,9 +157,13 @@ always-read and never routed** — the router trims mechanics, never safety.
      - Otherwise → prune the worktree and send the batch down the failure path.
        The strike count survives in the container's fix-log.
    - A worktree with no `in_progress` leaf is **stale** → prune it.
-   - *Large-graph fallback.* Over MCP, `haven_graph` is bounded and reports
-     `totals`, `omitted`, `limits`, and `truncated` for nodes, edges, and lineage.
-     If `truncated:true` means the graph slice is not enough for this tick,
+   - *Large-graph fallback.* `haven_graph` **and** CLI `haven graph` are bounded by
+     default and report `totals`, `omitted`, `limits`, and `truncated` for nodes,
+     edges, and lineage. **Read `truncated` before treating the graph as whole** — a
+     capped read never licenses "X has no children" or "nothing depends on Y".
+     Edges survive the node cap (endpoints not carried are named in
+     `dangling_refs`), so structure stays intact even when nodes are cut. If
+     `truncated:true` means the slice is still not enough for this tick,
      **reorient from the frontier** instead: `haven list_items --status
      in_progress --owner ai` for the RECOVER reconcile set, `haven next --owner ai`
      (step 1) for the dispatch queue, then read only each **active container's**

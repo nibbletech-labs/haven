@@ -46,19 +46,97 @@ pub struct ProjectGraph {
     pub grooming_nudge: Option<String>,
 }
 
+/// Node/edge/lineage triple used for graph totals and omission counts.
+#[derive(Debug, Clone, Copy, Default, Serialize)]
+pub struct GraphCounts {
+    pub nodes: usize,
+    pub edges: usize,
+    pub lineage: usize,
+}
+
+/// The caps actually applied to a graph page. `None` means uncapped (CLI
+/// `--full`), which serialises as `null` rather than a meaningless `usize::MAX`.
+#[derive(Debug, Clone, Copy, Default, Serialize)]
+pub struct GraphLimits {
+    pub nodes: Option<usize>,
+    pub edges: Option<usize>,
+    pub lineage: Option<usize>,
+}
+
+impl GraphLimits {
+    fn cap(limit: usize) -> Option<usize> {
+        (limit != usize::MAX).then_some(limit)
+    }
+}
+
+/// Per-kind breakdown of structural edges dropped by the edge cap. Present only
+/// when the cap actually bit: the cap consumes kinds in payload order, so it
+/// starves the later ones first, and a bare total would hide the fact that one
+/// whole kind has been decimated.
+#[derive(Debug, Clone, Copy, Default, Serialize)]
+pub struct EdgeKindCounts {
+    #[serde(skip_serializing_if = "is_zero")]
+    pub decomposition: usize,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub dependency: usize,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub grouping: usize,
+}
+
+fn is_zero(n: &usize) -> bool {
+    *n == 0
+}
+
+impl EdgeKindCounts {
+    pub fn is_empty(&self) -> bool {
+        self.decomposition == 0 && self.dependency == 0 && self.grouping == 0
+    }
+
+    fn bump(&mut self, kind: EdgeKind) {
+        match kind {
+            EdgeKind::Decomposition => self.decomposition += 1,
+            EdgeKind::Dependency => self.dependency += 1,
+            EdgeKind::Grouping => self.grouping += 1,
+        }
+    }
+}
+
 /// Bounded graph payload for context-constrained surfaces. Totals describe the
 /// visible graph before node/edge/lineage caps; vectors contain only the payload
 /// slice. The CLI `graph` command uses this too — bounded by default, `--full`
 /// lifts the caps.
+///
+/// Edges are capped **independently of the node slice** (HV-290). An edge is
+/// dropped only when it dangles onto a dead node (the live-only view) or when
+/// the edge cap itself bites — never merely because an endpoint sorted past
+/// `node_limit`. That older coupling made decomposition structure collapse
+/// silently on mature graphs (parents are containers, which sort late), so a
+/// consumer saw a container with no children and concluded it had none.
+/// Endpoints cited by payload edges but absent from the node slice are listed in
+/// `dangling_refs` so a consumer knows exactly what to fetch.
 #[derive(Debug, Clone, Serialize)]
 pub struct ProjectGraphPage {
     pub project: String,
     pub nodes: Vec<Item>,
     pub edges: Vec<GraphEdge>,
     pub lineage: Vec<LineageLink>,
+    // Flat `*_total` fields predate the `totals`/`omitted`/`truncated` envelope
+    // and are still read by shipped skills — kept alongside it, not replaced.
     pub node_total: usize,
     pub edge_total: usize,
     pub lineage_total: usize,
+    pub totals: GraphCounts,
+    pub omitted: GraphCounts,
+    pub limits: GraphLimits,
+    /// True when any of nodes/edges/lineage was capped. The whole point of the
+    /// envelope: a capped response must never read as a complete one.
+    pub truncated: bool,
+    #[serde(skip_serializing_if = "EdgeKindCounts::is_empty")]
+    pub edges_omitted_by_kind: EdgeKindCounts,
+    /// Refs cited by payload edges/lineage that are not in the node payload —
+    /// fetch them with `haven_get_item` / `haven get_items`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub dangling_refs: Vec<String>,
     pub grooming_nudge: Option<String>,
 }
 
@@ -895,18 +973,22 @@ impl Store {
                JOIN nodes mn ON mn.id = e.member_id
              WHERE gn.project_id = ?1 ORDER BY gn.ref, mn.ref",
         )?);
+        // Live-only still drops edges onto dead nodes (HV-53) — but the payload
+        // node slice does NOT filter edges (HV-290). Edges are ~1% the cost of a
+        // node and carry the structure the read exists to convey; coupling them
+        // to `node_limit` silently erased whole kinds on mature graphs.
         let visible_edges: Vec<GraphEdge> = all_edges
             .into_iter()
             .filter(|e| visible_refs.contains(&e.from) && visible_refs.contains(&e.to))
             .collect();
         let edge_total = visible_edges.len();
-        let edges = visible_edges
-            .into_iter()
-            .filter(|e| payload_refs.contains(&e.from) && payload_refs.contains(&e.to))
-            .take(edge_limit)
-            .collect();
+        let mut edges_omitted_by_kind = EdgeKindCounts::default();
+        for dropped in visible_edges.iter().skip(edge_limit.min(edge_total)) {
+            edges_omitted_by_kind.bump(dropped.kind);
+        }
+        let edges: Vec<GraphEdge> = visible_edges.into_iter().take(edge_limit).collect();
 
-        let visible_lineage = if lineage {
+        let visible_lineage: Vec<LineageLink> = if lineage {
             self.project_lineage_links(project_id)?
                 .into_iter()
                 .filter(|l| visible_refs.contains(&l.from) && visible_refs.contains(&l.to))
@@ -915,11 +997,30 @@ impl Store {
             Vec::new()
         };
         let lineage_total = visible_lineage.len();
-        let lineage = visible_lineage
-            .into_iter()
-            .filter(|l| payload_refs.contains(&l.from) && payload_refs.contains(&l.to))
-            .take(lineage_limit)
+        let lineage: Vec<LineageLink> = visible_lineage.into_iter().take(lineage_limit).collect();
+
+        // Endpoints the payload cites but does not carry. Sorted + deduped so the
+        // consumer can fetch them in one bounded `get_items` call.
+        let mut dangling: Vec<String> = edges
+            .iter()
+            .flat_map(|e| [&e.from, &e.to])
+            .chain(lineage.iter().flat_map(|l| [&l.from, &l.to]))
+            .filter(|r| !payload_refs.contains(*r))
+            .cloned()
             .collect();
+        dangling.sort();
+        dangling.dedup();
+
+        let totals = GraphCounts {
+            nodes: node_total,
+            edges: edge_total,
+            lineage: lineage_total,
+        };
+        let omitted = GraphCounts {
+            nodes: node_total.saturating_sub(nodes.len()),
+            edges: edge_total.saturating_sub(edges.len()),
+            lineage: lineage_total.saturating_sub(lineage.len()),
+        };
         let grooming_nudge = self.grooming_pressure(project)?.nudge;
         Ok(ProjectGraphPage {
             project: key,
@@ -929,6 +1030,16 @@ impl Store {
             node_total,
             edge_total,
             lineage_total,
+            totals,
+            omitted,
+            limits: GraphLimits {
+                nodes: GraphLimits::cap(node_limit),
+                edges: GraphLimits::cap(edge_limit),
+                lineage: GraphLimits::cap(lineage_limit),
+            },
+            truncated: omitted.nodes > 0 || omitted.edges > 0 || omitted.lineage > 0,
+            edges_omitted_by_kind,
+            dangling_refs: dangling,
             grooming_nudge,
         })
     }

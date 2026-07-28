@@ -26,8 +26,9 @@ const CLOUD_SYNC_PREVIEW_ENV: &str = "HAVEN_CLOUD_SYNC_PREVIEW";
 /// backlog. `--limit 0` lifts the cap; a truncated page prints a note to stderr.
 const CLI_DEFAULT_LIST_LIMIT: usize = 100;
 /// Default caps for the CLI `graph` export unless `--full`, mirroring `haven_graph`.
+/// Keep these in step with the `DEFAULT_GRAPH_*_LIMIT` constants in `haven-mcp`.
 const CLI_GRAPH_NODE_LIMIT: usize = 100;
-const CLI_GRAPH_EDGE_LIMIT: usize = 250;
+const CLI_GRAPH_EDGE_LIMIT: usize = 1000;
 const CLI_GRAPH_LINEAGE_LIMIT: usize = 250;
 
 /// Apply the default list cap (parity with MCP) + pagination to a CLI list read,
@@ -1355,11 +1356,35 @@ fn run(cli: &Cli) -> Result<Output> {
                 )
             };
             let page = s.project_graph_page(project, a.lineage, a.all, nl, el, ll)?;
-            if page.node_total > page.nodes.len() {
+            // The JSON itself carries truncated/omitted/limits (HV-290) — this note
+            // is a convenience for a human at a terminal, and covers every capped
+            // dimension, not just nodes. stdout stays pure JSON for piping.
+            if page.truncated {
+                let mut capped = Vec::new();
+                if page.omitted.nodes > 0 {
+                    capped.push(format!(
+                        "{} of {} nodes",
+                        page.nodes.len(),
+                        page.totals.nodes
+                    ));
+                }
+                if page.omitted.edges > 0 {
+                    capped.push(format!(
+                        "{} of {} edges",
+                        page.edges.len(),
+                        page.totals.edges
+                    ));
+                }
+                if page.omitted.lineage > 0 {
+                    capped.push(format!(
+                        "{} of {} lineage links",
+                        page.lineage.len(),
+                        page.totals.lineage
+                    ));
+                }
                 eprintln!(
-                    "note: showing {} of {} nodes (--full for the whole graph)",
-                    page.nodes.len(),
-                    page.node_total
+                    "note: showing {} (--full for the whole graph); the JSON carries truncated/omitted/limits",
+                    capped.join(", ")
                 );
             }
             Ok(Output::Json(serde_json::to_value(page)?))
