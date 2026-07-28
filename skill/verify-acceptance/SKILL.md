@@ -62,6 +62,10 @@ in `references/evaluation-lens.md`. The rules that bite here:
   verdict evidence rides **`delivery`**, escalation rides **`scratch`** (`fix-log.md`).
 - **The yardstick is always the node's LIVE `done_looks_like`**, read per invocation via
   the graph — **never** a frozen copy. Re-grooming can't make a verdict drift.
+- **A verdict spoken to a person names the work, not the ref.** "The ROM matcher fix
+  passes (RS-175)", never "RS-175: PASS" — and a rollup lists what passed and failed in
+  plain English, not a column of refs. Inherited rule — see the `haven` skill,
+  § *Talking about the backlog to a person*, not restated here.
 
 ## The independence contract (the load-bearing rule)
 

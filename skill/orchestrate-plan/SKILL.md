@@ -45,6 +45,11 @@ The gotchas that bite the planner:
 
 - **Structure only through ops; content as files/artifacts.** Mutate nodes/edges
   only via `haven …` / `haven_*`. `body` is a one-line summary, never content.
+- **Never let a ref travel alone when you talk to the person.** Planning is the most
+  ref-dense moment in the system — you finish holding a freshly minted tree and it is
+  very tempting to read it out. Describe the *work* in plain English; refs ride in
+  parentheses. Inherited rule — see the `haven` skill, § *Talking about the backlog to
+  a person*, not restated here.
 - **`ready` requires `done_looks_like`.** A leaf with no acceptance can't be
   verified or dispatched — never seal without it.
 - **Capture ≠ commit.** A bare node is floating/uncommitted/`discovery`. The

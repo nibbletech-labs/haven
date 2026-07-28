@@ -364,9 +364,11 @@ blocked-on-human items (`next --owner human` / `wait_state on_human`) and any
 strike-escalated items, then stop (inline) or sleep (`/loop`, v4).
 
 When you surface progress to a person — mid-run status, a merge-gate pause, the convergence
-report — **report it as plain capabilities, not node refs** (the `haven` skill's *Standing
-caution*: lead with what a user can now do, before → now; a list of `HV-…` refs is not a
-progress report). Inherited rule — see the haven skill, not restated here.
+report — **report it as plain capabilities, not node refs**, and **never let a ref travel
+alone**: each one carries a plain-English note of what that item is, in the same sentence.
+A run report is where this fails hardest, because you finish a tick holding a list of refs
+and it feels like the answer. It isn't. Inherited rule — see the `haven` skill,
+§ *Talking about the backlog to a person*, not restated here.
 
 ## Failure, retry, escalation
 

@@ -314,15 +314,42 @@ bites, `edges_omitted_by_kind` says which kinds were cut.
 This is not the dispatch path: for "what should I work on?", use `dispatch` or
 `prime`/`next`/targeted `item get` reads.
 
+## Talking about the backlog to a person
+
+The graph stores work the way a machine needs it: stable refs, precise titles,
+implementation-shaped prose. That is correct *storage* and wrong *speech*. Everything
+below is about the translation on the way out. It applies to every message you send a
+person, not just end-of-run summaries — a ref dropped mid-sentence while explaining
+something is the most common way this goes wrong.
+
+- **Never let a ref travel alone.** Every `HV-42` you write is accompanied, in the same
+  sentence, by a plain-English note of what that item *is*. Not the raw title — what it
+  is and why it's being mentioned. "the change that capped CLI graph reads (HV-215)",
+  not "since HV-215". A bare ref asks the reader to go look it up, and they can't; you
+  are the one holding the graph.
+  - **The test:** delete every ref from your draft and re-read it. If a sentence stops
+    making sense, it was leaning on a number the reader can't resolve. Put the meaning
+    back in, then re-add the ref in parentheses.
+  - The same goes for any identifier a person can't decode on sight — commit SHAs,
+    artifact roles, internal field and function names. Say what it is, then name it.
+- **Plain English, always.** Short sentences, ordinary words, one idea each. Say what a
+  thing *does* or *unblocks*, not the mechanism that makes it work — unless they asked
+  about the mechanism. Item titles and `why` prose are often written technically for the
+  graph's own sake; translate them, don't quote them. If a sentence needs a second read,
+  rewrite it.
+- **Report progress as capabilities.** When you tell a person where things are — status,
+  what's next, what a run just shipped — lead with *what they can now do* (before → now),
+  grouped by capability. A list of refs or node titles is **not** a progress report; it
+  reads as backlog gobbledygook. Refs ride in parentheses for traceability, never as the
+  headline or the whole message.
+- **Counts are not news.** "12 items ready, 3 blocked" tells a person almost nothing.
+  Say which work is now open and what stands in the way of the rest. Give a number only
+  when the number is itself the point.
+
 ## Standing cautions
 
 - **Reference items by `ref`** (`HV-42`) in human-facing flows; `public_id` only
   across machines.
-- **Report progress as capabilities, not refs.** When you tell a person where things
-  are — status, what's next, what a run just shipped — lead with *what they can now do*
-  (before → now), grouped by capability. A list of `HV-…` refs or node titles is **not** a
-  progress report; it reads as backlog gobbledygook. Cite a ref only parenthetically for
-  traceability, never as the headline or the whole message. Keep it short and undense.
 - **Let `backlog.md` regenerate** — it re-renders after every mutation; never
   hand-edit it.
 - **Repo-local `_haven/` is a projection.** It is a visible alias for humans and
