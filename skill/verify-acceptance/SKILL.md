@@ -41,7 +41,8 @@ serialized merge lock, the N-strike circuit breaker). `verify-acceptance` just r
 
 ## Where it sits (the executor family — meet only at the graph)
 
-`plan-item` (plan one item) or `orchestrate-plan` (decompose what won't fit one) →
+`plan-item` (plan one item — where every plan starts) → `orchestrate-plan` (decompose
+that planned ref when one pass can't deliver it) →
 `create-context-pack` (spec a group) → native
 **plan mode** (build + the human go) → `orchestrate-run` (dispatch/gate/merge/loop). The
 **gate** in that pipeline is this skill; `verify-acceptance` lifts it out so the same judgment is

@@ -251,10 +251,11 @@ for a human when a load-bearing check needs one).
 Before you dispatch a build, decide **how** it should run — inline vs solo plan mode vs the
 `orchestrate-run` executor (serial or parallel per its own per-run call). The four execution modes, their trade-offs, and a
 flow-gate for picking one (recommend or ask, don't default silently) are in
-**`references/running-work.md`** — which also carries the **planning-grain** call that comes
-first: one item → **`plan-item`**, won't fit one item → `orchestrate-plan`, a group about to be
-built together → `create-context-pack`. **One item is the common case** and decomposition is the
-escalation, so don't reach for a work-graph when someone asks for a plan for one feature.
+**`references/running-work.md`** — which also carries the **planning sequence** that comes
+first. **Every plan starts on one item, in `plan-item`**, whatever its size; only then do you
+ask whether one build pass could deliver it. Yes → build checklist, `ready`, build. No → hand
+that ref to `orchestrate-plan`, which **requires a plan** and decomposes from it. Several
+leaves built together → `create-context-pack`. Never reach for a work-graph off a bare goal.
 
 When you're handing an item off to an **external PM/dev system** (Jira/Linear/GitHub) — recording
 where it's executing and reconciling it back into Haven — read **`references/external-handoff.md`**:

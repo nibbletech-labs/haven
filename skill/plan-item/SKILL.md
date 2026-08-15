@@ -1,42 +1,52 @@
 ---
 name: plan-item
 description: >-
-  Plan one piece of work on a single Haven item: settle the approach with the
-  person, write it onto the item as its `spec` (scope boundary, constraints,
-  design detail), sharpen `done_looks_like`, then hand it to build. The
-  default for "make a plan", "plan out the next phase of X", "plan the
-  approach for HV-42", "how should we do this ticket", "work out how to do
-  this before you build it" — one feature, one change, one bug, one phase
-  that fits a single buildable item — chunky and multi-stage is fine, one
-  ticket holds a lot. Captures the item first if none exists yet. Escalates
-  to `orchestrate-plan` only when one build pass genuinely can't deliver it.
-  Not decomposition, not a work tree, and it writes no code.
+  The front door for ALL planning. Settle what's being built and how, and
+  write it onto ONE Haven item — a `spec` artifact (scope boundary,
+  constraints, approach) plus concrete `done_looks_like`. Fires on "make a
+  plan", "plan out the next phase of X", "plan the approach for HV-42", "how
+  should we do this ticket", and equally on a whole product, launch or
+  greenfield build with nothing in place yet: everything gets a high-level
+  plan on one item first. Captures the item if none exists, and folds in
+  overlapping or duplicate items. Then it calls the scale — one build pass
+  (add the build checklist, hand it to build) or hand the ref to
+  `orchestrate-plan` to break down. Planning, not doing: it writes no code.
 ---
 
-# plan-item — the plan for one item
+# plan-item — every plan starts here, on one item
 
-You take **one piece of work**, settle **how it will be done**, and write that onto
-**one Haven item**: a firm `done_looks_like` plus a `spec` artifact carrying the
-scope boundary, the constraints, and the approach. Then it goes to build. You
-produce a plan; **you write no product code**.
+You settle **what is being built and how**, and write it onto **one Haven item**: a
+firm `done_looks_like` plus a `spec` artifact carrying the scope boundary, the
+constraints, and the approach. Then you **call the scale** — is this one build pass,
+or does it need breaking down? You produce a plan; **you write no product code**.
 
-This is the ordinary case. Most planning is one item — a feature, a change, a bug,
-the next phase of something already running. It does **not** need a work-graph.
+**Every plan starts here**, whatever its size. A one-line bug fix and a whole product
+launch both begin as one item with a plan on it. What differs is what happens next,
+and that's a decision made *after* there's a plan to look at — never before.
 
 ## Where it sits (the planner family — they meet only at the graph)
 
-| The work is… | Skill | What it produces |
-|---|---|---|
-| One item | **`plan-item`** | acceptance + a `spec` on that item |
-| Too big for one item | `orchestrate-plan` | a decomposition tree of leaves |
-| A chosen group about to be built together | `create-context-pack` | one shared brief over the group |
+It's a sequence, not a menu:
 
-The boundary between the first two is a **test, not a vibe** — see *The size test*
-below. Run it early; it costs one judgment and saves a tree nobody wanted.
+```
+plan-item  →  one build pass?  ──yes──→  build it (spec + checklist, status=ready)
+                     │
+                     no
+                     ↓
+             orchestrate-plan (decompose, rooted at this ref)
+                     ↓
+             plan-item per leaf  →  build
+                     ↓  (several leaves built together)
+             create-context-pack (one shared brief over the group)
+```
 
-`plan-item` is also the **second stage** after a decomposition: `orchestrate-plan`
-stops at work-grain leaves (what / why / done), and any leaf that still needs its
-approach settled gets it here, one leaf at a time.
+- **`orchestrate-plan` requires a plan.** It is the *second* stage and it decomposes
+  a ref that already carries one — it never starts from a bare goal or a title. If it
+  fires with no plan in place, the plan comes first, here.
+- **`plan-item` runs again per leaf.** `orchestrate-plan` stops at work-grain leaves
+  (what / why / done, above the code); a leaf whose approach still needs settling
+  comes back here, one leaf at a time.
+- **`create-context-pack`** is for several leaves about to be built *together*.
 
 ## Operating rules (inherit from the `haven` skill)
 
@@ -54,8 +64,10 @@ restating arguments from memory. The gotchas that bite here:
   to prevent.
 - **Never let a ref travel alone.** Say what the item *is* in the same sentence as
   its ref (`haven` skill, § *Talking about the backlog to a person*).
-- **One leaf, one `spec`.** Role `spec`, filename `spec.md`, holding boundary +
-  constraints + approach. Not `design` — that's an anchor-side role.
+- **One item, one `spec`.** Role `spec`, filename `spec.md`, holding boundary +
+  constraints + approach. Not `design` — that's an anchor-side role. The same holds
+  for an item headed for decomposition: its high-level plan is still `spec` on that
+  node, and it becomes the shared foundation the children read up to.
 
 ## The steps
 
@@ -91,32 +103,52 @@ restating arguments from memory. The gotchas that bite here:
    what you folded and what you left, in plain English with the refs in parentheses —
    this is the moment a person finds out their backlog just got smaller.
 
-3. **RUN THE SIZE TEST.** Below — and run it on the *post-fold* shape, since folding
-   overlap in can change it. One item → carry on. Too big → hand to
-   `orchestrate-plan`, scoped to *this ref*, and stop. Do this **before** the
-   questions, so you don't clarify a shape that's about to be split.
-
-4. **CLARIFY.** Score the gap, then ask your targeted questions through the normal
+3. **CLARIFY.** Score the gap, then ask your targeted questions through the normal
    interactive channel. Start with **who** and **why** before **what**, and always
    ask for the **negative** constraints — "what should this *not* do?" is the
-   question builders most often wish had been asked. If there is genuinely no
-   person available, infer but tag every inference `[VERIFY] assumed X because Y`.
+   question builders most often wish had been asked. Pitch the questions at the
+   work's actual altitude: a bug fix gets mechanics, a product launch gets shape and
+   sequence. If there is genuinely no person available, infer but tag every inference
+   `[VERIFY] assumed X because Y`.
+
+4. **CALL THE SCALE — the decision point.** Now, with the work understood, run the
+   size test (below): **could a single build pass deliver this against one spec?**
+   Run it on the *post-fold* shape, since folding overlap in can change it.
+
+   **Say the call out loud with its reason** — this is the decision the person most
+   wants a say in, and it's the whole reason the plan comes before the breakdown.
+   An obvious one-pass item: state it in a clause and carry on. Anything borderline,
+   or a "decompose" call: name which of the three reasons applies (a gate in the
+   middle, split human/AI ownership, or it won't survive one pass) and let them
+   redirect you before you write.
 
 5. **WRITE THE PLAN ONTO THE ITEM.** Three places, no duplication between them:
    - `why` — the problem, one line, from the user's view;
    - `done_looks_like` — concrete, testable success criteria;
    - `spec.md` — **scope boundary** + **constraints** (both always present) + the
-     approach, edge cases, any file paths it rests on, and the **build checklist**
-     (below). Write the file directly, then register it once:
-     `haven artifact add <ref> --role spec --file …`.
+     approach, edge cases, and any file paths it rests on. Write the file directly,
+     then register it once: `haven artifact add <ref> --role spec --file …`.
+
+   **The scale call shapes what you write:**
+   - **One pass** → a build spec: approach at code altitude, plus the **build
+     checklist** (below).
+   - **Needs decomposition** → a **high-level plan**: the goal, the parts the work
+     divides into (as prose, not child items), the ordering and gates you can see,
+     the constraints, the boundary, and the decisions still open. **No build
+     checklist** — you don't know the steps yet, and inventing them is the guessing
+     this whole sequence exists to avoid. This spec becomes the shared foundation
+     that `orchestrate-plan`'s children inherit by reading up to this node, so the
+     boundary and constraints are the load-bearing parts.
 
    Then run the **shippability linter** (`spec-quality.md`): kill weasel words,
    every contract carries a schema *and* an example, architecture claims name real
    file paths, every acceptance line is observable rather than a judgment call.
    A failing rule is blocking, not advice.
 
-6. **READY IT, THEN HAND TO BUILD.** Set `status=ready` with an owner. Then say what
-   happens next in one line — this skill stops at the plan:
+6. **HAND IT ON.** Two exits, per the step-4 call:
+
+   **One pass** — set `status=ready` with an owner, then say what happens next in a
+   line; this skill stops at the plan:
    - **build it here** — do the work in this session against the spec (in a harness
      with a plan-mode gate, that gate goes here; without one, just build to the spec
      and show the diff);
@@ -126,10 +158,16 @@ restating arguments from memory. The gotchas that bite here:
 
    Whoever builds it finishes with `haven item complete <ref> --evidence "…"`.
 
-## The build checklist (every spec carries one)
+   **Needs decomposition** — hand the ref to **`orchestrate-plan`**, which roots
+   there and reads the plan you just wrote. **Don't set it `ready`** and don't give
+   it an owner: it isn't dispatchable work, it's about to become a parent. Say what
+   it is and why it's being broken down, in a line.
 
-One item can hold a lot of work, so the spec ends with an ordered **build checklist** —
-the route through the work, as tickable lines:
+## The build checklist (every one-pass spec carries one)
+
+One item can hold a lot of work, so a spec that's going to build ends with an ordered
+**build checklist** — the route through the work, as tickable lines. (A plan headed for
+decomposition gets none: its steps aren't known yet.)
 
 ```markdown
 ## Build checklist
@@ -162,8 +200,8 @@ Ask one question: **could a single build pass deliver all of this against one sp
   AI build gets a lot done in one pass, so a plan with five stages in it is usually
   one item, not five. **Size is not the test, and neither is the number of success
   criteria.**
-- **No** → it needs **decomposition**. Hand it to `orchestrate-plan` **scoped to this
-  ref**, say so in a line, and stop. Don't hand-create children here: shallow-splitting
+- **No** → it needs **decomposition**. Write the high-level plan anyway (step 5), then
+  hand the ref to `orchestrate-plan`. Don't hand-create children here: shallow-splitting
   an item to dodge the escalation is the failure mode this boundary exists to catch.
 
 There are only three honest reasons for "no":
@@ -187,7 +225,7 @@ front door and hands work back here when one pass could do it.
 - **Decompose.** No child items, no dependency tree, no anchors. That's
   `orchestrate-plan` — escalate, don't improvise.
 - **Write product code.** The plan is the deliverable. Building is the next step, by
-  whoever step 5 named.
+  whoever step 6 named.
 - **Spec a group.** Several leaves about to be built together share one brief:
   that's `create-context-pack`.
 - **Complete the item.** Evidence is stamped by whoever builds it.

@@ -8,9 +8,9 @@ description: >-
   top node. Use when planned leaves are about to be built together and want
   one brief — "spec out phase 1 of the build", "create a context pack for HV-3
   and HV-4", "ready these items for dev". For a SINGLE item that's `plan-item`,
-  not this. It does NOT decompose a goal (use `orchestrate-plan`) and does NOT
-  execute or write code (plan mode / `orchestrate-run`). Not for coarse items
-  that still need decomposition.
+  not this. It does NOT decompose (use `orchestrate-plan`, after `plan-item`)
+  and does NOT execute or write code (plan mode / `orchestrate-run`). Not for
+  coarse items that still need decomposition.
 ---
 
 # create-context-pack — the build-prep (spec) half of orchestrate
@@ -25,15 +25,17 @@ belong to native **plan mode**, which reads this pack as its input.
 
 ## Where it sits (the planner family — meet only at the graph)
 
-`orchestrate-plan` (decompose a goal → graph, **decomposition** axis) →
-**`create-context-pack`** (enrich + verify-prep a chosen group, **grouping** axis) →
-native **plan mode** (the code-level plan + the human "go").
+`plan-item` (plan one item — where every plan starts) → `orchestrate-plan` (decompose
+that planned ref → graph, **decomposition** axis) → **`create-context-pack`** (enrich +
+verify-prep a chosen group, **grouping** axis) → native **plan mode** (the code-level
+plan + the human "go").
 
 - `orchestrate-plan` stops at **work-grain** leaves (what / why / done, deliberately
   *above* the code). It reasons over decomposition and never touches grouping.
 - `plan-item` covers the **one-item** case on the same axis as this skill — approach +
-  `spec` + acceptance on a single leaf. Reach for a pack only when several leaves are
-  about to be built **together** and need shared, cross-cutting material.
+  `spec` + acceptance on a single leaf, and it's also where the sequence begins. Reach
+  for a pack only when several leaves are about to be built **together** and need
+  shared, cross-cutting material.
 - `create-context-pack` runs **after** planning, over the **grouping** axis the planner
   ignores, and writes a cross-cutting synthesis for one group you're about to build.
 - Plan mode does the **code-grain** layer (which files, what approach) that goes

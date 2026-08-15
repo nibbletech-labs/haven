@@ -29,7 +29,8 @@ and every tick reorients from it.
 
 ## Where it sits (the family — meet only at the graph)
 
-`orchestrate-plan` (decompose a goal → graph) → `create-context-pack` (batch ready
+`plan-item` (plan one item — where every plan starts) → `orchestrate-plan` (decompose
+that planned ref → graph) → `create-context-pack` (batch ready
 leaves under a container + a verify-first `spec` pack) → a **plan-first build agent**
 (ultracode-grade; the code) → **`orchestrate-run`** (this: loop, gate, worktree, merge, complete, converge).
 

@@ -8,23 +8,28 @@ use a plan-mode gate on a single feature or not, verify or not — is free-form 
 
 ## Planning grain — settle this before you run anything
 
-Planning comes in three sizes, and reaching for the wrong one is the common mistake. The test
-is always the same: **could a single build pass deliver this against one spec?**
+Planning is a **sequence, not a menu**. **Every plan starts on one item, in `plan-item`** —
+a one-line fix and a whole product launch alike. Only once there's a plan to look at do you
+ask the scale question, and that question has one form: **could a single build pass deliver
+this against one spec?**
 
-- **One item** (yes) → **`plan-item`**. Settle the approach, write it onto that item as its
-  `spec`, firm the acceptance, hand it to build. This is the ordinary case: a feature, a
-  change, a bug, the next phase of something already running. **Chunky is fine** — a
-  multi-stage plan sits happily on one ticket and `done_looks_like` can carry several
-  criteria. Size is not the test and neither is criteria count.
-- **Won't fit one item** (no) → **`orchestrate-plan`**, on a whole goal or rooted at the one
-  too-big ref. Only three things make it a "no": a **gate in the middle** (something must be
-  decided or produced before the rest can even be shaped), **split ownership** (part is
-  real-world human work), or it **won't survive one pass**. Decomposition is the
-  **escalation**, not the default — fragmenting costs handoffs and lost context.
-- **A group about to be built together** → **`create-context-pack`**, one shared brief.
+- **Yes** → the plan gets its build checklist, the item goes `ready`, and it's built. This is
+  the ordinary case. **Chunky is fine** — a multi-stage plan sits happily on one ticket and
+  `done_looks_like` can carry several criteria. Size is not the test and neither is criteria
+  count.
+- **No** → hand that ref to **`orchestrate-plan`**, which roots there and decomposes the plan
+  you just wrote. Only three things make it a "no": a **gate in the middle** (something must
+  be decided or produced before the rest can even be shaped), **split ownership** (part is
+  real-world human work), or it **won't survive one pass**. Decomposition is the second
+  stage, never the entry point — fragmenting costs handoffs and lost context.
+- Then **`plan-item` again per leaf**, and **`create-context-pack`** where several leaves are
+  about to be built together and want one shared brief.
 
-The two-stage flow is normal: plan one item, find it's really several, escalate that ref to
-`orchestrate-plan`, then come back to `plan-item` per leaf.
+**`orchestrate-plan` requires a plan** — it decomposes a ref that already carries a `spec`
+and never starts from a bare goal or a title. A greenfield "build the whole thing from
+scratch" is not an exception: it gets a high-level plan on one item first, and *that* is what
+gets broken down. The point of the ordering is that the decision to decompose is made by a
+person looking at a plan, not guessed at from a sentence.
 
 ## The fork
 

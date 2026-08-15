@@ -131,12 +131,14 @@ ordered plan.
      is its **approach settled** rather than its wording tightened — the person is asking
      "how should we actually do this?" — that whole pass is the **`plan-item`** skill:
      same bar, run end-to-end on one item and handed to build.
-   - Too coarse to firm — you **can't** give it one concrete, testable `done_looks_like`
-     because it's secretly several outcomes (multi-level, with ordering and unknowns) → it
-     needs **decomposition, not grooming**: hand it to **`orchestrate-plan`** (the decompose
-     loop — recursive break to buildable leaves, real dependency edges, acceptance per leaf,
+   - Too coarse to firm — one build pass couldn't deliver it, because a decision must land
+     before the rest can even be shaped, or the work splits across human and AI → it needs
+     **decomposition, not grooming**. That still starts at **`plan-item`**, which writes the
+     high-level plan and then hands the ref to **`orchestrate-plan`** (the decompose loop —
+     recursive break to buildable leaves, real dependency edges, acceptance per leaf,
      foundation-first for any shared contract, and AI-first research/discovery nodes for what
-     isn't knowable yet). Don't casually hand-create children — that under-thinks it.
+     isn't knowable yet). `orchestrate-plan` **requires that plan** and never decomposes a
+     bare title. Don't casually hand-create children — that under-thinks it.
    - Just two or three obvious mechanical pieces (not a tree) → `split` (workflow 7).
      Duplicate → `merge` (workflow 7).
    - Stale / won't-do → `haven item archive HV-7 --rationale "…"` (never delete).
