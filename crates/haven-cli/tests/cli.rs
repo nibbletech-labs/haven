@@ -411,6 +411,47 @@ fn skill_install_default_syncs_present_targets_without_creating_absent_ones() {
 }
 
 #[test]
+fn skill_install_seeds_a_new_skill_into_every_agent_already_set_up() {
+    // HV-294: a NEWLY shipped skill exists in neither agent, so per-skill presence
+    // says "nowhere" and the old fallback seeded Claude alone — leaving the new
+    // skill's description missing from Codex, the agent a routing fix most often
+    // targets. The fallback is now "every agent already set up for Haven".
+    let h = Haven::new();
+    let claude_plan = h.home.join(".claude/skills/plan-item");
+    let codex_plan = h.home.join(".agents/skills/plan-item");
+
+    // Set Codex up for Haven via a DIFFERENT skill, so `plan-item` itself is absent
+    // from both agents — exactly a new skill's shape on an existing install.
+    h.ok(&["skill", "install", "--skill", "haven", "--agent", "codex"]);
+    assert!(h.home.join(".agents/skills/haven/SKILL.md").exists());
+    assert!(!codex_plan.exists());
+    assert!(!claude_plan.exists());
+
+    let out = h.json(&["skill", "install", "--skill", "plan-item"]);
+    assert!(
+        out["installed"]["codex_plan-item"].is_string(),
+        "a new skill must reach every agent already set up for Haven"
+    );
+    assert!(codex_plan.join("SKILL.md").exists());
+    // Claude had no haven-managed skill at all here, so it stays untouched —
+    // presence is refreshed, never created.
+    assert!(
+        !claude_plan.exists(),
+        "must not create a target for an agent that isn't set up for Haven"
+    );
+}
+
+#[test]
+fn skill_install_seeds_claude_when_no_agent_is_set_up() {
+    // The baseline is unchanged: on a fresh machine with neither agent set up,
+    // the smart default still seeds Claude and leaves Codex alone.
+    let h = Haven::new();
+    h.ok(&["skill", "install", "--skill", "plan-item"]);
+    assert!(h.home.join(".claude/skills/plan-item/SKILL.md").exists());
+    assert!(!h.home.join(".agents/skills/plan-item").exists());
+}
+
+#[test]
 fn skill_install_stamps_provenance_markers() {
     // HV-282: every haven-managed skill dir carries a `.provenance.json` marker
     // (superskills PROVENANCE.md convention) saying haven owns it and how it refreshes.

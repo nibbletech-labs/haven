@@ -390,6 +390,23 @@ pub fn skill_target_presence(skill_name: &str) -> Result<(bool, bool)> {
     Ok((claude, codex))
 }
 
+/// Which agents are **set up for Haven at all**, as `(claude, codex)` — i.e. their
+/// skills root already holds at least one haven-managed skill. This is the fallback
+/// for a skill that exists in *neither* agent, which is exactly what a **newly shipped
+/// skill** looks like on an existing install: per-skill presence ([`skill_target_presence`])
+/// is the wrong granularity there, and seeding Claude alone silently under-installs on
+/// a Codex-only or both-agents setup — the new skill's description never reaches the
+/// agent that needed it. Presence is still never *created*: an agent with no
+/// haven-managed skills stays untouched.
+pub fn haven_agent_presence() -> Result<(bool, bool)> {
+    let has_any = |base: PathBuf| {
+        SKILL_REGISTRY
+            .iter()
+            .any(|s| base.join("skills").join(s.name).is_dir())
+    };
+    Ok((has_any(claude_dir()?), has_any(agents_dir()?)))
+}
+
 /// Write `skill_name`'s embedded snapshot into `skill_dir`, then prune any
 /// file already there that the snapshot no longer ships (a rename like
 /// `verify-ops.md` → `pack-ops.md` used to leave the old file behind forever)

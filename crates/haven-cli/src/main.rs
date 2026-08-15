@@ -2019,14 +2019,21 @@ fn cmd_skill(cmd: &SkillCmd) -> Result<Output> {
                 //  - explicit `--agent`: force exactly that target set;
                 //  - default (omitted): refresh every target whose copy already
                 //    exists, so a reinstall can't leave one agent stale — and if
-                //    the skill is installed nowhere, seed Claude as the baseline.
-                //    We never create a target that wasn't there (single-agent
-                //    setups stay respected — the `refresh_stale_skill_snapshots`
-                //    doctrine, now the CLI default too).
+                //    this skill is installed nowhere (a **newly shipped** skill on
+                //    an existing install), fall back to every agent already set up
+                //    for Haven, not Claude alone: seeding Claude only leaves the
+                //    new skill's description missing from Codex, which is where a
+                //    routing fix is most often needed. Claude stays the baseline
+                //    when neither agent is set up. We never create a target that
+                //    wasn't there (single-agent setups stay respected — the
+                //    `refresh_stale_skill_snapshots` doctrine, now the CLI default too).
                 let (want_claude, want_codex) = match agent {
                     Some(a) => (a.includes_claude(), a.includes_codex()),
                     None => match config::skill_target_presence(name)? {
-                        (false, false) => (true, false),
+                        (false, false) => match config::haven_agent_presence()? {
+                            (false, false) => (true, false),
+                            agents => agents,
+                        },
                         present => present,
                     },
                 };

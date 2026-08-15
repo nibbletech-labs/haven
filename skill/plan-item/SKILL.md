@@ -7,10 +7,10 @@ description: >-
   default for "make a plan", "plan out the next phase of X", "plan the
   approach for HV-42", "how should we do this ticket", "work out how to do
   this before you build it" — one feature, one change, one bug, one phase
-  that fits a single buildable item. Captures the item first if none exists
-  yet. Escalates to `orchestrate-plan` only when the work genuinely won't
-  reduce to one testable acceptance. Not decomposition, not a work tree, and
-  it writes no code.
+  that fits a single buildable item — chunky and multi-stage is fine, one
+  ticket holds a lot. Captures the item first if none exists yet. Escalates
+  to `orchestrate-plan` only when one build pass genuinely can't deliver it.
+  Not decomposition, not a work tree, and it writes no code.
 ---
 
 # plan-item — the plan for one item
