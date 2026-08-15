@@ -42,6 +42,10 @@ Run every Haven interaction through these five steps:
    the next-eligible items flagged, in-progress/waiting (with owners), the core
    conventions, and the untriaged inbox — so you orient from one read instead of
    separate `status` + `next` + `item list` + `inbox` calls.
+   If the block carries an **`UPDATE`** section, a newer `haven` is out: **say so
+   once, in a sentence, and ask** — then run the command it names if they say yes.
+   Never update the binary unprompted; it's their tool and they may be mid-run.
+   Don't repeat the nudge later in the session if they didn't take it.
 2. **Classify the intent:** capture · groom · plan · dispatch · execute · handoff ·
    complete · evolve · archive. (One reply can span a few; do the smallest set.)
 3. **Use the smallest safe operation** — and prefer the *atomic* tool when one

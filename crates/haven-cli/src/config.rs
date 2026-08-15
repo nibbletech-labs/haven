@@ -1337,6 +1337,76 @@ pub fn update_advice(method: &InstallMethod) -> String {
     }
 }
 
+// ---- update nudge cache ---------------------------------------------------
+//
+// A new release is invisible unless someone runs `self update --check`, so the
+// nudge rides `prime` instead — the one read every session already makes. The
+// split matters: `prime` reads a **cached verdict** and never touches the
+// network, because a per-session HTTP call on the session-start path would be
+// both slow and chatty. The refresh happens elsewhere (MCP startup, `doctor`),
+// at most once a day.
+
+/// Meta keys backing the cache. Values are plain strings in the existing `meta`
+/// table, so this needs no migration.
+const UPDATE_CHECK_AT: &str = "update_check_at";
+const UPDATE_NUDGE: &str = "update_nudge";
+
+/// How stale the cached verdict may get before a refresh actually calls out.
+const UPDATE_CHECK_INTERVAL_SECS: i64 = 24 * 60 * 60;
+
+/// Refresh the cached update verdict if it is older than a day, writing the
+/// nudge (or clearing it) into `meta`. Best-effort throughout: offline, rate
+/// limited, or an unparseable version all leave the cache untouched rather than
+/// claiming an update. Returns the nudge now in force, if any.
+///
+/// Deliberately *not* called by `prime`: prime reads the cache this writes.
+pub fn refresh_update_cache(store: &Store) -> Option<String> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let last = store
+        .meta_get(UPDATE_CHECK_AT)
+        .ok()
+        .flatten()
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(0);
+    if now - last < UPDATE_CHECK_INTERVAL_SECS {
+        return cached_update_nudge(store); // still fresh — no network
+    }
+
+    let current = env!("CARGO_PKG_VERSION");
+    let Some(latest) = latest_release_version() else {
+        // Couldn't reach GitHub. Leave the previous verdict in place and don't
+        // stamp the timestamp, so the next run retries rather than going quiet
+        // for a day because the network blipped once.
+        return cached_update_nudge(store);
+    };
+    let _ = store.meta_set(UPDATE_CHECK_AT, &now.to_string());
+
+    let nudge = match is_newer(current, &latest) {
+        Some(true) => {
+            let advice = detect_install_method()
+                .map(|m| update_advice(&m))
+                .unwrap_or_else(|_| "Reinstall with your original method.".into());
+            format!("haven {latest} is available (you have {current}). {advice}")
+        }
+        // Up to date, or an unparseable pair we refuse to guess at.
+        _ => String::new(),
+    };
+    let _ = store.meta_set(UPDATE_NUDGE, &nudge);
+    (!nudge.is_empty()).then_some(nudge)
+}
+
+/// The cached verdict, without any network access.
+fn cached_update_nudge(store: &Store) -> Option<String> {
+    store
+        .meta_get(UPDATE_NUDGE)
+        .ok()
+        .flatten()
+        .filter(|s| !s.is_empty())
+}
+
 /// Best-effort: ask GitHub for the latest published version. Returns `None` on
 /// any failure (offline, rate-limit, no releases yet) — never an error, so
 /// `self update` works fully offline. The only network path in the CLI.

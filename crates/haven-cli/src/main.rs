@@ -1425,6 +1425,15 @@ fn run(cli: &Cli) -> Result<Output> {
             for dir in config::refresh_stale_skill_snapshots() {
                 eprintln!("haven: refreshed skill snapshot at {}", dir.display());
             }
+            // Refresh the cached update verdict that `prime` reports, on its own
+            // thread with its own store handle so a slow or hanging GitHub can
+            // never delay serving. At most one real call a day; the result is
+            // read by the *next* prime, which is what keeps prime offline.
+            std::thread::spawn(|| {
+                if let Ok(s) = config::open_store() {
+                    config::refresh_update_cache(&s);
+                }
+            });
             // Serve until stdin EOF; stdout is the MCP channel, so exit without
             // printing any Output afterwards.
             let s = config::open_store()?;
@@ -2381,6 +2390,21 @@ fn doctor_report(store: Result<Store>, paths: &config::Paths) -> Result<serde_js
                 "ok",
                 format!("store schema v{store_v}, binary supports v{binary_v}"),
             ));
+
+            // 1c. Release version. doctor is the diagnostic command — occasional
+            // and already slow — so it does the live check (rate-limited to once
+            // a day inside), refreshing the cached verdict `prime` reports.
+            match config::refresh_update_cache(&s) {
+                Some(nudge) => checks.push(check("version", "warn", nudge)),
+                None => checks.push(check(
+                    "version",
+                    "ok",
+                    format!(
+                        "running {} (no newer release known)",
+                        env!("CARGO_PKG_VERSION")
+                    ),
+                )),
+            }
             Some(s)
         }
         Err(e) => {

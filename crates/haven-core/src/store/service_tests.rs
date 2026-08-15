@@ -3762,3 +3762,52 @@ fn create_with_malformed_external_ref_is_rejected() {
         .unwrap_err();
     assert!(err.to_string().contains("target"), "got: {err}");
 }
+
+#[test]
+fn prime_reports_the_cached_update_nudge_and_stays_offline() {
+    // The nudge rides prime because prime is the one read every session already
+    // makes. Prime must report a *cached* verdict only — the CLI's daily check
+    // writes `update_nudge`, and prime never calls out to decide.
+    let s = store();
+    s.add_item(
+        None,
+        NewItem {
+            title: "Ship the API".into(),
+            done_looks_like: Some("returns 200".into()),
+            status: Some(Status::Ready),
+            commit: true,
+            assign: Some(OwnerKind::Ai),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    // Never checked: no key, so no section — a fresh store must not imply an update.
+    let p = s.prime(None).unwrap();
+    assert!(p.update_nudge.is_none());
+    assert!(!p.render().contains("UPDATE"));
+
+    // Checked and up to date: the writer stores an empty string rather than
+    // deleting the key, so empty must read as "nothing to say", not as a nudge.
+    s.meta_set("update_nudge", "").unwrap();
+    let p = s.prime(None).unwrap();
+    assert!(p.update_nudge.is_none());
+    assert!(!p.render().contains("UPDATE"));
+
+    // An available update surfaces, carrying the install-method advice, and tells
+    // the agent to ask rather than update someone's binary mid-session.
+    s.meta_set(
+        "update_nudge",
+        "haven v0.2.0 is available (you have 0.1.5). Update by re-running: install.sh",
+    )
+    .unwrap();
+    let p = s.prime(None).unwrap();
+    assert_eq!(
+        p.update_nudge.as_deref(),
+        Some("haven v0.2.0 is available (you have 0.1.5). Update by re-running: install.sh")
+    );
+    let rendered = p.render();
+    assert!(rendered.contains("UPDATE"));
+    assert!(rendered.contains("v0.2.0 is available"));
+    assert!(rendered.contains("ask before updating"));
+}

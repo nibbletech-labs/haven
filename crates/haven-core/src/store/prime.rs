@@ -97,6 +97,13 @@ pub struct Prime {
     /// `None` below the threshold, so the line is absent from the block.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub orchestrate_advisory: Option<String>,
+    /// A "newer haven is out" line, read from the `update_nudge` meta key the
+    /// CLI's daily check writes. Read-only here, and never a network call:
+    /// prime is the session-start hot path, so it reports a **cached** verdict
+    /// and leaves refreshing it to MCP startup / `doctor`. Absent when up to
+    /// date, when the check has never run, or when GitHub was unreachable.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub update_nudge: Option<String>,
 }
 
 /// The load-bearing conventions a fresh agent needs at session start. Kept tight
@@ -204,6 +211,13 @@ impl Store {
             // HV-265: fold in the orchestrate-family advisory from its single
             // source (the ai dispatch frontier), independent of the sections above.
             orchestrate_advisory: self.orchestrate_advisory(project)?.map(str::to_string),
+            // Cached only — see the field doc. A missing/empty key just means
+            // "nothing to say", never an error worth failing prime over.
+            update_nudge: self
+                .meta_get("update_nudge")
+                .ok()
+                .flatten()
+                .filter(|s| !s.is_empty()),
         })
     }
 
@@ -358,6 +372,14 @@ impl Prime {
         }
         if let Some(nudge) = &self.grooming_nudge {
             out.push_str(&format!("  ! {nudge}\n"));
+        }
+
+        // §6 Update nudge. Last, and its own section, because it is about the
+        // tool rather than the work — it should read as an aside, not compete
+        // with the queue. Phrased so the agent surfaces it and asks: updating
+        // the binary under someone mid-session is not ours to decide.
+        if let Some(nudge) = &self.update_nudge {
+            out.push_str(&format!("\nUPDATE\n  {nudge}\n  Mention this once and ask before updating; don't update unprompted.\n"));
         }
 
         out
