@@ -1,10 +1,17 @@
 # Running Haven work — the executor, or yourself
 
 There is **one real fork**: hand an already-planned graph to **`orchestrate-run`** (the
-autonomous executor), or **build it yourself** directly. Everything else — plan first or not,
-use a plan-mode gate on a single feature or not, verify or not — is free-form composition on the
-*yourself* side, not a separate mode. The supporting skills (`plan-item`, `orchestrate-plan`,
-`create-context-pack`, `verify-acceptance`) compose into **either** side.
+autonomous executor), or **build it yourself** directly. Most of the rest — plan mode gate or
+not, how the work is sequenced — is free-form composition on the *yourself* side, not a
+separate mode. The supporting skills (`plan-item`, `orchestrate-plan`, `create-context-pack`,
+`verify-acceptance`) compose into **either** side.
+
+**One thing is not free-form: the review.** The executor gates every leaf with a separate
+verifier before it merges. Building directly doesn't inherit that, so it carries it by hand —
+at least one **fresh-eyes code review** (an agent that didn't write the code) before the item
+completes, and more at real checkpoints on a chunky item. `plan-item` writes those review
+points into the spec's build checklist so they aren't left to memory. Skipping the
+orchestrator is fine; skipping the judgment is not.
 
 ## Planning grain — settle this before you run anything
 
@@ -33,11 +40,12 @@ person looking at a plan, not guessed at from a sentence.
 
 ## The fork
 
-- **Direct** — you (the main agent) build it, in this thread. Optionally decompose first
-  (`orchestrate-plan`), spec a batch (`create-context-pack`), and check the result (`verify-acceptance`).
-  **Best for:** one task or a handful; you want the highest quality and your own eyes on it; the
-  work fits the main context. **Enter:** just do the work; pull in the planning/spec/verify skills
-  as needed.
+- **Direct** — you (the main agent) build it, in this thread. Plan it first (`plan-item`),
+  decompose if it needs it (`orchestrate-plan`), spec a batch (`create-context-pack`), and check
+  the result (`verify-acceptance`). **Best for:** one task or a handful; you want the highest
+  quality and your own eyes on it; the work fits the main context. **Enter:** just do the work,
+  pulling in the planning/spec skills as needed — but run the fresh-eyes review before you
+  complete anything (above).
 
 - **Executor — `orchestrate-run`** — the main session becomes a **conductor**. Per leaf it makes a
   git worktree, spawns a **Build** subagent, gates it with a **separate Verify** subagent (fresh

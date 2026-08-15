@@ -38,8 +38,11 @@ plan + the human "go").
   shared, cross-cutting material.
 - `create-context-pack` runs **after** planning, over the **grouping** axis the planner
   ignores, and writes a cross-cutting synthesis for one group you're about to build.
-- Plan mode does the **code-grain** layer (which files, what approach) that goes
-  stale the instant code moves — so it's never frozen into the graph.
+- Plan mode does the **code-grain** layer. Its **volatile** half — exact line numbers,
+  a file-by-file edit list — is stale the instant code moves, so it's never frozen into
+  the graph. Its **durable** half — the approach, the boundary, the sequence — is worth
+  keeping, and `plan-item` distils exactly that onto the item's `spec` rather than
+  letting it evaporate into a transcript.
 
 The pack lives **in the graph** (a `context-pack` artifact on the group's top node + the
 members' own fields), never a separate frozen file. Leaves inherit the shared
