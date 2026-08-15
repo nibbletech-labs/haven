@@ -177,6 +177,14 @@ const PLAN_ITEM_SKILL_FILES: &[(&str, &str)] = &[
         include_str!("../../../skill/plan-item/SKILL.md"),
     ),
     (
+        "references/planning-method.md",
+        include_str!("../../../skill/plan-item/references/planning-method.md"),
+    ),
+    (
+        "references/build-handoff.md",
+        include_str!("../../../skill/plan-item/references/build-handoff.md"),
+    ),
+    (
         "agents/openai.yaml",
         include_str!("../../../skill/plan-item/agents/openai.yaml"),
     ),

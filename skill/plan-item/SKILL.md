@@ -53,7 +53,7 @@ plan-item  →  one build pass?  ──yes──→  build it (spec + checklist,
 
 Read the `haven` skill's **`references/spec-quality.md`** — it is the bar this whole
 skill writes to (the field map, adaptive ceremony, clarify-first, the shippability
-linter). Read `references/surface-map.md` for CLI⇄MCP op detail rather than
+linter). Read its `references/surface-map.md` for CLI⇄MCP op detail rather than
 restating arguments from memory. The gotchas that bite here:
 
 - **Structure only through ops; content as files.** Node fields move via
@@ -69,6 +69,15 @@ restating arguments from memory. The gotchas that bite here:
   constraints + approach. Not `design` — that's an anchor-side role. The same holds
   for an item headed for decomposition: its high-level plan is still `spec` on that
   node, and it becomes the shared foundation the children read up to.
+
+**This skill's own references**, pulled in when the step reaches them rather than up front:
+
+- **`references/planning-method.md`** — steps 3–5: how to work out the approach with plan
+  mode's rigour but not inside plan mode, and the read-only planning subagent to delegate
+  the exploring to.
+- **`references/build-handoff.md`** — steps 5–6, **one-pass branch only**: the build
+  checklist and the fresh-eyes review the item can't complete without. A plan headed for
+  decomposition needs neither.
 
 ## The steps
 
@@ -132,7 +141,7 @@ restating arguments from memory. The gotchas that bite here:
 
    **The scale call shapes what you write:**
    - **One pass** → a build spec: approach at code altitude, plus the **build
-     checklist** (below).
+     checklist** and its review points (`references/build-handoff.md`).
    - **Needs decomposition** → a **high-level plan**: the goal, the parts the work
      divides into (as prose, not child items), the ordering and gates you can see,
      the constraints, the boundary, and the decisions still open. **No build
@@ -142,8 +151,8 @@ restating arguments from memory. The gotchas that bite here:
      boundary and constraints are the load-bearing parts.
 
    Do this thinking **inline**, in this session — not inside the harness's plan mode.
-   *Take plan mode's process, not plan mode* (below) has the method, and the read-only
-   planning subagent to delegate the exploring to.
+   Read **`references/planning-method.md`** for why that costs you the artifact, the
+   method to run instead, and the read-only planning subagent to hand the exploring to.
 
    Then run the **shippability linter** (`spec-quality.md`): kill weasel words,
    every contract carries a schema *and* an example, architecture claims name real
@@ -164,7 +173,8 @@ restating arguments from memory. The gotchas that bite here:
    Building it here is the **normal** choice for one item — `orchestrate-run` is a loop
    for many leaves, and it's overhead for one. But building it here means **you** carry
    the review the executor would have run: at least one fresh-eyes code review before it
-   completes (*Review*, below), written into the spec so it isn't optional.
+   completes, written into the spec so it isn't optional
+   (**`references/build-handoff.md`**).
 
    Whoever builds it finishes with `haven item complete <ref> --evidence "…"`, naming
    the review that ran.
@@ -173,118 +183,6 @@ restating arguments from memory. The gotchas that bite here:
    there and reads the plan you just wrote. **Don't set it `ready`** and don't give
    it an owner: it isn't dispatchable work, it's about to become a parent. Say what
    it is and why it's being broken down, in a line.
-
-## Take plan mode's process, not plan mode
-
-A native plan mode is worth learning from and **wrong to run this skill inside**. Take the
-discipline; leave the mode.
-
-### Why not the mode itself
-
-- **Its plan lands in the harness's own plan file, not the graph.** Getting it onto the
-  item is a separate step, afterwards.
-- **Exiting is the moment control flips to building.** The approval options are framed as
-  *execute the plan*, so code starts immediately and that separate step is the one that
-  silently gets skipped. The artifact is this skill's only output, so losing it loses
-  everything.
-- **What's approved isn't the artifact.** The person approves the code-grain plan on
-  screen, not the spec that would land on the item — two documents, one of them unagreed.
-- **The endpoints are opposite.** This skill stops *at* a plan on an item; plan mode is
-  built to *start* a build. Composed, one of them loses, and in practice it's this one.
-
-Plan mode keeps its place **one step later**: once the spec exists and the item is
-`ready`, it's the right human gate on the *code* plan, because the durable artifact is
-already safe in the graph and what's being gated is the build.
-
-### The process, run inline
-
-Plan mode's value was never the mode — it's the discipline it imposes. Run that here:
-
-1. **Explore before you propose.** Glob / grep / read the areas the work touches, rather
-   than reasoning from the request alone. **Name the real files in the spec** — the
-   shippability linter demands it, and it's the fastest tell that the exploration
-   actually happened.
-2. **Follow the patterns already in the codebase.** A plan that invents a second way to do
-   something the repo already does is a worse plan, however tidy it reads.
-3. **Weigh more than one approach** where the task admits several, and record in the spec
-   which you took and why. One line about the rejected alternative saves the whole
-   argument being had again in three weeks.
-4. **Delegate the exploring to a read-only planning subagent** where the harness has one.
-   In Claude Code that's the `Plan` agent type: architect-grade, every write tool removed,
-   and it **returns** the plan to you instead of taking over the session. That is how you
-   get plan mode's rigour without plan mode's exit — the subagent thinks, *you* write the
-   spec, and the artifact still lands on the item. No such agent? Do it inline; the points
-   above are the whole method.
-5. **Stay at spec altitude.** The output is the item's `spec`, not a file-by-file edit
-   list. That last layer is stale the moment code moves, and belongs in the build session
-   rather than the graph.
-
-**Prefer your harness's own version of this where you can read it without entering the
-mode.** The list above is transcribed from what a native plan mode asks for, and it's
-written out here so the method survives on a harness that has no plan mode at all — but
-it's a snapshot, and first-party guidance moves. In Claude Code the `EnterPlanMode` tool
-description is readable directly (via `ToolSearch`) and carries the current version; read
-it and follow it where it's richer than the list. **Do not call `EnterPlanMode` to find
-out** — reading the guidance is free, entering the mode is the thing this whole section
-exists to avoid.
-
-## The build checklist (every one-pass spec carries one)
-
-One item can hold a lot of work, so a spec that's going to build ends with an ordered
-**build checklist** — the route through the work, as tickable lines. (A plan headed for
-decomposition gets none: its steps aren't known yet.)
-
-```markdown
-## Build checklist
-- [ ] Add the `source_kind` column and its migration
-- [ ] Wire the TVDB client behind the existing lookup interface
-- [ ] **REVIEW** — fresh-eyes code review of the schema and the lookup contract,
-      before anything is built on top of them
-- [ ] Backfill artwork for titles already scanned
-- [ ] Show per-title match status in the library view
-- [ ] **REVIEW** — fresh-eyes code review of the full diff
-- [ ] Tick each box here as it lands — this is how progress is reported
-```
-
-- **Ordered, and every line a visible unit of progress.** Aim for steps a person could
-  watch tick past. Not "implement the feature" (one box is not a checklist), and not
-  twenty micro-edits (that's a diff, not progress).
-- **Review points are checklist lines**, so they're tracked and ticked like the rest of
-  the route. How many, and where, is *Review* below.
-- **It's the route, not the destination.** `done_looks_like` stays the outcome test and
-  the thing verification judges. A ticked checklist is **not** evidence the item is
-  done — never let the checklist stand in for acceptance.
-- **Tell the builder to tick it in the file as they go**, in the spec itself. Where the
-  harness has its own to-do list, mirror the checklist into it — but `spec.md` is the
-  durable record and the one the person can read without asking anyone.
-- **Chunky items are exactly why this exists.** A five-stage ticket with no checklist is
-  opaque to the person and easy for the builder to lose its place in. This is the price
-  of keeping items big, and it's a cheap one.
-
-## Review — a one-pass build still gets fresh eyes
-
-`orchestrate-run` gates every leaf with a **separate** verifier before it merges. A
-single item built in one pass skips that machinery, and rightly so — standing up an
-orchestrator for one ticket is pure overhead. It must not skip the **judgment**. So the
-plan says so, in the spec, where whoever builds it will actually read it:
-
-- **At least one code review, always.** Before the item completes, a review agent that
-  **did not write the code** reviews the diff. Fresh eyes is the whole point: the agent
-  that just built it re-reads its own intent instead of the code in front of it. In
-  Claude Code that's `/code-review` or a review subagent; use whatever your harness
-  offers, so long as it isn't the builder.
-- **More than one when the work has real checkpoints.** Put extra `REVIEW` lines in the
-  build checklist at the boundaries that matter — a migration landing, an API contract
-  going in, a flow becoming usable end to end. Four reviews of 400 lines beat one review
-  of 1,600, and a checkpoint review catches a wrong foundation *before* three more stages
-  get built on it. A chunky item with no interior review point is exactly the case this
-  rule exists for.
-- **Code review and acceptance are different questions.** A review asks "is this code
-  right?"; `verify-acceptance` asks "does this meet `done_looks_like`?" A substantial
-  item wants both, and neither stands in for the other.
-- **Nothing completes on an unreviewed diff.** The review runs, its findings are fixed or
-  explicitly accepted, and `haven item complete <ref> --evidence "…"` names which review
-  ran and what it found. An item completed with no review named is a gap, not a shortcut.
 
 ## The size test
 
