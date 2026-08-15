@@ -141,9 +141,8 @@ restating arguments from memory. The gotchas that bite here:
      that `orchestrate-plan`'s children inherit by reading up to this node, so the
      boundary and constraints are the load-bearing parts.
 
-   Where the harness has a **native plan mode**, that's the natural place to have done
-   steps 3–5's thinking — see *Borrow your harness's plan mode* below, including what
-   of its output to keep and what to drop.
+   Do this thinking **inline**, in this session — not inside the harness's plan mode
+   (see *Don't route this through plan mode* below).
 
    Then run the **shippability linter** (`spec-quality.md`): kill weasel words,
    every contract carries a schema *and* an example, architecture claims name real
@@ -174,29 +173,28 @@ restating arguments from memory. The gotchas that bite here:
    it an owner: it isn't dispatchable work, it's about to become a parent. Say what
    it is and why it's being broken down, in a line.
 
-## Borrow your harness's plan mode (where it has one)
+## Don't route this through plan mode (it looks right, and it isn't)
 
-Some harnesses ship a **native plan mode**: read-only exploration of the codebase, a
-structured plan, and a human approve-or-redirect gate before anything gets written.
-Where yours has one, use it to do the thinking in steps 3–5. It is real infrastructure,
-and it enforces this skill's own rule for you — plan mode can't write product code.
+A harness with a native plan mode offers read-only exploration, a structured plan and a
+human gate, so running this skill *inside* it is an obvious-looking idea. **Don't** — it
+loses the artifact, which is the only thing this skill produces:
 
-Then **land the result on the item.** A plan-mode plan normally evaporates into the
-transcript. The whole point here is that it becomes the item's `spec`, where the builder
-reads it — often a subagent that never saw your session — and where the person can read
-it again next week.
+- **Plan mode can't write.** It's read-only, so the `spec` can't be written while you're
+  in it. The write has to happen after you exit.
+- **Exiting is the moment control flips to building.** The approval options are framed as
+  *execute the plan*, so the very next thing that happens is code — and writing the plan
+  onto the item is the step that silently gets skipped.
+- **The approval wouldn't cover the artifact anyway.** What the person approves is the
+  code-grain plan on screen, not the distilled spec that would land on the item. Two
+  different documents, one of which nobody agreed to.
+- **The endpoints are opposite.** This skill stops *at* a plan on an item. Plan mode is
+  built to *start* a build. Composing them means one of the two doesn't get what it wants,
+  and in practice it's this one.
 
-- **Distil, don't paste.** Keep the durable half: the approach, the scope boundary, the
-  constraints, and the sequence (which becomes the build checklist). Drop the volatile
-  half — exact line numbers, a file-by-file edit list — which is stale the moment code
-  moves. A one-pass item about to be built can carry more detail, since it's consumed
-  within the hour; a high-level plan headed for `orchestrate-plan` stays well above the
-  code, because it has to survive until the tree is built.
-- **The approval carries.** If the person approved the plan in plan mode, your step-4
-  scale call is confirmed with it — don't re-ask what they just said yes to.
-- **No plan mode? Nothing changes.** Do the same thinking inline and write the same spec.
-  Plan mode is a convenience for the harnesses that have one, never a prerequisite — this
-  skill exists precisely because not every harness does.
+So do the thinking inline, and write the spec. **Plan mode still has its place — one step
+later.** Once the spec exists and the item is `ready`, using plan mode as the human gate on
+the *code* plan is exactly right: the durable artifact is already safe in the graph, and
+what plan mode gates is the build, which is what it's for.
 
 ## The build checklist (every one-pass spec carries one)
 
