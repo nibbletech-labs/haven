@@ -8,9 +8,9 @@ description: >-
   plan exists and you want it built — "run the build", "execute the plan",
   "dispatch the ready work", "build phase 1", "work the backlog". It owns the
   loop / worktree / gate / merge and does NOT write code itself. Defers
-  decomposing a goal to `orchestrate-plan`, the build spec to
-  `create-context-pack`, the code + human approval gate to native plan mode.
-  Not for a one-off single-item edit (use the `haven` skill).
+  decomposing to `orchestrate-plan`, planning one item to `plan-item`, the
+  build spec to `create-context-pack`, the code + human approval gate to
+  native plan mode. Not for a one-off single-item edit (use the `haven` skill).
 ---
 
 # orchestrate-run — the executor half of orchestrate

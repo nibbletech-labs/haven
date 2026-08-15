@@ -171,6 +171,17 @@ const HAVEN_SKILL_FILES: &[(&str, &str)] = &[
     ),
 ];
 
+const PLAN_ITEM_SKILL_FILES: &[(&str, &str)] = &[
+    (
+        "SKILL.md",
+        include_str!("../../../skill/plan-item/SKILL.md"),
+    ),
+    (
+        "agents/openai.yaml",
+        include_str!("../../../skill/plan-item/agents/openai.yaml"),
+    ),
+];
+
 const ORCHESTRATE_PLAN_SKILL_FILES: &[(&str, &str)] = &[
     (
         "SKILL.md",
@@ -274,6 +285,10 @@ const SKILL_REGISTRY: &[Skill] = &[
     Skill {
         name: "haven",
         files: HAVEN_SKILL_FILES,
+    },
+    Skill {
+        name: "plan-item",
+        files: PLAN_ITEM_SKILL_FILES,
     },
     Skill {
         name: "orchestrate-plan",

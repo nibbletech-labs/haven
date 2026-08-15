@@ -1,0 +1,13 @@
+name: plan-item
+agent: codex
+skill: plan-item
+mcp:
+  server: haven
+  command: haven
+  args:
+    - mcp
+discovery:
+  skill_paths:
+    - .agents/skills/plan-item
+    - ~/.agents/skills/plan-item
+    - /etc/codex/skills/plan-item

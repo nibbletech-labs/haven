@@ -2,9 +2,29 @@
 
 There is **one real fork**: hand an already-planned graph to **`orchestrate-run`** (the
 autonomous executor), or **build it yourself** directly. Everything else — plan first or not,
-use native plan mode on a single feature or not, verify or not — is free-form composition on the
-*yourself* side, not a separate mode. The supporting skills (`orchestrate-plan`,
+use a plan-mode gate on a single feature or not, verify or not — is free-form composition on the
+*yourself* side, not a separate mode. The supporting skills (`plan-item`, `orchestrate-plan`,
 `create-context-pack`, `verify-acceptance`) compose into **either** side.
+
+## Planning grain — settle this before you run anything
+
+Planning comes in three sizes, and reaching for the wrong one is the common mistake. The test
+is always the same: **could a single build pass deliver this against one spec?**
+
+- **One item** (yes) → **`plan-item`**. Settle the approach, write it onto that item as its
+  `spec`, firm the acceptance, hand it to build. This is the ordinary case: a feature, a
+  change, a bug, the next phase of something already running. **Chunky is fine** — a
+  multi-stage plan sits happily on one ticket and `done_looks_like` can carry several
+  criteria. Size is not the test and neither is criteria count.
+- **Won't fit one item** (no) → **`orchestrate-plan`**, on a whole goal or rooted at the one
+  too-big ref. Only three things make it a "no": a **gate in the middle** (something must be
+  decided or produced before the rest can even be shaped), **split ownership** (part is
+  real-world human work), or it **won't survive one pass**. Decomposition is the
+  **escalation**, not the default — fragmenting costs handoffs and lost context.
+- **A group about to be built together** → **`create-context-pack`**, one shared brief.
+
+The two-stage flow is normal: plan one item, find it's really several, escalate that ref to
+`orchestrate-plan`, then come back to `plan-item` per leaf.
 
 ## The fork
 

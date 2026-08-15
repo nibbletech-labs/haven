@@ -1,29 +1,67 @@
 ---
 name: orchestrate-plan
 description: >-
-  The starting point for a large, multi-part effort with no plan yet —
-  building or launching a product, app, site, or business end-to-end,
-  especially greenfield ("from scratch", "the lot"). Break it into a
-  structured Haven work-graph: a tree of ownable tasks with dependencies and
-  acceptance criteria. Planning, not doing — fire it even when phrased as
-  doing the work ("build it", "create the site"). Also fires on "decompose
-  this into a dependency / work graph / backlog". A bare "make a plan" for one
-  feature is native plan mode, not this. If a plan exists and they just want
-  it built, that's `orchestrate-run`; for one task or grooming one item, use
-  `haven`. Not for a one-off, single-component, or already-decomposed task.
+  Break down work that will not fit in one item, into a Haven work-graph: a
+  tree of ownable leaves with dependencies and acceptance criteria. Two ways
+  in — a large multi-part effort with no plan yet (building or launching a
+  product, app, site or business end-to-end, especially greenfield: "from
+  scratch", "the lot"), or a single item that turned out too big to build
+  ("HV-30 is too big, break it down", "decompose this into a dependency /
+  work graph / backlog"), where it roots at that ref. Planning, not doing —
+  fire it even when phrased as doing the work ("build it", "create the
+  site"). A plan for ONE feature, change, bug or ticket is `plan-item`, not
+  this — including "make a plan", "plan out the next phase of X" and "plan
+  the approach for HV-42". If a plan exists and they just want it built,
+  that's `orchestrate-run`; to capture or groom one item, use `haven`. Never
+  fires on a bare "keep going" / "ok go".
 ---
 
-# orchestrate-plan — the planner half of orchestrate
+# orchestrate-plan — the decomposition half of orchestrate
 
-You take a goal and **decompose it into a Haven work-graph**, one node per tick,
-until every node is either broken down further or is a skill-grain **leaf** a
-dispatcher can pick up. You build structure; **you execute nothing** — no agents,
-no skills dispatched, no files written as work product. Execution is a separate
-sibling skill (`orchestrate-run`) that consumes the same graph.
+You take work that **won't fit in one item** and **decompose it into a Haven
+work-graph**, one node per tick, until every node is either broken down further or
+is a skill-grain **leaf** a dispatcher can pick up. You build structure; **you
+execute nothing** — no agents, no skills dispatched, no files written as work
+product. Execution is a separate sibling skill (`orchestrate-run`) that consumes
+the same graph.
 
 This is the recursive-decomposition reasoning from builder's `orchestrate`,
 re-expressed natively against Haven: the graph **is** the plan (no `state.json`,
 no backlog files), and the four edge layers carry the structure.
+
+## Front door — run this before you read anything else
+
+Decomposition is the **expensive** planning mode, and it is not the common one. Most
+planning is one item, and that belongs to **`plan-item`**. So before you pull in this
+skill's references or the `haven` skill's — they are op detail for a tree you have not
+yet decided to build, and loading them up front is most of what makes this skill feel
+heavy — answer two questions in order:
+
+1. **Is there a decomposition being asked for at all?** A bare continuation ("keep
+   going", "ok go", "carry on") is never one. Neither is a bug report, a question, or
+   a request to just make a change. If nobody asked for work to be broken down or
+   planned, **stop — you were not called.**
+2. **Will it fit in one item?** Could a single build pass deliver it against one spec?
+   If yes it is one item **however chunky** — a multi-stage plan sits happily on one
+   ticket, and several success criteria on one item is normal, not a decompose signal.
+   Say so in a line and hand it to **`plan-item`**. Work only reaches you for one of
+   three reasons: a **gate in the middle** (something must be decided or produced
+   before the rest can even be shaped), **split ownership** (part is real-world human
+   work), or it **genuinely won't survive one pass**. Absent one of those, you are
+   about to fragment work that didn't need it.
+
+The gate is one judgment, not a read. Pass it, then load `references/tick-ops.md` and
+the rest as you actually need them. The boundary reads both ways — `plan-item` runs
+the same test and escalates here when one pass can't do it.
+
+## Two ways in
+
+- **A goal with no plan yet.** Mint the decomposition root as an `anchor` and work
+  down from it (step 1).
+- **One existing item that's too big** — the escalation from `plan-item`, or a direct
+  "break HV-30 down". **Root at that ref**: it becomes the parent, its subtree is your
+  whole world, and you never touch or replan anything outside it (steps 1–2). This is
+  the second stage of a two-stage flow, not a fresh project plan.
 
 ## Why a graph, and why ticks
 
@@ -39,9 +77,10 @@ no backlog files), and the four edge layers carry the structure.
 
 ## Operating rules (inherit from the `haven` skill)
 
-Read the `haven` skill's `references/surface-map.md` (CLI⇄MCP differences) and
-`references/workflows.md` for op detail — do not restate arguments from memory.
-The gotchas that bite the planner:
+Once the front-door gate has passed and you are about to run ops, read the `haven`
+skill's `references/surface-map.md` (CLI⇄MCP differences) and `references/workflows.md`
+for op detail — do not restate arguments from memory, and do not pull them in before
+the gate. The gotchas that bite the planner:
 
 - **Structure only through ops; content as files/artifacts.** Mutate nodes/edges
   only via `haven …` / `haven_*`. `body` is a one-line summary, never content.
@@ -75,8 +114,12 @@ loop:
    don't plan on top of a backlog that needs triage.
 1. **ENSURE ROOT.** A fresh goal with no root → create the decomposition root as
    an `anchor`, idempotently (`if_absent` is safe for the unique goal title). An
-   existing root (e.g. you were handed a project mid-plan) → skip.
-2. **COMPUTE FRONTIER** (pure arithmetic on step-0's nodes + edges — no op). A node
+   existing root (e.g. you were handed a project mid-plan) → skip. **Handed one
+   too-big item** (the `plan-item` escalation) → **that ref is the root**: don't mint
+   an anchor above it and don't widen to the project.
+2. **COMPUTE FRONTIER** (pure arithmetic on step-0's nodes + edges — no op).
+   **Scoped run: the frontier is the root ref and its descendants only** — a node
+   outside that subtree is never on the frontier, however coarse it looks. A node
    is **on the frontier** iff: it is **live** (status ∉ done/superseded/archived);
    **and** it has **no outgoing decomposition edge** (not yet split); **and** it is
    **not a sealed leaf** (not `ready` + committed + has `done_looks_like` + an
@@ -173,6 +216,10 @@ dependency completing. Then:
 - **Report the leaf set** — that's the dispatch queue (`haven next --owner ai`) — **and
   the deferred branches**, each with what it awaits ("Build storefront — deferred until
   Choose platform is done"). That report is the plan→execute→replan handshake.
+- **Name what settles a leaf's approach.** You stop at work-grain (what / why / done),
+  deliberately above the code. A leaf whose *approach* still needs settling goes to
+  **`plan-item`**, one leaf at a time; several leaves about to be built together share
+  one brief via `create-context-pack`. Say which, rather than leaving it implied.
 - **Goal-coverage check.** If the leaves don't plausibly cover the root anchor's
   goal/`done_looks_like`, capture the gap as a **floating `discovery`** node and
   surface it — never invent committed leaves to paper over a gap.

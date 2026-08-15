@@ -10,6 +10,8 @@
   {"query": "I'm starting a small-batch coffee roastery brand. I can roast and bag the beans but there's no name, no logo, no shop, no socials, nothing. take me from zero to taking orders online", "should_trigger": true},
   {"query": "stand up the full internal analytics platform for the team from scratch — event ingestion, the warehouse, auth, and the actual dashboards, then deploy it. greenfield, nothing exists yet", "should_trigger": true},
   {"query": "set the servo v2 rebuild up as a work graph and I'll build the pieces myself — create the items then switch to plan mode", "should_trigger": true},
+  {"query": "HV-30 is far too big to build as one thing — break it down into leaves with real dependencies and acceptance on each", "should_trigger": true},
+  {"query": "we tried to spec VR-152 as a single item and it's clearly several — split it into a proper subtree under that ref", "should_trigger": true},
 
   {"query": "add a 'forgot password?' link under the login form on the storefront and wire it to the reset flow we already have", "should_trigger": false},
   {"query": "there's a bug in checkout.ts — the cart total doesn't recalculate when you change item quantity. can you fix it?", "should_trigger": false},
@@ -22,5 +24,12 @@
   {"query": "build a reusable date-range picker component and add it to the web design system — should match the existing tokens", "should_trigger": false},
   {"query": "write me the launch-day tweet thread and a short press release for the scent brand launch", "should_trigger": false},
   {"query": "make a plan for adding a dark-mode toggle to the settings screen — show me the approach before you build it", "should_trigger": false},
-  {"query": "enter planning mode and work out how to refactor the auth module before I touch any code", "should_trigger": false}
+  {"query": "enter planning mode and work out how to refactor the auth module before I touch any code", "should_trigger": false},
+  {"query": "can you please plan out the next phase to get the models embedded and possible to switch between on a video", "should_trigger": false},
+  {"query": "plan the approach for HV-42 before we touch any code", "should_trigger": false},
+  {"query": "work out how to do full keyboard and controller support for the desktop UI, then build it", "should_trigger": false},
+  {"query": "I'm really struggling with media matching — the UI lagged when I added my 3D folder and the TVDB lookup doesn't seem to be happening. can you have a look?", "should_trigger": false},
+  {"query": "it's a big multi-stage change but an AI can do the whole thing in one go — don't split it into separate tickets, just plan it", "should_trigger": false},
+  {"query": "keep going", "should_trigger": false},
+  {"query": "ok go please", "should_trigger": false}
 ]

@@ -127,7 +127,10 @@ ordered plan.
    - Needs a spec/decision first → `--status definition`, then write the artifact
      (workflow 10) **to the bar in `spec-quality.md`** — score the gap, **clarify with
      the human before writing** where it's genuinely under-defined (don't assume), and
-     give the spec its backbone (scope boundary + constraints).
+     give the spec its backbone (scope boundary + constraints). When what the item needs
+     is its **approach settled** rather than its wording tightened — the person is asking
+     "how should we actually do this?" — that whole pass is the **`plan-item`** skill:
+     same bar, run end-to-end on one item and handed to build.
    - Too coarse to firm — you **can't** give it one concrete, testable `done_looks_like`
      because it's secretly several outcomes (multi-level, with ordering and unknowns) → it
      needs **decomposition, not grooming**: hand it to **`orchestrate-plan`** (the decompose
@@ -145,11 +148,16 @@ ordered plan.
 - **Ready means dispatchable** — someone could pick it up and start *without
   further definition*. If you'd have to ask "what does this even mean," it's not
   ready.
-- **The acceptance test is the decompose signal.** Step 2's "set its acceptance" *is* the
-  test: if an item won't reduce to one concrete, testable `done_looks_like` because it's
-  several outcomes, that's the tell it's too coarse to groom — escalate to `orchestrate-plan`,
-  don't firm or shallow-split it. The boundary reads both ways: `orchestrate-plan` likewise
-  stops and defers back to this workflow when it hits an untriaged/stale `grooming_nudge`.
+- **The one-pass test is the decompose signal** — *not* the number of success criteria.
+  Ask whether a single build pass could deliver the item against one spec. **Chunky is
+  fine**: a multi-stage plan sits happily on one ticket and `done_looks_like` can carry
+  several criteria. Only three things make it a genuine "no" — a **gate in the middle**
+  (something must be decided or produced before the rest can even be shaped), **split
+  ownership** (part is real-world human work), or work that **won't survive one pass**.
+  Then escalate to `orchestrate-plan`; don't shallow-split it here. The boundary reads
+  both ways: `orchestrate-plan` runs the same test at its own front door and hands
+  one-item work to `plan-item`, and it defers back to this workflow when it hits an
+  untriaged/stale `grooming_nudge`. **Decomposition is the escalation, not the default.**
 - **Clarify, don't assume.** Scale the work to the gap (`spec-quality.md`: rich →
   fast-validate, thin → ask 2–4 targeted questions *then* write). With a human in the
   loop, asking beats inferring a pile of assumptions into a big unvalidated spec.

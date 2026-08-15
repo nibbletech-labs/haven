@@ -19,10 +19,12 @@ always benefit from splitting — they're judged and done differently. The Haven
 `code`, `research` + `decision`), split it so each child has one clean type.
 
 **2. Skill-grain boundary.** Would **one coherent unit of work** — one owner, one
-activity, roughly a day or less, with a single checkable `done_looks_like` — finish
-this as-is? If yes, **don't split**: sub-fragments add coordination overhead with no
-quality gain. This is the floor. A leaf should be something you could hand to one
-agent (or person) with a clear "done" and expect a clean result. (v1 has no live
+activity, with a checkable `done_looks_like` — finish this as-is? If yes, **don't
+split**: sub-fragments add coordination overhead with no quality gain. This is the
+floor. A leaf should be something you could hand to one agent (or person) with a clear
+"done" and expect a clean result. **Pitch that floor at what one build pass actually
+delivers, which is a lot** — a chunky, multi-stage leaf whose acceptance carries
+several criteria is a legitimate leaf, not a missed split. (v1 has no live
 skill-discovery manifest, so judge grain by this heuristic, not by matching a
 catalogue of skills.)
 
@@ -88,6 +90,10 @@ coherent activity, or splitting would only yield trivial fragments.
   font") that add tracking overhead without improving the result.
 - A single skill or agent handles it well as a unit — don't decompose below that
   grain.
+- **It's just big.** Size alone is not a split signal, and neither is the number of
+  success criteria. Split for a **gate** (something must be decided or produced before
+  the rest can be shaped), for **split ownership** (part is real-world human work), or
+  because it **won't survive one pass** — not because the leaf looks chunky.
 
 ## Defer when — the knowability horizon
 

@@ -136,11 +136,19 @@ depth living *inside* the spec, not a second artifact.
 
 ## Oversized → flag → bounce (don't split here)
 
-If an item is structurally too big — multiple user flows, multiple technical domains, 5+
-independent success criteria — grooming does **not** split it. **Flag it and bounce to
+**Oversized is rarer than it looks.** An item is not too big merely because it spans several
+user flows, several technical domains, or several success criteria — a build pass gets a lot
+done, and a multi-stage plan sits happily on one ticket. Only three things make an item
+genuinely oversized: a **gate in the middle** (something must be decided or produced before the
+rest can even be *shaped*), **split ownership** (part is real-world human work and part is the
+AI's), or work that **won't survive one pass** (too much to hold at once, or it has to land
+incrementally with something verified between the parts).
+
+When one of those holds, grooming does **not** split it. **Flag it and bounce to
 `orchestrate-plan`** (workflow 6 / the decomposition skill). Spec-authoring firms a single
 coherent item in place; decomposition is a different operation. A merely *under-specified* item is
-groomed in place — only a *mis-scoped* one bounces.
+groomed in place — only a *mis-scoped* one bounces. And fragmenting isn't free: every extra node
+is another handoff, another spec, and context lost between them.
 
 ## Anti-patterns
 

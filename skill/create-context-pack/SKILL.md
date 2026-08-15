@@ -7,10 +7,10 @@ description: >-
   verify-first preamble — written as a `context-pack` artifact on the group's
   top node. Use when planned leaves are about to be built together and want
   one brief — "spec out phase 1 of the build", "create a context pack for HV-3
-  and HV-4", "ready these items for dev"; on one item it degenerates to
-  grooming that leaf. It does NOT decompose a goal (use `orchestrate-plan`)
-  and does NOT execute or write code (plan mode / `orchestrate-run`). Not for
-  coarse items that still need decomposition.
+  and HV-4", "ready these items for dev". For a SINGLE item that's `plan-item`,
+  not this. It does NOT decompose a goal (use `orchestrate-plan`) and does NOT
+  execute or write code (plan mode / `orchestrate-run`). Not for coarse items
+  that still need decomposition.
 ---
 
 # create-context-pack — the build-prep (spec) half of orchestrate
@@ -31,6 +31,9 @@ native **plan mode** (the code-level plan + the human "go").
 
 - `orchestrate-plan` stops at **work-grain** leaves (what / why / done, deliberately
   *above* the code). It reasons over decomposition and never touches grouping.
+- `plan-item` covers the **one-item** case on the same axis as this skill — approach +
+  `spec` + acceptance on a single leaf. Reach for a pack only when several leaves are
+  about to be built **together** and need shared, cross-cutting material.
 - `create-context-pack` runs **after** planning, over the **grouping** axis the planner
   ignores, and writes a cross-cutting synthesis for one group you're about to build.
 - Plan mode does the **code-grain** layer (which files, what approach) that goes

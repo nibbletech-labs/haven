@@ -1,0 +1,25 @@
+[
+  {"query": "can you please plan out the next phase to get the models embedded and possible to switch between on a video", "should_trigger": true},
+  {"query": "make a plan for adding a dark-mode toggle to the settings screen — show me the approach before you build it", "should_trigger": true},
+  {"query": "plan the approach for HV-42 before we touch any code", "should_trigger": true},
+  {"query": "how should we tackle the media-matching slowness? work it out and write it down before building anything", "should_trigger": true},
+  {"query": "work out how to do full keyboard and controller support for the desktop UI, then build it", "should_trigger": true},
+  {"query": "I want saved searches in the library view — spec it onto a ticket and then execute it", "should_trigger": true},
+  {"query": "firm up HV-88 so it's actually ready to build — what's the approach and what's out of scope?", "should_trigger": true},
+  {"query": "write the approach for refactoring the auth module down on the ticket before I touch any code", "should_trigger": true},
+  {"query": "there's no item for this yet — the export keeps dropping the last row. capture it and plan the fix", "should_trigger": true},
+  {"query": "it's a chunky one — sources, scanning, matching, artwork and the library view — but it's all one pass. keep it on a single ticket and plan it there", "should_trigger": true},
+  {"query": "VR-152 is the integration item — plan that one properly rather than splitting it up", "should_trigger": true},
+
+  {"query": "build me a whole booking-and-payments SaaS for my sister's physio clinic from scratch — scheduling, sms reminders, stripe, the marketing site, admin dashboard. there's nothing yet", "should_trigger": false},
+  {"query": "decompose the haven cloud-sync initiative (HV-13) into a proper dependency graph of dispatchable leaves with acceptance criteria", "should_trigger": false},
+  {"query": "HV-30 is way too big — break it down into a tree of leaves with real dependencies", "should_trigger": false},
+  {"query": "the perfume plan is already decomposed and ready — run the ready AI work and get phase 1 actually built", "should_trigger": false},
+  {"query": "create a context pack for PF-36 and PF-37 so they're build-ready for dev", "should_trigger": false},
+  {"query": "what should I work on next on the scent project?", "should_trigger": false},
+  {"query": "verify HV-41 — does it actually meet its acceptance?", "should_trigger": false},
+  {"query": "park this for later — an idea for a subscription refill model. don't action it, just capture it", "should_trigger": false},
+  {"query": "keep going", "should_trigger": false},
+  {"query": "ok go please", "should_trigger": false},
+  {"query": "there's a bug in checkout.ts — the cart total doesn't recalculate when you change item quantity. just fix it", "should_trigger": false}
+]
