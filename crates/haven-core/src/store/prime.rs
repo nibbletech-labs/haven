@@ -113,7 +113,7 @@ const CONVENTIONS: &[&str] = &[
     "Mutate the graph ONLY via haven ops; never hand-edit the DB.",
     "body is a one-line summary, NOT content — real content lives in files/artifacts under the item.",
     "Close the loop: finish work with `item complete <ref> --evidence \"…\"` (it reports what it unblocked).",
-    "Capture findings/gaps as floating items as they surface — don't just mention them in chat.",
+    "Raise findings/gaps in chat first and capture them only if the person agrees — an item they didn't ask for is backlog they have to triage.",
     "CLI has a sticky current-project: pass -p <project> explicitly; MCP is per-call (project arg).",
 ];
 

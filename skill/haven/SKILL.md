@@ -147,11 +147,18 @@ the node and stop — premature structure just churns.
 
 ### Handoff sweep: drain loose signal before the context dies
 
-**Capture-as-you-go is primary.** The moment a priority- or next-step-changing
-signal surfaces mid-session, fire it into **this project's inbox** — don't carry it
-in your head. The **handoff sweep is the BACKSTOP**, not the mechanism: a session
-can die before you ever reach a clean stopping point, so never rely on the sweep
-alone to flush a turn's worth of loose ends.
+**Capture-as-you-go is primary — but the person decides what gets captured.** The
+moment a priority- or next-step-changing signal surfaces mid-session, **raise it in
+chat**; capture it into **this project's inbox** once they agree, and don't carry it
+in your head either way. The **handoff sweep is the BACKSTOP**, not the mechanism: a
+session can die before you ever reach a clean stopping point, so never rely on the
+sweep alone to flush a turn's worth of loose ends.
+
+**Filing unprompted is the failure mode.** An item nobody asked for is backlog *they*
+have to triage, and a stream of them is noise that devalues everything else in the
+graph. Work they asked for, and work you actually did, are theirs by default — file
+those. Observations you make while answering a question are not: say them, and let
+them ask.
 
 At a session boundary / handoff / low-context moment, do the sweep: drain every
 loose signal into the existing per-project inbox using **EXISTING verbs only** — no
@@ -166,12 +173,13 @@ new role, verb, or artifact type:
   `haven_handoff` to `human` (so it's owned and waited-on, not stranded
   `in_progress` — see the gotcha above).
 
-**Disposition bias — fire thoughts in LIBERALLY.** One line, uncommitted, no
-acceptance, no edges, no priority. This is *safe* precisely because triage is
-**two-way and cheap** (fold it up later, or archive it) and `haven prime`'s inbox
-view creates the **pull-back** — liberal capture surfaces on next resume, so it
-can't silently pile up. The cost of a stray inbox node is a one-line triage; the
-cost of a lost next-step is a derailed resume. Capture wins.
+**Disposition — keep each capture minimal, and keep the bar on *whether* to capture.**
+One line, uncommitted, no acceptance, no edges, no priority; triage is **two-way and
+cheap** (fold it up later, or archive it) and `haven prime`'s inbox view creates the
+**pull-back**, so nothing captured piles up silently. That cheapness is why a capture
+can be *small* — it is not licence to file freely. The asymmetry that matters: a lost
+next-step derails a resume, but an unasked-for item spends someone else's attention,
+so the sweep drains what the work produced, not what you happened to notice.
 
 **The discriminator — "could this change priorities or next steps?"**
 
