@@ -68,29 +68,54 @@ restating arguments from memory. The gotchas that bite here:
    Read what's already there (`haven item get` / `haven_get_item`) — `why`,
    `done_looks_like`, existing artifacts. Don't re-derive what the item already says.
 
-2. **RUN THE SIZE TEST.** Below. One item → carry on. Too big → hand to
+2. **SCAN FOR OVERLAP** (don't skip — this is where duplicate backlog comes from).
+   Before you plan, find what the graph already holds on this subject:
+   `haven search "<the real terms>"`, then read the neighbours of anything it
+   surfaces. A long-lived backlog collects half-captured versions of the same idea,
+   and planning one of them in isolation quietly ships the other three as debt.
+
+   Sort each hit into one of four, and **name the action rather than absorbing it
+   silently**:
+   - **The same work** → `haven evolve merge` into one item. Lineage is preserved;
+     nothing is deleted.
+   - **Replaced by what you're about to plan** → `haven evolve supersede <old>
+     --with <this>` with a real rationale.
+   - **Stale or no longer wanted** → `haven item archive --rationale "…"`
+     (reversible via `reopen` — archive beats leaving it to rot).
+   - **Genuinely related but separate** → leave it standing. Wire a dependency edge
+     if there's real ordering, and name it in the spec's **scope boundary**
+     ("HV-x covers the export side; not in scope here").
+
+   Apply the clear-cut merges and archives yourself. **Ask before superseding**, or
+   before folding in anything the person may still want tracked separately. Report
+   what you folded and what you left, in plain English with the refs in parentheses —
+   this is the moment a person finds out their backlog just got smaller.
+
+3. **RUN THE SIZE TEST.** Below — and run it on the *post-fold* shape, since folding
+   overlap in can change it. One item → carry on. Too big → hand to
    `orchestrate-plan`, scoped to *this ref*, and stop. Do this **before** the
    questions, so you don't clarify a shape that's about to be split.
 
-3. **CLARIFY.** Score the gap, then ask your targeted questions through the normal
+4. **CLARIFY.** Score the gap, then ask your targeted questions through the normal
    interactive channel. Start with **who** and **why** before **what**, and always
    ask for the **negative** constraints — "what should this *not* do?" is the
    question builders most often wish had been asked. If there is genuinely no
    person available, infer but tag every inference `[VERIFY] assumed X because Y`.
 
-4. **WRITE THE PLAN ONTO THE ITEM.** Three places, no duplication between them:
+5. **WRITE THE PLAN ONTO THE ITEM.** Three places, no duplication between them:
    - `why` — the problem, one line, from the user's view;
    - `done_looks_like` — concrete, testable success criteria;
    - `spec.md` — **scope boundary** + **constraints** (both always present) + the
-     approach, edge cases, and any file paths it rests on. Write the file directly,
-     then register it once: `haven artifact add <ref> --role spec --file …`.
+     approach, edge cases, any file paths it rests on, and the **build checklist**
+     (below). Write the file directly, then register it once:
+     `haven artifact add <ref> --role spec --file …`.
 
    Then run the **shippability linter** (`spec-quality.md`): kill weasel words,
    every contract carries a schema *and* an example, architecture claims name real
    file paths, every acceptance line is observable rather than a judgment call.
    A failing rule is blocking, not advice.
 
-5. **READY IT, THEN HAND TO BUILD.** Set `status=ready` with an owner. Then say what
+6. **READY IT, THEN HAND TO BUILD.** Set `status=ready` with an owner. Then say what
    happens next in one line — this skill stops at the plan:
    - **build it here** — do the work in this session against the spec (in a harness
      with a plan-mode gate, that gate goes here; without one, just build to the spec
@@ -100,6 +125,33 @@ restating arguments from memory. The gotchas that bite here:
    - **it's someone else's** — `haven item handoff` to a person.
 
    Whoever builds it finishes with `haven item complete <ref> --evidence "…"`.
+
+## The build checklist (every spec carries one)
+
+One item can hold a lot of work, so the spec ends with an ordered **build checklist** —
+the route through the work, as tickable lines:
+
+```markdown
+## Build checklist
+- [ ] Add the `source_kind` column and its migration
+- [ ] Wire the TVDB client behind the existing lookup interface
+- [ ] Backfill artwork for titles already scanned
+- [ ] Show per-title match status in the library view
+- [ ] Tick each box here as it lands — this is how progress is reported
+```
+
+- **Ordered, and every line a visible unit of progress.** Aim for steps a person could
+  watch tick past. Not "implement the feature" (one box is not a checklist), and not
+  twenty micro-edits (that's a diff, not progress).
+- **It's the route, not the destination.** `done_looks_like` stays the outcome test and
+  the thing verification judges. A ticked checklist is **not** evidence the item is
+  done — never let the checklist stand in for acceptance.
+- **Tell the builder to tick it in the file as they go**, in the spec itself. Where the
+  harness has its own to-do list, mirror the checklist into it — but `spec.md` is the
+  durable record and the one the person can read without asking anyone.
+- **Chunky items are exactly why this exists.** A five-stage ticket with no checklist is
+  opaque to the person and easy for the builder to lose its place in. This is the price
+  of keeping items big, and it's a cheap one.
 
 ## The size test
 

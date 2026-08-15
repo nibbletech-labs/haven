@@ -5,6 +5,12 @@ is **always the target's LIVE `done_looks_like`** (read per invocation via `have
 never a frozen pack copy) plus any inherited **shared-requirements** from the container
 context-pack. Three verdicts only — keep the gate crisp.
 
+**A spec's build checklist is not the yardstick.** `plan-item` specs end with an ordered
+build checklist — the route through the work. A fully ticked checklist is **not** evidence
+of acceptance, and an unticked box is **not** on its own a FAIL. Judge the diff against
+`done_looks_like`; read the checklist only as a map of what the builder intended, useful
+for spotting an area nothing touched.
+
 ## PASS
 
 Deterministic suite **green** (`build + lint + test`, exit-0) **AND** acceptance
