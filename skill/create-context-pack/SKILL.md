@@ -41,7 +41,7 @@ plan + the human "go").
 - Plan mode does the **code-grain** layer (which files, what approach) that goes
   stale the instant code moves — so it's never frozen into the graph. It runs **after**
   the durable planning, as the human gate on the build, never as the place the planning
-  itself happens (`plan-item`, § *Don't route this through plan mode*).
+  itself happens (`plan-item`, § *Take plan mode's process, not plan mode*).
 
 The pack lives **in the graph** (a `context-pack` artifact on the group's top node + the
 members' own fields), never a separate frozen file. Leaves inherit the shared
