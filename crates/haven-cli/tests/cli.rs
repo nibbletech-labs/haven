@@ -389,7 +389,10 @@ fn skill_install_and_setup_write_the_snapshot() {
     assert_eq!(setup["project_created"], false);
     let codex_config = std::fs::read_to_string(fresh.home.join(".codex/config.toml")).unwrap();
     assert!(codex_config.contains("[mcp_servers.haven]"));
-    assert!(codex_config.contains("command = \"haven\""));
+    // The stanza names the platform binary: haven.exe on Windows (shell-less
+    // MCP spawns get no PATHEXT), plain haven elsewhere.
+    let bin = if cfg!(windows) { "haven.exe" } else { "haven" };
+    assert!(codex_config.contains(&format!("command = \"{bin}\"")));
     assert!(codex_config.contains("args = [\"mcp\"]"));
 
     let skipped = Haven::new();

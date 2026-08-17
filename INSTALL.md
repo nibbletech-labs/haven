@@ -10,9 +10,10 @@ The [README](README.md) has the quick start. This is the full reference: install
 | macOS Intel | Yes | Yes | Yes | Yes |
 | Linux ARM64 | Yes | Yes | Yes | Yes |
 | Linux x64 | Yes | Yes | Yes | Yes |
-| Windows | No | No | No | Not supported yet |
+| Windows x64 | Yes | No | Yes (PowerShell) | Yes |
+| Windows ARM64 | No | No | No | Untested |
 
-Prebuilt Linux binaries are static musl builds. Platforms without a prebuilt binary fall back to source builds when the install script can find a Rust toolchain.
+Prebuilt Linux binaries are static musl builds. Platforms without a prebuilt binary fall back to source builds when the install script can find a Rust toolchain (the PowerShell installer does not fall back; build from source instead, which on Windows needs the MSVC Build Tools). WSL counts as Linux: use the Linux install inside it.
 
 ## Install
 
@@ -32,6 +33,14 @@ curl -fsSL https://raw.githubusercontent.com/nibbletech-labs/haven/main/packagin
 ```
 
 It downloads the matching release tarball, verifies its sha256, and installs to the first writable of `$HAVEN_BIN_DIR`, `/usr/local/bin`, `~/.local/bin`. Pin a version with `HAVEN_VERSION=v0.1.4`. On a platform without a prebuilt binary it falls back to building from source (needs cargo); force that with `--from-source` or `HAVEN_BUILD_FROM_SOURCE=1`.
+
+**Windows install script** (PowerShell, prebuilt x64 binary, no admin rights, no WSL):
+
+```powershell
+irm https://raw.githubusercontent.com/nibbletech-labs/haven/main/packaging/install.ps1 | iex
+```
+
+It downloads the x64 release tarball, verifies its sha256, extracts with the tar.exe that ships in Windows 10 1803+, installs `haven.exe` to `%LOCALAPPDATA%\Programs\haven\bin` (override with `HAVEN_BIN_DIR`), adds that directory to your user PATH, and runs `haven setup`. Pin a version with `$env:HAVEN_VERSION = 'v0.1.6'`. Windows on ARM has no prebuilt binary and the installer says so rather than guessing. Already-open terminals keep their old PATH; open a new one to pick up `haven`.
 
 **From source:**
 
@@ -94,6 +103,8 @@ Codex reads MCP servers from `~/.codex/config.toml` or trusted project `.codex/c
 command = "haven"
 args = ["mcp"]
 ```
+
+On Windows the command is `haven.exe` in both agents' configs: MCP clients spawn the server without a shell, and a shell-less spawn does not resolve extensionless names.
 
 Codex/Open Agent Skills are installed to `~/.agents/skills` by default. Codex can read `.agents/skills`, `~/.agents/skills`, and `/etc/codex/skills`. Claude keeps using `~/.claude/skills`; Codex does not read that Claude path.
 

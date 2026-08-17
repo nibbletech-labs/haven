@@ -1062,6 +1062,16 @@ fn remove_existing_path(path: &Path) -> Result<()> {
     if meta.is_dir() && !meta.file_type().is_symlink() {
         std::fs::remove_dir_all(path)?;
     } else {
+        // A Windows directory symlink is deleted with RemoveDirectory, not
+        // DeleteFile — remove_file on one fails with Access denied (error 5).
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::FileTypeExt;
+            if meta.file_type().is_symlink_dir() {
+                std::fs::remove_dir(path)?;
+                return Ok(());
+            }
+        }
         std::fs::remove_file(path)?;
     }
     Ok(())

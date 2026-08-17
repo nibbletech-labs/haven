@@ -42,6 +42,12 @@ On **Linux** (prebuilt binary, no toolchain needed):
 curl -fsSL https://raw.githubusercontent.com/nibbletech-labs/haven/main/packaging/install.sh | sh
 ```
 
+On **Windows** (PowerShell, prebuilt binary, no admin rights):
+
+```powershell
+irm https://raw.githubusercontent.com/nibbletech-labs/haven/main/packaging/install.ps1 | iex
+```
+
 Then wire up your agents and check the install:
 
 ```sh
