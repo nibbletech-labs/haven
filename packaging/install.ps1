@@ -87,7 +87,14 @@ try {
         } catch {
             $aside = "$dest.$PID.old"
             Move-Item -Force $dest $aside
-            Move-Item -Force $bin $dest
+            try {
+                Move-Item -Force $bin $dest
+            } catch {
+                # Put the original back so the machine is never left with no
+                # haven.exe at all (mirrors the CLI's own swap fallback).
+                Move-Item -Force $aside $dest
+                throw
+            }
             Remove-Item -Force $aside -ErrorAction SilentlyContinue
         }
     } else {

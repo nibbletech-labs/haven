@@ -385,7 +385,7 @@ fn restore_from_manifest(
 
     // 2. Stage everything (destroy nothing): materialize the DB object (+ integrity
     //    check) and every file object (re-hashed). Any miss/mismatch fails here.
-    let (staged_db, warnings) = match materialize_and_stage(&m, &objects_root, content_root) {
+    let (staged_db, mut warnings) = match materialize_and_stage(&m, &objects_root, content_root) {
         Ok(staged) => staged,
         Err(e) => {
             cleanup_staging(content_root);
@@ -418,8 +418,8 @@ fn restore_from_manifest(
     std::fs::copy(&staged_db, &db_tmp)?;
     let files_restored = commit_staged_trees(staged, content_root)?;
     std::fs::rename(&db_tmp, db_path)?;
-    remove_sidecar_strict(db_path, "-wal")?;
-    remove_sidecar_strict(db_path, "-shm")?;
+    warnings.extend(remove_sidecar_warn(db_path, "-wal"));
+    warnings.extend(remove_sidecar_warn(db_path, "-shm"));
     cleanup_staging(content_root);
 
     Ok(RestoreReport {
@@ -430,19 +430,20 @@ fn restore_from_manifest(
     })
 }
 
-/// Remove a SQLite sidecar, tolerating only its absence. A stale `-wal` left
-/// beside a freshly restored DB is replayed on the next open — silent
-/// corruption — so any failure other than NotFound (e.g. a Windows sharing
-/// violation from a live haven process) aborts loudly instead of being
-/// swallowed.
-fn remove_sidecar_strict(db_path: &Path, suffix: &str) -> Result<()> {
+/// Remove a SQLite sidecar after the DB swap, tolerating absence. Any other
+/// failure (e.g. a Windows sharing violation from a live haven process) is
+/// returned as a LOUD restore warning rather than an error: the restore
+/// itself has already committed, and a stale `-wal` beside the restored DB
+/// replays as silent corruption on the next open — the user must clear it.
+fn remove_sidecar_warn(db_path: &Path, suffix: &str) -> Option<String> {
     match std::fs::remove_file(sidecar(db_path, suffix)) {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(HavenError::Invalid(format!(
-            "restored the DB but could not remove its stale {suffix} sidecar ({e}); \
-             close any running haven process and re-run the restore"
-        ))),
+        Ok(()) => None,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => Some(format!(
+            "could not remove the stale {suffix} sidecar after the restore ({e}); \
+             stop any running haven process and delete it before using the store, \
+             or the old WAL may replay over the restored DB"
+        )),
     }
 }
 
@@ -520,8 +521,26 @@ fn materialize_and_stage(
 /// (both need Developer Mode or elevation for unprivileged users).
 #[cfg(all(not(unix), windows))]
 fn restore_symlink_nonunix(target: &str, dest: &Path) -> std::io::Result<()> {
-    std::os::windows::fs::symlink_file(target, dest)
-        .or_else(|_| std::os::windows::fs::symlink_dir(target, dest))
+    // CreateSymbolicLink does not validate the file/dir flag against the real
+    // target, and a mistyped link breaks later traversal — so resolve the
+    // target (relative to the link's directory) and pick the matching API.
+    // A dangling target defaults to a file symlink.
+    let target_path = std::path::Path::new(target);
+    let resolved = if target_path.is_absolute() {
+        target_path.to_path_buf()
+    } else {
+        dest.parent()
+            .unwrap_or_else(|| std::path::Path::new("."))
+            .join(target_path)
+    };
+    if std::fs::metadata(&resolved)
+        .map(|m| m.is_dir())
+        .unwrap_or(false)
+    {
+        std::os::windows::fs::symlink_dir(target, dest)
+    } else {
+        std::os::windows::fs::symlink_file(target, dest)
+    }
 }
 
 #[cfg(all(not(unix), not(windows)))]
@@ -592,13 +611,14 @@ fn restore_legacy(
     let db_tmp = sidecar(db_path, ".restore-tmp");
     std::fs::copy(&snap_db, &db_tmp)?;
     std::fs::rename(&db_tmp, db_path)?;
-    remove_sidecar_strict(db_path, "-wal")?;
-    remove_sidecar_strict(db_path, "-shm")?;
+    let mut warnings = Vec::new();
+    warnings.extend(remove_sidecar_warn(db_path, "-wal"));
+    warnings.extend(remove_sidecar_warn(db_path, "-shm"));
     Ok(RestoreReport {
         restored: id.to_string(),
         safety_snapshot: safety,
         files_restored,
-        warnings: Vec::new(),
+        warnings,
     })
 }
 

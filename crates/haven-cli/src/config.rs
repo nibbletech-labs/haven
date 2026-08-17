@@ -576,7 +576,14 @@ pub fn install_check() -> Result<InstallCheck> {
         .and_then(|v| {
             v.get("mcpServers")
                 .and_then(|m| m.get("haven"))
-                .map(|h| h.is_object())
+                // The stanza must name the platform binary: an entry synced
+                // over from another OS (command: "haven" on Windows) is broken
+                // wiring and must read as unregistered, mirroring the Codex
+                // check below.
+                .map(|h| {
+                    h.is_object()
+                        && h.get("command").and_then(serde_json::Value::as_str) == Some(BIN_NAME)
+                })
         })
         .unwrap_or(false);
 
