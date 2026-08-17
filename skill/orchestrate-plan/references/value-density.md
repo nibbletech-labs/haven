@@ -56,9 +56,12 @@ the effort is trivial and the value is real, or unless that thing *is* the value
 The Critic's battery, run against every node before you seal it. Each check that
 fires sends the node back to split, defer, or re-scope rather than seal:
 
-- **Single buildable unit.** Each item must be *one* unit of work, not a compound
-  feature. "Implement user management" is **three items**, not one. If a node is
-  really two features compressed into one, split it.
+- **Single buildable unit.** One unit means one coherent piece of work — one owner,
+  one activity, one checkable "done" — and the measure is whether a single build
+  pass delivers it, never how much it contains. A chunky multi-stage leaf whose
+  acceptance carries several criteria is one unit ("implement user management" is a
+  legitimate leaf); two unrelated features sharing a ticket are two. Split the
+  compound, not the large.
 - **Complexity realism.** Don't seal an undersized leaf. An item that looks small but
   secretly requires building auth, a data pipeline, or a new service is **not** small
   — its hidden weight means it should be split or deferred, not sealed as a quick win.
@@ -70,10 +73,12 @@ fires sends the node back to split, defer, or re-scope rather than seal:
   action outside the build. For each, state what it is **and** the mitigation if it's
   unavailable: stub behind an interface, use test/sandbox mode, or mock responses. A
   leaf that silently assumes an external service is set up is a false-ready leaf.
-- **Oversized-item detection.** If a node is XL, or its description implies multiple
-  distinct user flows (e.g. "manage users" covers CRUD, roles, and permissions) or
-  spans multiple technical domains (e.g. "real-time sync" requires WebSocket, state
-  management, and conflict resolution), flag it for decomposition — it is not a leaf.
+- **Oversized-item detection.** Flag a node for decomposition only when one build
+  pass genuinely can't deliver it — a gate in the middle, split ownership, or work
+  that won't survive the pass (the same three admission tickets as the front door).
+  Size is not the signal: "XL", a long acceptance list, or spanning several
+  technical domains ("real-time sync" needing WebSocket, state management and
+  conflict resolution is still one pass) describe a chunky leaf, not a missed split.
 - **Bidirectional lifecycle check.** Catch the node falsely marked ready that has
   real unknowns (it should be a discovery leaf with its question named) **and** the
   node falsely marked as needing discovery when the "uncertainty" is just an
