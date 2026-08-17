@@ -1005,10 +1005,27 @@ fn replace_path_alias(canonical: &Path, link: &Path) -> Result<()> {
     #[cfg(windows)]
     {
         let meta = std::fs::metadata(canonical)?;
-        if meta.is_dir() {
-            std::os::windows::fs::symlink_dir(canonical, link)?;
+        let attempt = if meta.is_dir() {
+            std::os::windows::fs::symlink_dir(canonical, link)
         } else {
-            std::os::windows::fs::symlink_file(canonical, link)?;
+            std::os::windows::fs::symlink_file(canonical, link)
+        };
+        if let Err(e) = attempt {
+            // Unprivileged Windows (no Developer Mode) can't create symlinks
+            // (ERROR_PRIVILEGE_NOT_HELD). Degrade to a copy, but LOUDLY: a
+            // copy is a snapshot, not a live view, and silent staleness is
+            // how a user edits a dead file and loses the edit.
+            eprintln!(
+                "haven: cannot create a symlink for {} ({e}); writing a COPY instead — \
+                 a snapshot, not a live view. Enable Windows Developer Mode and re-run \
+                 `haven link` to get live projections.",
+                link.display()
+            );
+            if meta.is_dir() {
+                copy_dir_recursive(canonical, link)?;
+            } else {
+                std::fs::copy(canonical, link)?;
+            }
         }
     }
     #[cfg(not(any(unix, windows)))]
@@ -1018,6 +1035,23 @@ fn replace_path_alias(canonical: &Path, link: &Path) -> Result<()> {
             std::fs::create_dir_all(link)?;
         } else {
             std::fs::copy(canonical, link)?;
+        }
+    }
+    Ok(())
+}
+
+/// Snapshot-copy a directory tree — the Windows fallback when symlinks need
+/// privileges we don't have. Symlinks inside the tree are followed.
+#[cfg(windows)]
+fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let to = dst.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_dir_recursive(&entry.path(), &to)?;
+        } else {
+            std::fs::copy(entry.path(), &to)?;
         }
     }
     Ok(())

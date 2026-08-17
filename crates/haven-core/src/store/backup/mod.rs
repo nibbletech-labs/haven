@@ -115,6 +115,10 @@ pub struct RestoreReport {
     /// captured at all).
     pub safety_snapshot: String,
     pub files_restored: usize,
+    /// Non-fatal degradations (e.g. symlink entries that could not be
+    /// recreated on this platform). Empty on a clean restore.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
 }
 
 impl Store {
@@ -381,8 +385,8 @@ fn restore_from_manifest(
 
     // 2. Stage everything (destroy nothing): materialize the DB object (+ integrity
     //    check) and every file object (re-hashed). Any miss/mismatch fails here.
-    let staged_db = match materialize_and_stage(&m, &objects_root, content_root) {
-        Ok(db) => db,
+    let (staged_db, warnings) = match materialize_and_stage(&m, &objects_root, content_root) {
+        Ok(staged) => staged,
         Err(e) => {
             cleanup_staging(content_root);
             return Err(e);
@@ -414,15 +418,32 @@ fn restore_from_manifest(
     std::fs::copy(&staged_db, &db_tmp)?;
     let files_restored = commit_staged_trees(staged, content_root)?;
     std::fs::rename(&db_tmp, db_path)?;
-    let _ = std::fs::remove_file(sidecar(db_path, "-wal"));
-    let _ = std::fs::remove_file(sidecar(db_path, "-shm"));
+    remove_sidecar_strict(db_path, "-wal")?;
+    remove_sidecar_strict(db_path, "-shm")?;
     cleanup_staging(content_root);
 
     Ok(RestoreReport {
         restored: id.to_string(),
         safety_snapshot: safety,
         files_restored,
+        warnings,
     })
+}
+
+/// Remove a SQLite sidecar, tolerating only its absence. A stale `-wal` left
+/// beside a freshly restored DB is replayed on the next open — silent
+/// corruption — so any failure other than NotFound (e.g. a Windows sharing
+/// violation from a live haven process) aborts loudly instead of being
+/// swallowed.
+fn remove_sidecar_strict(db_path: &Path, suffix: &str) -> Result<()> {
+    match std::fs::remove_file(sidecar(db_path, suffix)) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(HavenError::Invalid(format!(
+            "restored the DB but could not remove its stale {suffix} sidecar ({e}); \
+             close any running haven process and re-run the restore"
+        ))),
+    }
 }
 
 /// Materialize a manifest's objects into `.restore-staging`, re-hashing each file
@@ -433,7 +454,8 @@ fn materialize_and_stage(
     m: &manifest::Manifest,
     objects_root: &Path,
     content_root: &Path,
-) -> Result<PathBuf> {
+) -> Result<(PathBuf, Vec<String>)> {
+    let mut warnings: Vec<String> = Vec::new();
     let staging = staging_root(content_root);
     let _ = std::fs::remove_dir_all(&staging);
     std::fs::create_dir_all(&staging)?;
@@ -469,15 +491,43 @@ fn materialize_and_stage(
                     if let Some(parent) = dest.parent() {
                         std::fs::create_dir_all(parent)?;
                     }
+                    // Unix behaviour unchanged: a failed symlink is a hard
+                    // error. Off-Unix, degrade LOUDLY: record the dropped
+                    // entry instead of silently ignoring it (the pre-HV-297
+                    // behaviour was a bare discard).
                     #[cfg(unix)]
                     std::os::unix::fs::symlink(target, &dest)?;
                     #[cfg(not(unix))]
-                    let _ = target;
+                    if let Err(e) = restore_symlink_nonunix(target, &dest) {
+                        warnings.push(format!(
+                            "symlink entry {} -> {target} could not be recreated ({e}); \
+                             entry skipped — on Windows, enable Developer Mode and \
+                             restore again to materialize symlinks",
+                            dest.display()
+                        ));
+                    }
                 }
             }
         }
     }
-    Ok(staged_db)
+    Ok((staged_db, warnings))
+}
+
+/// Recreate a recorded symlink entry off-Unix. The manifest does not store the
+/// target's type, so on Windows try a file symlink first, then a directory one
+/// (both need Developer Mode or elevation for unprivileged users).
+#[cfg(all(not(unix), windows))]
+fn restore_symlink_nonunix(target: &str, dest: &Path) -> std::io::Result<()> {
+    std::os::windows::fs::symlink_file(target, dest)
+        .or_else(|_| std::os::windows::fs::symlink_dir(target, dest))
+}
+
+#[cfg(all(not(unix), not(windows)))]
+fn restore_symlink_nonunix(_target: &str, _dest: &Path) -> std::io::Result<()> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "symlinks are not supported on this platform",
+    ))
 }
 
 /// Build the staged-tree handles for [`commit_staged_trees`] from a manifest:
@@ -540,12 +590,13 @@ fn restore_legacy(
     let db_tmp = sidecar(db_path, ".restore-tmp");
     std::fs::copy(&snap_db, &db_tmp)?;
     std::fs::rename(&db_tmp, db_path)?;
-    let _ = std::fs::remove_file(sidecar(db_path, "-wal"));
-    let _ = std::fs::remove_file(sidecar(db_path, "-shm"));
+    remove_sidecar_strict(db_path, "-wal")?;
+    remove_sidecar_strict(db_path, "-shm")?;
     Ok(RestoreReport {
         restored: id.to_string(),
         safety_snapshot: safety,
         files_restored,
+        warnings: Vec::new(),
     })
 }
 

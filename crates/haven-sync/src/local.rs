@@ -351,7 +351,17 @@ pub fn write_hydrated(
             )));
         }
     }
-    let full = content_root.join(project_key).join(rel_path);
+    let base = content_root.join(project_key);
+    let full = base.join(rel_path);
+    // Containment recheck after the join: an absolute rel_path (`/…`, and on
+    // Windows `C:\…` or `\\server\…`) makes Path::join discard `base` outright,
+    // and the `..` screen above doesn't catch that. Lexical check is sound
+    // here — `..` segments were already rejected.
+    if !full.starts_with(&base) {
+        return Err(SyncError::Permanent(format!(
+            "refusing to hydrate artifact path {rel_path:?} outside the project tree"
+        )));
+    }
     if let Some(dir) = full.parent() {
         std::fs::create_dir_all(dir)
             .map_err(|e| SyncError::Permanent(format!("creating {}: {e}", dir.display())))?;
@@ -1450,6 +1460,19 @@ mod tests {
         // Path traversal in a remote-supplied rel_path is rejected.
         let err = write_hydrated(root, "haven", "items/../../etc/pwned", bytes, None).unwrap_err();
         assert!(matches!(err, SyncError::Permanent(_)));
+
+        // An absolute rel_path would make Path::join discard the root entirely
+        // (on Windows also `C:\…` / UNC forms) — containment recheck rejects it.
+        let abs = root.join("escape.md");
+        let err = write_hydrated(root, "haven", abs.to_str().unwrap(), bytes, None).unwrap_err();
+        assert!(matches!(err, SyncError::Permanent(_)));
+        assert!(!abs.exists());
+        #[cfg(windows)]
+        {
+            let err =
+                write_hydrated(root, "haven", r"C:\Windows\Temp\pwned", bytes, None).unwrap_err();
+            assert!(matches!(err, SyncError::Permanent(_)));
+        }
     }
 
     #[test]
