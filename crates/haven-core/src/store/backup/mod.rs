@@ -455,6 +455,8 @@ fn materialize_and_stage(
     objects_root: &Path,
     content_root: &Path,
 ) -> Result<(PathBuf, Vec<String>)> {
+    // Pushed only in the non-unix symlink fallback below.
+    #[cfg_attr(unix, allow(unused_mut))]
     let mut warnings: Vec<String> = Vec::new();
     let staging = staging_root(content_root);
     let _ = std::fs::remove_dir_all(&staging);
