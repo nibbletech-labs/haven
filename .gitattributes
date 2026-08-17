@@ -1,5 +1,9 @@
 # Keep LF endings on files whose bytes we compare or execute: the embedded
-# skill snapshot is compared byte-exactly (include_str! of skill/**/*.md), and
-# shell scripts break under CRLF. Windows checkouts must not vary them.
+# skill snapshot is compared byte-exactly (include_str! of skill/**/*.md AND
+# skill/**/agents/openai.yaml — see skill_snapshot_check), and shell scripts
+# break under CRLF. Windows checkouts must not vary any of them.
 *.md text eol=lf
 *.sh text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+*.sql text eol=lf
