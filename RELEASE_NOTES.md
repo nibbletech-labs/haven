@@ -1,26 +1,26 @@
-## v0.1.5: External Handoff
+## v0.1.6: Native Windows
 
-Haven stays local and single-user, but your work no longer has to stay on one machine. When a task needs to live where your team can see it, your AI can hand the item off to an external tracker (Jira, Linear, or GitHub), record where it went, and reconcile the status back later. Haven holds no connection to those systems and configures nothing on their side: the AI agent you already use is the bridge. This release also tightens first-run setup, the in-repo workspace, and the front-door docs.
+Haven now runs natively on Windows. A PowerShell one-liner installs a prebuilt, checksum-verified `haven.exe` (no WSL, no admin rights, no Rust toolchain), wires the MCP server and skills into the same `%USERPROFILE%` locations Claude Code and Codex read on Windows, and `haven self update` can swap the binary even while it is running. macOS and Linux installs are untouched.
 
-**External-system handoff**
+**Install on Windows**
 
-- **Item external references.** A structured locator for work that is being executed somewhere else. `haven item extref add HV-12 --store jira --target PROJ-123 --url <link>` records which system, which ticket, and the link, then flips the item to `in_progress`. Pass `--no-in-progress` to record the locator without changing status, `--canonical` to mark the external system as where execution really happens, and `--receipt "..."` to keep a short note of the handoff.
-- **Reconcile back the other way.** `haven item extref find --target PROJ-123` finds the Haven item from an external id, so when something is marked done over there you can complete the Haven item with that result as evidence. `haven item extref list HV-12` and `haven item extref rm HV-12 --target PROJ-123` round out the surface.
-- **The same surface for agents over MCP.** `haven_set_extref`, `haven_find_extref`, and `haven_rm_extref` mirror the CLI, so an agent can do the handoff and the later reconciliation conversationally. A separate `haven_xref` reports artifact cross-store links (content provenance), kept distinct from where an item is being executed.
-- **Ownership is left untouched.** An external handoff records where the work is running. It is not the AI-to-human ownership handoff, so it leaves owner and wait-state alone.
+- **One-line install.** `irm https://raw.githubusercontent.com/nibbletech-labs/haven/main/packaging/install.ps1 | iex` downloads the x64 release, verifies its sha256 sidecar, installs to `%LOCALAPPDATA%\Programs\haven\bin`, puts that directory on your user PATH, and runs `haven setup`. No elevation, no Unix shell. Windows on ARM is detected and refused with a clear message rather than a broken download (only x64 is published).
+- **Windows release assets.** Every release now ships `haven-<version>-x86_64-pc-windows-msvc.tar.gz` with the same sha256 sidecar format as the other platforms, and CI runs the full workspace suite on Windows alongside Linux.
 
-**Setup and workspace**
+**Windows-correct behaviour**
 
-- **Fresh installs start with no project.** `haven setup` now wires the MCP server and skills without creating or selecting a default project, so there is no placeholder backlog to clean up. You name the first project when you capture the first item, or pass `--project-key`/`--prefix` to name one up front.
-- **Richer in-repo workspace.** The optional in-repo `_haven/` view now surfaces items and their attached docs, the generated backlog hides completed items, and a new `haven unlink` detaches the workspace again.
-- **Skill rename.** The standalone acceptance check is now the `verify-acceptance` skill (collision-safe), matching how `orchestrate-run` composes it.
+- **Self-update can replace a running `haven.exe`.** Windows locks a running binary against overwrite but allows renaming it, so the updater moves the live image aside, moves the verified new one into place, and sweeps the leftovers on later runs.
+- **Agent wiring uses the real binary name.** Setup writes `command = "haven.exe"` into the Claude and Codex MCP configs on Windows (MCP clients spawn the server without a shell, which resolves no extensionless names), and `haven doctor` looks for `haven.exe` on PATH.
+- **Windows-saved Codex configs parse correctly.** A `config.toml` with Windows line endings no longer mis-reads the `[mcp_servers.haven]` section, so doctor stops false-warning and setup stops rewriting a stanza that was already correct.
+- **Symlinks degrade loudly, never silently.** Without Developer Mode, `haven link` falls back to a copy and says so plainly (a snapshot, not a live view), and restoring a backup that contains symlinks reports each entry it could not recreate instead of dropping it without a word.
 
-**Docs**
+**Hardening on every platform**
 
-- A reworked front door: a leaner `README` plus `USING-HAVEN`, `DATA-MODEL`, and `INSTALL` guides, and a dedicated walk-through of the external-handoff flow.
+- **Backup restore refuses to leave a stale WAL.** Cleaning up the SQLite `-wal`/`-shm` sidecars after a restore is now a hard error if it fails for any reason other than the file being absent, because a stale WAL beside a restored database replays as silent corruption.
+- **Sync hydration cannot escape the project tree.** Remote-supplied artifact paths are re-checked after joining, closing an absolute-path edge case (Windows drive and UNC forms included).
 
 **Upgrade Notes**
 
-- No migration is required. External references live in existing item metadata.
-- `haven setup` no longer creates a default project. Create your first project by capturing an item, or name one up front with `--project-key`/`--prefix`.
-- If you referred to the acceptance-check skill as `verify`, it is now `verify-acceptance`.
+- No migration is required.
+- macOS and Linux are unaffected: no path resolution, install location, or config format changed there.
+- On Windows, restore a backup with no other haven process running (Windows locks the open database file; quit a live `haven mcp` first).
