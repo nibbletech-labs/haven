@@ -84,6 +84,12 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          # The runner image ships with Developer Mode ON, which lets ANY user
+          # create symlinks — turn it off so the standard user genuinely lacks
+          # the ability (this is the last Windows step; nothing after needs it).
+          Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock' `
+            -Name AllowDevelopmentWithoutDevLicense -Value 0 -Force
+
           $pw = (-join ((65..90) + (97..122) + (48..57) | Get-Random -Count 20 | ForEach-Object { [char]$_ })) + 'aA1!'
           $sec = ConvertTo-SecureString $pw -AsPlainText -Force
           New-LocalUser -Name havenprobe -Password $sec -PasswordNeverExpires | Out-Null
@@ -109,6 +115,9 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit 11 }
           New-Item -ItemType Directory -Path C:\haven-probe\repo | Out-Null
           Set-Location C:\haven-probe\repo
+          # Diagnostic for future debugging: this user must NOT hold the
+          # symlink privilege (empty output expected).
+          whoami /priv | Select-String Symbolic
           ..\haven.exe link
           if ($LASTEXITCODE -ne 0) { exit 12 }
           exit 0
