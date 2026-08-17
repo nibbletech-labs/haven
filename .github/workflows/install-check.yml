@@ -13,6 +13,10 @@ on:
         description: "Release tag to install (blank = latest)"
         required: false
         default: ""
+      update_from:
+        description: "Older tag to install FIRST, then self update to latest (full download-then-swap composition; needs a newer Windows-bearing release to exist)"
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -29,4 +33,23 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $verifyArgs = @{ Installer = 'packaging\install.ps1' }
           if ('${{ inputs.version }}') { $verifyArgs.Version = '${{ inputs.version }}' }
+          if ('${{ inputs.update_from }}') { $verifyArgs.UpdateFrom = '${{ inputs.update_from }}' }
           & packaging\verify-install.ps1 @verifyArgs
+
+  # Windows-on-ARM must be REFUSED with a clear message, not handed a broken
+  # download: PowerShell there is a native ARM64 process, so the installer's
+  # arch gate takes the real user-visible path. windows-11-arm runners are
+  # free for public repos.
+  windows-arm-refusal:
+    runs-on: windows-11-arm
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Installer must refuse ARM64 loudly
+        shell: pwsh
+        run: |
+          $out = pwsh -NoProfile -ExecutionPolicy Bypass -File packaging\install.ps1 2>&1 | Out-String
+          Write-Host $out
+          if ($LASTEXITCODE -eq 0) { throw 'installer should have refused on ARM64' }
+          if ($out -notmatch 'ARM') { throw 'expected the ARM64-unsupported message' }
