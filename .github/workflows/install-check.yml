@@ -49,12 +49,14 @@ jobs:
       - name: Installer must refuse ARM64 loudly
         shell: pwsh
         run: |
-          # Merge the child's stderr inside cmd, NOT via PowerShell's 2>&1 —
-          # the actions pwsh shell runs with ErrorActionPreference=Stop, which
-          # turns a redirected native stderr line into a terminating error and
-          # kills the step before the assertions run.
-          $out = (& cmd /c 'pwsh -NoProfile -ExecutionPolicy Bypass -File packaging\install.ps1 2>&1') | Out-String
-          $code = $LASTEXITCODE
+          # Run the installer entirely inside cmd, capturing output and exit
+          # code to FILES, with cmd always exiting 0 — the actions pwsh shell
+          # (ErrorActionPreference=Stop) otherwise turns the child's stderr or
+          # nonzero exit into a step-killing error before the assertions run.
+          cmd /v:on /c 'pwsh -NoProfile -ExecutionPolicy Bypass -File packaging\install.ps1 > install-out.txt 2>&1 & echo !ERRORLEVEL! > install-code.txt'
+          $out = Get-Content install-out.txt -Raw
+          $code = [int](Get-Content install-code.txt -Raw).Trim()
+          Write-Host "installer exit code: $code"
           Write-Host $out
           if ($code -eq 0) { throw 'installer should have refused on ARM64' }
           if ($out -notmatch 'ARM') { throw 'expected the ARM64-unsupported message' }
