@@ -7,6 +7,12 @@ use assert_cmd::prelude::*;
 use serde_json::Value;
 use tempfile::TempDir;
 
+/// Component-wise suffix check for path strings in JSON output — Windows
+/// renders `\`, so a `/`-literal `str::ends_with` fails there.
+fn path_ends_with(path: &str, suffix: &str) -> bool {
+    std::path::Path::new(path).ends_with(suffix)
+}
+
 /// A test harness binding the binary to an isolated HAVEN_HOME.
 struct Haven {
     _home: TempDir,
@@ -240,10 +246,10 @@ fn skill_install_and_setup_write_the_snapshot() {
 
     // Explicit install writes the embedded snapshot.
     let out = h.json(&["skill", "install"]);
-    assert!(out["installed"]["claude_haven"]
-        .as_str()
-        .unwrap()
-        .ends_with("skills/haven"));
+    assert!(path_ends_with(
+        out["installed"]["claude_haven"].as_str().unwrap(),
+        "skills/haven"
+    ));
     assert!(skill_dir.join("SKILL.md").exists());
     assert!(skill_dir.join("references/workflows.md").exists());
     assert!(skill_dir.join("references/surface-map.md").exists());
@@ -256,10 +262,12 @@ fn skill_install_and_setup_write_the_snapshot() {
     assert!(body.contains("name: haven"));
 
     // The same install lays down every shipped skill, not just haven.
-    assert!(out["installed"]["claude_orchestrate-plan"]
-        .as_str()
-        .unwrap()
-        .ends_with("skills/orchestrate-plan"));
+    assert!(path_ends_with(
+        out["installed"]["claude_orchestrate-plan"]
+            .as_str()
+            .unwrap(),
+        "skills/orchestrate-plan"
+    ));
     let op_dir = h.home.join(".claude/skills/orchestrate-plan");
     assert!(op_dir.join("SKILL.md").exists());
     assert!(op_dir.join("references/decomposition.md").exists());
@@ -270,10 +278,12 @@ fn skill_install_and_setup_write_the_snapshot() {
         .contains("name: orchestrate-plan"));
 
     // …and the third skill, create-context-pack.
-    assert!(out["installed"]["claude_create-context-pack"]
-        .as_str()
-        .unwrap()
-        .ends_with("skills/create-context-pack"));
+    assert!(path_ends_with(
+        out["installed"]["claude_create-context-pack"]
+            .as_str()
+            .unwrap(),
+        "skills/create-context-pack"
+    ));
     let ccp_dir = h.home.join(".claude/skills/create-context-pack");
     assert!(ccp_dir.join("SKILL.md").exists());
     assert!(ccp_dir.join("references/pack-template.md").exists());
@@ -284,10 +294,10 @@ fn skill_install_and_setup_write_the_snapshot() {
         .contains("name: create-context-pack"));
 
     // …and the fourth skill, orchestrate-run.
-    assert!(out["installed"]["claude_orchestrate-run"]
-        .as_str()
-        .unwrap()
-        .ends_with("skills/orchestrate-run"));
+    assert!(path_ends_with(
+        out["installed"]["claude_orchestrate-run"].as_str().unwrap(),
+        "skills/orchestrate-run"
+    ));
     let orun_dir = h.home.join(".claude/skills/orchestrate-run");
     assert!(orun_dir.join("SKILL.md").exists());
     assert!(orun_dir.join("references/tick-ops.md").exists());
@@ -299,10 +309,12 @@ fn skill_install_and_setup_write_the_snapshot() {
         .contains("name: orchestrate-run"));
 
     // …and the fifth skill, verify-acceptance.
-    assert!(out["installed"]["claude_verify-acceptance"]
-        .as_str()
-        .unwrap()
-        .ends_with("skills/verify-acceptance"));
+    assert!(path_ends_with(
+        out["installed"]["claude_verify-acceptance"]
+            .as_str()
+            .unwrap(),
+        "skills/verify-acceptance"
+    ));
     let verify_dir = h.home.join(".claude/skills/verify-acceptance");
     assert!(verify_dir.join("SKILL.md").exists());
     assert!(verify_dir.join("references/verdict-contract.md").exists());
@@ -313,26 +325,34 @@ fn skill_install_and_setup_write_the_snapshot() {
         .contains("name: verify-acceptance"));
 
     let codex = h.json(&["skill", "install", "--agent", "codex"]);
-    assert!(codex["installed"]["codex_haven"]
-        .as_str()
-        .unwrap()
-        .ends_with("skills/haven"));
-    assert!(codex["installed"]["codex_orchestrate-plan"]
-        .as_str()
-        .unwrap()
-        .ends_with("skills/orchestrate-plan"));
-    assert!(codex["installed"]["codex_create-context-pack"]
-        .as_str()
-        .unwrap()
-        .ends_with("skills/create-context-pack"));
-    assert!(codex["installed"]["codex_orchestrate-run"]
-        .as_str()
-        .unwrap()
-        .ends_with("skills/orchestrate-run"));
-    assert!(codex["installed"]["codex_verify-acceptance"]
-        .as_str()
-        .unwrap()
-        .ends_with("skills/verify-acceptance"));
+    assert!(path_ends_with(
+        codex["installed"]["codex_haven"].as_str().unwrap(),
+        "skills/haven"
+    ));
+    assert!(path_ends_with(
+        codex["installed"]["codex_orchestrate-plan"]
+            .as_str()
+            .unwrap(),
+        "skills/orchestrate-plan"
+    ));
+    assert!(path_ends_with(
+        codex["installed"]["codex_create-context-pack"]
+            .as_str()
+            .unwrap(),
+        "skills/create-context-pack"
+    ));
+    assert!(path_ends_with(
+        codex["installed"]["codex_orchestrate-run"]
+            .as_str()
+            .unwrap(),
+        "skills/orchestrate-run"
+    ));
+    assert!(path_ends_with(
+        codex["installed"]["codex_verify-acceptance"]
+            .as_str()
+            .unwrap(),
+        "skills/verify-acceptance"
+    ));
     assert!(h.home.join(".agents/skills/haven/SKILL.md").exists());
     assert!(h
         .home
@@ -357,7 +377,10 @@ fn skill_install_and_setup_write_the_snapshot() {
     // `setup` installs both default agent skills (alongside MCP wiring) — unless --no-skill.
     let fresh = Haven::new();
     let setup = fresh.json(&["setup"]);
-    assert!(setup["skill"].as_str().unwrap().ends_with("skills/haven"));
+    assert!(path_ends_with(
+        setup["skill"].as_str().unwrap(),
+        "skills/haven"
+    ));
     assert!(fresh.home.join(".claude/skills/haven/SKILL.md").exists());
     assert!(fresh.home.join(".agents/skills/haven/SKILL.md").exists());
     // A plain `setup` (no --project-key) creates no project — a fresh install
@@ -514,13 +537,15 @@ fn skill_install_prunes_retired_dirs_and_orphaned_files_claude() {
         .map(|v| v.as_str().unwrap())
         .collect();
     assert!(
-        pruned.iter().any(|p| p.ends_with(".claude/skills/verify")),
+        pruned
+            .iter()
+            .any(|p| path_ends_with(p, ".claude/skills/verify")),
         "pruned should name the retired dir: {pruned:?}"
     );
     assert!(
         pruned
             .iter()
-            .any(|p| p.ends_with("create-context-pack/references/verify-ops.md")),
+            .any(|p| path_ends_with(p, "create-context-pack/references/verify-ops.md")),
         "pruned should name the orphaned file: {pruned:?}"
     );
 }
@@ -558,13 +583,15 @@ fn skill_install_prunes_retired_dirs_and_orphaned_files_agents() {
         .map(|v| v.as_str().unwrap())
         .collect();
     assert!(
-        pruned.iter().any(|p| p.ends_with(".agents/skills/verify")),
+        pruned
+            .iter()
+            .any(|p| path_ends_with(p, ".agents/skills/verify")),
         "pruned should name the retired dir: {pruned:?}"
     );
     assert!(
         pruned
             .iter()
-            .any(|p| p.ends_with("create-context-pack/references/verify-ops.md")),
+            .any(|p| path_ends_with(p, "create-context-pack/references/verify-ops.md")),
         "pruned should name the orphaned file: {pruned:?}"
     );
 }
@@ -897,10 +924,12 @@ fn every_shipped_skill_is_valid_and_covered() {
 fn skill_install_can_target_one_skill() {
     let h = Haven::new();
     let out = h.json(&["skill", "install", "--skill", "orchestrate-plan"]);
-    assert!(out["installed"]["claude_orchestrate-plan"]
-        .as_str()
-        .unwrap()
-        .ends_with("skills/orchestrate-plan"));
+    assert!(path_ends_with(
+        out["installed"]["claude_orchestrate-plan"]
+            .as_str()
+            .unwrap(),
+        "skills/orchestrate-plan"
+    ));
     // --skill scopes the install: the other skills are NOT touched.
     assert!(out["installed"].get("claude_haven").is_none());
     assert!(out["installed"].get("claude_create-context-pack").is_none());
@@ -1215,9 +1244,12 @@ fn link_creates_visible_workspace_projection_and_local_git_exclude() {
     ]);
 
     let out = h.json(&["link"]);
-    assert!(out["workspace"].as_str().unwrap().ends_with("/_haven"));
-    assert!(out["items"].as_str().unwrap().ends_with("/_haven/items"));
-    assert!(out["docs"].as_str().unwrap().ends_with("/_haven/docs"));
+    assert!(path_ends_with(out["workspace"].as_str().unwrap(), "_haven"));
+    assert!(path_ends_with(
+        out["items"].as_str().unwrap(),
+        "_haven/items"
+    ));
+    assert!(path_ends_with(out["docs"].as_str().unwrap(), "_haven/docs"));
     assert!(h.home.join("_haven/README.md").exists());
     assert!(h.home.join("_haven/docs").is_dir());
     assert!(h.home.join("_haven/items/DM-2/doc.md").exists());
@@ -1364,10 +1396,10 @@ fn unlink_discovers_custom_named_projection_without_name_arg() {
     ]);
     // Link into a non-default workspace name.
     let linked = h.json(&["link", "--name", "Workspace"]);
-    assert!(linked["workspace"]
-        .as_str()
-        .unwrap()
-        .ends_with("/Workspace"));
+    assert!(path_ends_with(
+        linked["workspace"].as_str().unwrap(),
+        "Workspace"
+    ));
     assert!(h.home.join("Workspace").exists());
     let exclude = std::fs::read_to_string(h.home.join(".git/info/exclude")).unwrap();
     assert!(exclude.lines().any(|line| line.trim() == "/Workspace/"));
@@ -1376,7 +1408,10 @@ fn unlink_discovers_custom_named_projection_without_name_arg() {
     // removes it, and clears *its* git-exclude entry (not a stale /_haven/).
     let out = h.json(&["unlink"]);
     assert_eq!(out["removed_workspace"], true);
-    assert!(out["workspace"].as_str().unwrap().ends_with("/Workspace"));
+    assert!(path_ends_with(
+        out["workspace"].as_str().unwrap(),
+        "Workspace"
+    ));
     assert!(!h.home.join("Workspace").exists());
     let exclude = std::fs::read_to_string(h.home.join(".git/info/exclude")).unwrap();
     assert!(!exclude.lines().any(|line| line.trim() == "/Workspace/"));
@@ -2017,10 +2052,10 @@ fn repo_binding_gates_writes_and_warns_reads_on_project_mismatch() {
         "project", "add", "--key", "other", "--title", "Other", "--prefix", "OT",
     ]);
     let linked = h.json(&["link", "-p", "haven", "--name", "Workspace"]);
-    assert!(linked["binding"]
-        .as_str()
-        .unwrap()
-        .ends_with(".haven-project"));
+    assert!(path_ends_with(
+        linked["binding"].as_str().unwrap(),
+        ".haven-project"
+    ));
 
     // Flip the global current project away from the binding.
     h.ok(&["project", "use", "other"]);

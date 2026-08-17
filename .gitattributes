@@ -1,0 +1,5 @@
+# Keep LF endings on files whose bytes we compare or execute: the embedded
+# skill snapshot is compared byte-exactly (include_str! of skill/**/*.md), and
+# shell scripts break under CRLF. Windows checkouts must not vary them.
+*.md text eol=lf
+*.sh text eol=lf

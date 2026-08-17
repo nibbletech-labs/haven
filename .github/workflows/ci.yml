@@ -1,0 +1,76 @@
+# Workspace test suite on Linux and native Windows (HV-297). The Windows job is
+# the only Windows signal we have — there is no local Windows machine — so keep
+# it green: it compiles every #[cfg(windows)] branch and runs the same suite.
+name: ci
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.os }}
+
+      - name: Test
+        run: cargo test --workspace
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Format
+        run: cargo fmt --check
+
+      - name: Build CLI for smoke test
+        run: cargo build --bin haven
+
+      # setup → doctor against a scratch HAVEN_HOME, asserting doctor's real
+      # "ok" (it exits 0 even on warns, so parse the JSON). On Windows this runs
+      # in native PowerShell deliberately: git-bash rewrites PATH into POSIX
+      # form, which would fake out exactly the PATH-resolution check doctor does.
+      - name: Smoke test (setup → doctor)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH="$PWD/target/debug:$PATH"
+          export HAVEN_HOME="$(mktemp -d)"
+          haven setup --project-key demo --prefix DM
+          haven doctor | tee doctor.json
+          jq -e '.ok == true' doctor.json
+
+      - name: Smoke test (setup → doctor, native PowerShell)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $env:PATH = "$PWD\target\debug;$env:PATH"
+          $env:HAVEN_HOME = Join-Path $env:RUNNER_TEMP "haven-smoke"
+          haven setup --project-key demo --prefix DM
+          if ($LASTEXITCODE -ne 0) { throw "haven setup failed" }
+          $doctor = haven doctor
+          if ($LASTEXITCODE -ne 0) { throw "haven doctor failed" }
+          Write-Output $doctor
+          $report = $doctor | ConvertFrom-Json
+          if ($report.ok -ne $true) { throw "doctor reported ok=false" }
