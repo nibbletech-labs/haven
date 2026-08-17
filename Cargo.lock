@@ -558,6 +558,7 @@ dependencies = [
 name = "haven-mcp"
 version = "0.1.5"
 dependencies = [
+ "directories",
  "haven-auth",
  "haven-core",
  "haven-sync",

@@ -12,6 +12,7 @@ name = "haven-mcp"
 path = "src/main.rs"
 
 [dependencies]
+directories.workspace = true
 haven-core.workspace = true
 haven-sync.workspace = true
 haven-auth.workspace = true

@@ -34,6 +34,8 @@ jobs:
           - target: aarch64-unknown-linux-musl
             os: ubuntu-24.04-arm # native arm64 Linux runner (free for public repos)
             musl: true
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
     steps:
       - uses: actions/checkout@v5
 
@@ -65,7 +67,11 @@ jobs:
           TARGET="${{ matrix.target }}"
           NAME="haven-${VERSION}-${TARGET}"
           STAGE="$(mktemp -d)"
-          cp "target/${TARGET}/release/haven" "$STAGE/haven"
+          # Windows targets build (and ship) haven.exe; keep the name in sync
+          # with binary_name_for_target() in crates/haven-cli/src/config.rs.
+          BIN="haven"
+          case "${TARGET}" in *windows*) BIN="haven.exe";; esac
+          cp "target/${TARGET}/release/${BIN}" "$STAGE/${BIN}"
           cp LICENSE README.md "$STAGE/" 2>/dev/null || true
           TAR="${NAME}.tar.gz"
           # COPYFILE_DISABLE keeps BSD tar from injecting ._ AppleDouble files.

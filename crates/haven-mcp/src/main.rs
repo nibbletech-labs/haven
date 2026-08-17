@@ -17,8 +17,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let root = match std::env::var_os("HAVEN_HOME") {
         Some(h) => PathBuf::from(h),
         None => {
-            let home = std::env::var_os("HOME").ok_or("HOME not set")?;
-            PathBuf::from(home).join(".haven")
+            // BaseDirs, not $HOME: %HOME% isn't set on native Windows, and this
+            // matches how haven-cli resolves the same directory (the known
+            // folder there, untouched by env-var overrides).
+            let base = directories::BaseDirs::new()
+                .ok_or("cannot resolve the home directory for ~/.haven")?;
+            base.home_dir().join(".haven")
         }
     };
     std::fs::create_dir_all(&root)?;

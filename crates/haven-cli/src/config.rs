@@ -644,13 +644,22 @@ fn skill_snapshot_check(skill_name: &str, skill_dir: &Path) -> (Vec<String>, boo
     (missing_skill_files, skill_current)
 }
 
-/// Find a `haven` executable on `$PATH` (the name the MCP stanza invokes). Mirrors
+/// Platform filename of the haven binary — what installs write, what PATH
+/// lookup seeks, and what the MCP stanza invokes. `haven.exe` on Windows: an
+/// extensionless file is not executable there, and direct (shell-less) process
+/// spawns don't apply PATHEXT.
+#[cfg(windows)]
+pub const BIN_NAME: &str = "haven.exe";
+#[cfg(not(windows))]
+pub const BIN_NAME: &str = "haven";
+
+/// Find the haven executable on `$PATH` (the name the MCP stanza invokes). Mirrors
 /// a shell's lookup: first match wins; no executable-bit check (good enough for a
 /// diagnostic, and portable).
 fn haven_on_path() -> Option<PathBuf> {
     let path = std::env::var_os("PATH")?;
     std::env::split_paths(&path)
-        .map(|dir| dir.join("haven"))
+        .map(|dir| dir.join(BIN_NAME))
         .find(|candidate| candidate.is_file())
 }
 
@@ -681,7 +690,9 @@ pub fn ensure_mcp_wiring() -> Result<PathBuf> {
     }
     servers.as_object_mut().unwrap().insert(
         "haven".into(),
-        serde_json::json!({ "command": "haven", "args": ["mcp"] }),
+        // BIN_NAME, not bare "haven": MCP clients spawn without a shell, and a
+        // shell-less CreateProcess on Windows gets no PATHEXT resolution.
+        serde_json::json!({ "command": BIN_NAME, "args": ["mcp"] }),
     );
     std::fs::write(&path, serde_json::to_string_pretty(&root)?)?;
     Ok(path)
@@ -698,10 +709,11 @@ pub fn ensure_codex_mcp_wiring() -> Result<PathBuf> {
         std::fs::create_dir_all(parent)?;
     }
     let raw = std::fs::read_to_string(&path).unwrap_or_default();
+    let command = format!("command = \"{BIN_NAME}\"");
     let updated = upsert_toml_table(
         &raw,
         "mcp_servers.haven",
-        &["command = \"haven\"", "args = [\"mcp\"]"],
+        &[command.as_str(), "args = [\"mcp\"]"],
     );
     std::fs::write(&path, updated)?;
     Ok(path)
@@ -712,9 +724,8 @@ fn codex_config_has_haven(raw: &str) -> bool {
     let Some(section) = section else {
         return false;
     };
-    let has_command = section
-        .lines()
-        .any(|line| line.trim() == "command = \"haven\"");
+    let command = format!("command = \"{BIN_NAME}\"");
+    let has_command = section.lines().any(|line| line.trim() == command);
     let has_args = section
         .lines()
         .any(|line| line.trim() == "args = [\"mcp\"]");
@@ -723,22 +734,29 @@ fn codex_config_has_haven(raw: &str) -> bool {
 
 fn find_toml_section<'a>(raw: &'a str, header: &str) -> Option<&'a str> {
     let target = format!("[{header}]");
-    let start = raw.lines().position(|line| line.trim() == target)?;
-    let mut byte_start = 0;
-    for line in raw.lines().take(start + 1) {
-        byte_start += line.len() + 1;
-    }
-    let mut byte_end = raw.len();
-    let mut cursor = byte_start;
-    for line in raw.lines().skip(start + 1) {
+    // Walk with real byte offsets: split_inclusive keeps each line's own
+    // terminator, so CRLF files (the Windows norm) can't drift the offsets one
+    // byte per line the way a `lines().len() + 1` reconstruction did.
+    let mut offset = 0;
+    let mut section_start = None;
+    for line in raw.split_inclusive('\n') {
+        let end = offset + line.len();
         let trimmed = line.trim();
-        if trimmed.starts_with('[') && trimmed.ends_with(']') {
-            byte_end = cursor;
-            break;
+        match section_start {
+            None => {
+                if trimmed == target {
+                    section_start = Some(end);
+                }
+            }
+            Some(start) => {
+                if trimmed.starts_with('[') && trimmed.ends_with(']') {
+                    return raw.get(start..offset);
+                }
+            }
         }
-        cursor += line.len() + 1;
+        offset = end;
     }
-    raw.get(byte_start..byte_end)
+    section_start.map(|start| &raw[start..])
 }
 
 fn upsert_toml_table(raw: &str, header: &str, body: &[&str]) -> String {
@@ -1140,10 +1158,7 @@ pub fn resolve_install_dir(explicit: Option<&Path>) -> Result<PathBuf> {
     if let Some(d) = std::env::var_os("HAVEN_BIN_DIR") {
         candidates.push(PathBuf::from(d));
     }
-    candidates.push(PathBuf::from("/usr/local/bin"));
-    if let Some(b) = directories::BaseDirs::new() {
-        candidates.push(b.home_dir().join(".local/bin"));
-    }
+    candidates.extend(known_copy_dirs());
     for dir in candidates {
         if std::fs::create_dir_all(&dir).is_ok() && is_writable_dir(&dir) {
             return Ok(dir);
@@ -1152,6 +1167,32 @@ pub fn resolve_install_dir(explicit: Option<&Path>) -> Result<PathBuf> {
     Err(HavenError::Invalid(
         "no writable install dir found — set $HAVEN_BIN_DIR and re-run".into(),
     ))
+}
+
+/// Default directories `haven self install` copies into, in preference order.
+/// ONE list, shared with install-method detection (`under_known_copy_dir_with_env`)
+/// so an install we performed is always recognised and auto-update runs instead
+/// of falling through to `Unknown`. The Windows entry must match
+/// packaging/install.ps1 (`%LOCALAPPDATA%\Programs\haven\bin`).
+fn known_copy_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    #[cfg(not(windows))]
+    {
+        dirs.push(PathBuf::from("/usr/local/bin"));
+        if let Some(b) = directories::BaseDirs::new() {
+            dirs.push(b.home_dir().join(".local/bin"));
+        }
+    }
+    #[cfg(windows)]
+    if let Some(b) = directories::BaseDirs::new() {
+        dirs.push(
+            b.data_local_dir()
+                .join("Programs")
+                .join("haven")
+                .join("bin"),
+        );
+    }
+    dirs
 }
 
 /// True if a file can actually be created (and removed) in `dir` — more honest
@@ -1226,8 +1267,62 @@ pub fn atomic_write_executable(dest: &Path, bytes: &[u8]) -> Result<()> {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755))?;
     }
+    #[cfg(not(windows))]
     std::fs::rename(&tmp, dest)?;
+    #[cfg(windows)]
+    swap_over_possibly_running(&tmp, dest)?;
     Ok(())
+}
+
+/// Windows refuses to replace a running image via rename, but permits renaming
+/// that image. So: try the plain replace first (covers a dest that isn't
+/// running), and on failure move `dest` aside to a `.old` sibling, then move
+/// the new binary in. The `.old` carcass usually stays locked until the old
+/// process exits, so each call also sweeps any now-unlocked leftovers.
+#[cfg(windows)]
+fn swap_over_possibly_running(tmp: &Path, dest: &Path) -> Result<()> {
+    sweep_old_siblings(dest);
+    match std::fs::rename(tmp, dest) {
+        Ok(()) => Ok(()),
+        Err(err) => {
+            if !dest.exists() {
+                return Err(err.into());
+            }
+            let name = dest.file_name().unwrap_or_default().to_string_lossy();
+            let old = dest.with_file_name(format!("{name}.{}.old", std::process::id()));
+            let _ = std::fs::remove_file(&old);
+            std::fs::rename(dest, &old)?;
+            if let Err(e) = std::fs::rename(tmp, dest) {
+                // Put the original back so the install isn't left headless.
+                let _ = std::fs::rename(&old, dest);
+                return Err(e.into());
+            }
+            // Usually still locked (it's the running image); the next run's
+            // sweep collects it.
+            let _ = std::fs::remove_file(&old);
+            Ok(())
+        }
+    }
+}
+
+/// Delete unlocked `<binary>.<pid>.old` leftovers beside `dest` from previous
+/// swaps. Failures are expected (still-running old images) and ignored.
+#[cfg(windows)]
+fn sweep_old_siblings(dest: &Path) {
+    let (Some(dir), Some(name)) = (dest.parent(), dest.file_name()) else {
+        return;
+    };
+    let prefix = format!("{}.", name.to_string_lossy());
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let fname = entry.file_name();
+        let fname = fname.to_string_lossy();
+        if fname.starts_with(&prefix) && fname.ends_with(".old") {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
 }
 
 /// How this running `haven` was installed — drives the `self update` advice.
@@ -1297,13 +1392,8 @@ fn under_known_copy_dir(exe: &Path) -> bool {
 }
 
 fn under_known_copy_dir_with_env(exe: &Path, haven_bin_dir: Option<&Path>) -> bool {
-    if under_install_dir(exe, Path::new("/usr/local/bin")) {
+    if known_copy_dirs().iter().any(|d| under_install_dir(exe, d)) {
         return true;
-    }
-    if let Some(b) = directories::BaseDirs::new() {
-        if under_install_dir(exe, &b.home_dir().join(".local/bin")) {
-            return true;
-        }
     }
     haven_bin_dir
         .map(|d| under_install_dir(exe, d))
@@ -1476,8 +1566,20 @@ pub fn current_target_triple() -> Option<&'static str> {
         ("macos", "x86_64") => "x86_64-apple-darwin",
         ("linux", "x86_64") => "x86_64-unknown-linux-musl",
         ("linux", "aarch64") => "aarch64-unknown-linux-musl",
+        ("windows", "x86_64") => "x86_64-pc-windows-msvc",
         _ => return None,
     })
+}
+
+/// The binary filename a release tarball for `target` carries — `haven.exe`
+/// for Windows targets, `haven` otherwise. Keep in sync with the packaging
+/// step in `.github/workflows/release.yml`.
+fn binary_name_for_target(target: &str) -> &'static str {
+    if target.contains("-windows-") {
+        "haven.exe"
+    } else {
+        "haven"
+    }
 }
 
 /// Download the prebuilt release tarball for `tag`/`target`, verify it against
@@ -1525,8 +1627,9 @@ async fn fetch_release_binary_async(tag: &str, version: &str, target: &str) -> R
         )));
     }
 
-    extract_haven_binary(&tarball)
-        .ok_or_else(|| HavenError::Invalid(format!("no `haven` binary inside {asset}")))
+    let binary = binary_name_for_target(target);
+    extract_haven_binary(&tarball, binary)
+        .ok_or_else(|| HavenError::Invalid(format!("no `{binary}` binary inside {asset}")))
 }
 
 async fn http_get_text(client: &reqwest::Client, url: &str) -> std::result::Result<String, String> {
@@ -1559,12 +1662,13 @@ fn sha256_hex(bytes: &[u8]) -> String {
         })
 }
 
-/// Pull the top-level regular file `haven` out of a gzip-compressed tar archive,
+/// Pull the top-level regular file named `binary` (`haven` / `haven.exe`,
+/// derived from the release target) out of a gzip-compressed tar archive,
 /// returning its bytes. `None` if the archive is unreadable or has no such file.
-/// Matches only the root entry (`haven` or `./haven`, as our `tar -C dir .`
-/// tarballs store it) — never a nested `sub/haven` — so a crafted archive can't
-/// smuggle the binary out of a decoy path.
-fn extract_haven_binary(tar_gz: &[u8]) -> Option<Vec<u8>> {
+/// Matches only the root entry (`<binary>` or `./<binary>`, as our `tar -C dir .`
+/// tarballs store it) — never a nested `sub/<binary>` — so a crafted archive
+/// can't smuggle the binary out of a decoy path.
+fn extract_haven_binary(tar_gz: &[u8], binary: &str) -> Option<Vec<u8>> {
     use std::io::Read;
     let dec = flate2::read::GzDecoder::new(std::io::Cursor::new(tar_gz));
     let mut archive = tar::Archive::new(dec);
@@ -1576,7 +1680,7 @@ fn extract_haven_binary(tar_gz: &[u8]) -> Option<Vec<u8>> {
         let is_haven = match entry.path() {
             Ok(p) => {
                 let rel = p.strip_prefix("./").unwrap_or(&p);
-                rel == Path::new("haven")
+                rel == Path::new(binary)
             }
             Err(_) => false,
         };
@@ -1642,7 +1746,7 @@ mod update_tests {
         let payload = b"\x7fELF not-really-but-close";
         let archive = tar_gz(&[("README.md", b"readme"), ("haven", payload)]);
         assert_eq!(
-            extract_haven_binary(&archive).as_deref(),
+            extract_haven_binary(&archive, "haven").as_deref(),
             Some(&payload[..])
         );
     }
@@ -1653,7 +1757,7 @@ mod update_tests {
         let payload = b"binary-bytes";
         let archive = tar_gz(&[("./haven", payload)]);
         assert_eq!(
-            extract_haven_binary(&archive).as_deref(),
+            extract_haven_binary(&archive, "haven").as_deref(),
             Some(&payload[..])
         );
     }
@@ -1664,13 +1768,103 @@ mod update_tests {
         // top-level entry — it must not be extracted (defense in depth; the real
         // gate is the upstream sha256 check).
         let archive = tar_gz(&[("decoy/haven", b"evil"), ("README.md", b"r")]);
-        assert!(extract_haven_binary(&archive).is_none());
+        assert!(extract_haven_binary(&archive, "haven").is_none());
     }
 
     #[test]
     fn extract_haven_binary_absent_is_none() {
         let archive = tar_gz(&[("LICENSE", b"mit"), ("README.md", b"readme")]);
-        assert!(extract_haven_binary(&archive).is_none());
+        assert!(extract_haven_binary(&archive, "haven").is_none());
+    }
+
+    #[test]
+    fn extract_haven_binary_windows_name_is_exact() {
+        // The Windows target expects exactly `haven.exe`: an extensionless
+        // `haven` must not satisfy it (and vice versa), and a nested decoy
+        // `haven.exe` keeps failing the top-level-entry rule.
+        let payload = b"MZ not-really-a-pe";
+        let archive = tar_gz(&[("haven.exe", payload), ("README.md", b"r")]);
+        assert_eq!(
+            extract_haven_binary(&archive, "haven.exe").as_deref(),
+            Some(&payload[..])
+        );
+        assert!(extract_haven_binary(&archive, "haven").is_none());
+
+        let unix_archive = tar_gz(&[("haven", b"elf")]);
+        assert!(extract_haven_binary(&unix_archive, "haven.exe").is_none());
+
+        let decoy = tar_gz(&[("decoy/haven.exe", b"evil")]);
+        assert!(extract_haven_binary(&decoy, "haven.exe").is_none());
+    }
+
+    #[test]
+    fn binary_name_follows_target() {
+        assert_eq!(
+            binary_name_for_target("x86_64-pc-windows-msvc"),
+            "haven.exe"
+        );
+        assert_eq!(binary_name_for_target("aarch64-apple-darwin"), "haven");
+        assert_eq!(binary_name_for_target("x86_64-unknown-linux-musl"), "haven");
+    }
+
+    #[test]
+    fn find_toml_section_handles_crlf() {
+        // CRLF is the norm for ~/.codex/config.toml written on Windows; byte
+        // offsets must not drift one byte per line (they did when offsets were
+        // rebuilt as `line.len() + 1` over `str::lines()`).
+        let raw = format!(
+            "[other]\r\nx = 1\r\n\r\n[mcp_servers.haven]\r\ncommand = \"{BIN_NAME}\"\r\nargs = [\"mcp\"]\r\n\r\n[zzz]\r\ny = 2\r\n"
+        );
+        let section = find_toml_section(&raw, "mcp_servers.haven").unwrap();
+        assert!(section.contains("args = [\"mcp\"]"));
+        assert!(!section.contains("[zzz]"));
+        assert!(codex_config_has_haven(&raw));
+
+        // LF behaviour unchanged.
+        assert!(codex_config_has_haven(&raw.replace("\r\n", "\n")));
+
+        // Section at EOF, no trailing newline.
+        let tail = format!("[mcp_servers.haven]\r\ncommand = \"{BIN_NAME}\"\r\nargs = [\"mcp\"]");
+        assert!(codex_config_has_haven(&tail));
+
+        // Missing section still reports absent.
+        assert!(!codex_config_has_haven("[other]\r\nx = 1\r\n"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn atomic_write_executable_swaps_and_sweeps_on_windows() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("haven.exe");
+        atomic_write_executable(&dest, b"one").unwrap();
+        assert_eq!(std::fs::read(&dest).unwrap(), b"one");
+
+        // A stale carcass from an earlier swap is swept by the next write.
+        let stale = dir.path().join("haven.exe.1234.old");
+        std::fs::write(&stale, b"stale").unwrap();
+        atomic_write_executable(&dest, b"two").unwrap();
+        assert_eq!(std::fs::read(&dest).unwrap(), b"two");
+        assert!(!stale.exists());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn atomic_write_executable_errors_but_keeps_dest_when_fully_locked() {
+        // A zero-sharing hold is harsher than a running image (which permits
+        // the rename-aside): every swap strategy fails. What must hold is that
+        // the error propagates and dest keeps its original content.
+        use std::os::windows::fs::OpenOptionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("haven.exe");
+        atomic_write_executable(&dest, b"one").unwrap();
+        let hold = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(&dest)
+            .unwrap();
+        assert!(atomic_write_executable(&dest, b"two").is_err());
+        drop(hold);
+        assert_eq!(std::fs::read(&dest).unwrap(), b"one");
     }
 
     #[cfg(unix)]

@@ -2091,7 +2091,7 @@ fn cmd_self_install(a: &SelfInstallArgs) -> Result<Output> {
     let source = std::fs::canonicalize(&raw_exe).map_err(HavenError::Io)?;
 
     let dir = config::resolve_install_dir(a.dir.as_deref())?;
-    let dest = dir.join("haven");
+    let dest = dir.join(config::BIN_NAME);
 
     // Already resolves to this exact build → nothing to do (idempotent re-run).
     if std::fs::canonicalize(&dest).ok().as_deref() == Some(source.as_path()) {
@@ -2518,8 +2518,10 @@ fn doctor_report(store: Result<Store>, paths: &config::Paths) -> Result<serde_js
                 None => check(
                     "path",
                     "warn",
-                    "`haven` not on $PATH — the MCP `command: \"haven\"` stanza can't launch it"
-                        .into(),
+                    format!(
+                        "`{0}` not on $PATH — the MCP `command: \"{0}\"` stanza can't launch it",
+                        config::BIN_NAME
+                    ),
                 ),
             });
         }
