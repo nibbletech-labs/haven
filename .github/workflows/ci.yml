@@ -74,3 +74,55 @@ jobs:
           Write-Output $doctor
           $report = $doctor | ConvertFrom-Json
           if ($report.ok -ne $true) { throw "doctor reported ok=false" }
+
+      # The runner is privileged, so every symlink above SUCCEEDS — the
+      # no-Developer-Mode degradation arms never fire in the suite. Re-run the
+      # link flow as a freshly created STANDARD user: symlink creation then
+      # genuinely fails and `haven link` must fall back to a copy, loudly.
+      - name: Symlink-fallback probe (standard user, no symlink privilege)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $pw = (-join ((65..90) + (97..122) + (48..57) | Get-Random -Count 20 | ForEach-Object { [char]$_ })) + 'aA1!'
+          $sec = ConvertTo-SecureString $pw -AsPlainText -Force
+          New-LocalUser -Name havenprobe -Password $sec -PasswordNeverExpires | Out-Null
+          Add-LocalGroupMember -Group Users -Member havenprobe
+
+          $work = 'C:\haven-probe'
+          New-Item -ItemType Directory -Path $work | Out-Null
+          Copy-Item target\debug\haven.exe (Join-Path $work 'haven.exe')
+          icacls $work /grant 'havenprobe:(OI)(CI)F' | Out-Null
+
+          @'
+          $ErrorActionPreference = 'Stop'
+          Set-Location C:\haven-probe
+          $env:HAVEN_HOME = 'C:\haven-probe\home'
+          .\haven.exe setup --no-skill --project-key demo --prefix DM
+          if ($LASTEXITCODE -ne 0) { exit 10 }
+          .\haven.exe item add "probe item"
+          if ($LASTEXITCODE -ne 0) { exit 11 }
+          New-Item -ItemType Directory -Path C:\haven-probe\repo | Out-Null
+          Set-Location C:\haven-probe\repo
+          ..\haven.exe link
+          if ($LASTEXITCODE -ne 0) { exit 12 }
+          exit 0
+          '@ | Set-Content (Join-Path $work 'probe.ps1')
+
+          $cred = New-Object pscredential ('havenprobe', $sec)
+          $p = Start-Process pwsh -Credential $cred -WorkingDirectory $work `
+            -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', 'C:\haven-probe\probe.ps1' `
+            -Wait -PassThru -RedirectStandardOutput "$work\out.txt" -RedirectStandardError "$work\err.txt"
+          Get-Content "$work\out.txt" -ErrorAction SilentlyContinue
+          Get-Content "$work\err.txt" -ErrorAction SilentlyContinue
+          if ($p.ExitCode -ne 0) { throw "probe failed with exit $($p.ExitCode)" }
+
+          # The projection must exist AND be a real copy, not a reparse point.
+          $items = Get-Item 'C:\haven-probe\repo\_haven\items'
+          if ($items.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+            throw 'probe created a symlink — expected the standard user to hit the copy fallback'
+          }
+          $err = Get-Content "$work\err.txt" -Raw
+          if ($err -notmatch 'COPY') {
+            throw 'expected the loud copy-fallback warning on stderr'
+          }

@@ -1,0 +1,32 @@
+# On-demand end-to-end check of the PUBLISHED Windows installer (HV-297):
+# runs packaging/install.ps1 against a real release and asserts the install is
+# healthy (binary on disk, doctor ok, update path recognised). Dispatch-only —
+# it needs a release that carries the Windows asset (v0.1.6+), so it cannot run
+# on ordinary pushes. Note the runner is NOT a clean machine (large
+# preinstalled toolchain); a throwaway VM is still the honest clean-box check.
+name: install-check
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release tag to install (blank = latest)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  windows-installer:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install from the published release and verify
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $verifyArgs = @{ Installer = 'packaging\install.ps1' }
+          if ('${{ inputs.version }}') { $verifyArgs.Version = '${{ inputs.version }}' }
+          & packaging\verify-install.ps1 @verifyArgs
