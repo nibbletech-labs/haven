@@ -97,6 +97,11 @@ jobs:
           @'
           $ErrorActionPreference = 'Stop'
           Set-Location C:\haven-probe
+          # A bare credentialed logon has no profile, so %TEMP% points nowhere —
+          # SQLite needs real temp space for its migration table rebuilds.
+          New-Item -ItemType Directory -Force -Path C:\haven-probe\tmp | Out-Null
+          $env:TEMP = 'C:\haven-probe\tmp'
+          $env:TMP = 'C:\haven-probe\tmp'
           $env:HAVEN_HOME = 'C:\haven-probe\home'
           .\haven.exe setup --no-skill --project-key demo --prefix DM
           if ($LASTEXITCODE -ne 0) { exit 10 }
@@ -110,7 +115,7 @@ jobs:
           '@ | Set-Content (Join-Path $work 'probe.ps1')
 
           $cred = New-Object pscredential ('havenprobe', $sec)
-          $p = Start-Process pwsh -Credential $cred -WorkingDirectory $work `
+          $p = Start-Process pwsh -Credential $cred -WorkingDirectory $work -LoadUserProfile `
             -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', 'C:\haven-probe\probe.ps1' `
             -Wait -PassThru -RedirectStandardOutput "$work\out.txt" -RedirectStandardError "$work\err.txt"
           Get-Content "$work\out.txt" -ErrorAction SilentlyContinue
