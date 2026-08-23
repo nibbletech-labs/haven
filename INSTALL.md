@@ -46,7 +46,7 @@ curl -fsSL https://raw.githubusercontent.com/nibbletech-labs/haven/main/packagin
 irm https://raw.githubusercontent.com/nibbletech-labs/haven/main/packaging/install.ps1 | iex
 ```
 
-It downloads the x64 release tarball, verifies its sha256, extracts with the tar.exe that ships in Windows 10 1803+, installs `haven.exe` to `%LOCALAPPDATA%\Programs\haven\bin` (override with `HAVEN_BIN_DIR`), adds that directory to your user PATH, and runs `haven setup`. Pin a version with `$env:HAVEN_VERSION = 'v0.1.6'`. Windows on ARM has no prebuilt binary and the installer says so rather than guessing. Already-open terminals keep their old PATH; open a new one to pick up `haven`.
+It downloads the x64 release tarball, verifies its sha256, extracts with the tar.exe that ships in Windows 10 1803+, installs `haven.exe` to `%LOCALAPPDATA%\Programs\haven\bin` (override with `HAVEN_BIN_DIR`), adds that directory to your user PATH, and runs `haven setup`. Pin a version with `$env:HAVEN_VERSION = 'v0.1.7'`. Windows on ARM has no prebuilt binary and the installer says so rather than guessing. Already-open terminals keep their old PATH; open a new one to pick up `haven`.
 
 Set `$env:HAVEN_GRANT_CODEX_STORE_ACCESS = '1'` before running the PowerShell
 installer to include the same explicit, narrow Codex store grant.

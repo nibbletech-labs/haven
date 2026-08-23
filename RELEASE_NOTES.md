@@ -1,26 +1,27 @@
-## v0.1.6: Native Windows
+## v0.1.7: Safe concurrent Codex sessions
 
-Haven now runs natively on Windows. A PowerShell one-liner installs a prebuilt, checksum-verified `haven.exe` (no WSL, no admin rights, no Rust toolchain), wires the MCP server and skills into the same `%USERPROFILE%` locations Claude Code and Codex read on Windows, and `haven self update` can swap the binary even while it is running. macOS and Linux installs are untouched.
+Haven no longer lets one Codex session's sticky project selection silently retarget another session. This release also makes the local Haven store permission an explicit, narrowly scoped part of Codex setup, so agents can update canonical session metadata without requesting broad filesystem access.
 
-**Install on Windows**
+**Concurrent project safety**
 
-- **One-line install.** `irm https://raw.githubusercontent.com/nibbletech-labs/haven/main/packaging/install.ps1 | iex` downloads the x64 release, verifies its sha256 sidecar, installs to `%LOCALAPPDATA%\Programs\haven\bin`, puts that directory on your user PATH, and runs `haven setup`. No elevation, no Unix shell. Windows on ARM is detected and refused with a clear message rather than a broken download (only x64 is published).
-- **Windows release assets.** Every release now ships `haven-<version>-x86_64-pc-windows-msvc.tar.gz` with the same sha256 sidecar format as the other platforms, and CI runs the full workspace suite on Windows alongside Linux.
+- **Repo binding wins over shared sticky state.** Project-scoped CLI commands now resolve in this order: an explicit `-p`, the nearest `.haven-project`, then the sticky selector used as a human-shell fallback outside linked repos. A selector change in another process can no longer move a command running inside a linked project.
+- **Explicit overrides remain explicit.** `-p` and the project-bearing `status`/`prime` forms still win, including the existing warning when they intentionally cross a repo binding. Telemetry distinguishes a caller-supplied project from one injected by the repo link.
+- **Agents carry the project per call.** The shipped Haven skill now requires the MCP `project` argument or CLI `-p <key>` on every project-scoped operation and tells agents never to run `haven project use`.
 
-**Windows-correct behaviour**
+**Scoped Codex store access**
 
-- **Self-update can replace a running `haven.exe`.** Windows locks a running binary against overwrite but allows renaming it, so the updater moves the live image aside, moves the verified new one into place, and sweeps the leftovers on later runs.
-- **Agent wiring uses the real binary name.** Setup writes `command = "haven.exe"` into the Claude and Codex MCP configs on Windows (MCP clients spawn the server without a shell, which resolves no extensionless names), and `haven doctor` looks for `haven.exe` on PATH.
-- **Windows-saved Codex configs parse correctly.** A `config.toml` with Windows line endings no longer mis-reads the `[mcp_servers.haven]` section, so doctor stops false-warning and setup stops rewriting a stanza that was already correct.
-- **Symlinks degrade loudly, never silently.** Without Developer Mode, `haven link` falls back to a copy and says so plainly (a snapshot, not a live view), and restoring a backup that contains symlinks reports each entry it could not recreate instead of dropping it without a word.
+- **Opt in during setup.** `haven setup --agent codex --grant-store-access` adds write access only for the resolved Haven root. It preserves unrelated Codex configuration, is idempotent, respects `CODEX_HOME`, never introduces Full Access, and reports legacy read-only or malformed configurations without overwriting them.
+- **Both Codex configuration generations are supported safely.** Modern permission profiles get a `haven-local` profile extending the current default; legacy `workspace-write` configurations get only the Haven root appended to `writable_roots`. Haven never mixes the two systems.
+- **Installers can make the same explicit grant.** For the POSIX installer, pass `--grant-store-access` or set `HAVEN_GRANT_CODEX_STORE_ACCESS=1`. For PowerShell, set `HAVEN_GRANT_CODEX_STORE_ACCESS=1`. The default remains permission-neutral.
+- **Doctor verifies the result.** `haven doctor` reports Codex MCP registration, skill freshness, and whether the active Codex configuration grants the resolved store root. Restart Codex after changing the profile so new sessions inherit it.
 
-**Hardening on every platform**
+**Other hardening**
 
-- **Backup restore refuses to leave a stale WAL.** Cleaning up the SQLite `-wal`/`-shm` sidecars after a restore is now a hard error if it fails for any reason other than the file being absent, because a stale WAL beside a restored database replays as silent corruption.
-- **Sync hydration cannot escape the project tree.** Remote-supplied artifact paths are re-checked after joining, closing an absolute-path edge case (Windows drive and UNC forms included).
+- The Windows install-check workflow now exercises install-then-self-update composition and proves the native installer refuses unsupported Windows ARM64 instead of fetching a nonexistent asset.
+- `orchestrate-plan`'s seal gate now uses the same one-build-pass rule as its planning front door: size alone does not force a coherent item into artificial subtasks.
 
-**Upgrade Notes**
+**Upgrade notes**
 
-- No migration is required.
-- macOS and Linux are unaffected: no path resolution, install location, or config format changed there.
-- On Windows, restore a backup with no other haven process running (Windows locks the open database file; quit a live `haven mcp` first).
+- No database migration is required.
+- Existing Codex users who want Haven to write outside a repository sandbox should rerun `haven setup --agent codex --grant-store-access`, then start a new Codex session.
+- Existing human CLI behavior outside linked repos is unchanged; the sticky selector remains available there.

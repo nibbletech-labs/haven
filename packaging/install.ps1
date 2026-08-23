@@ -8,7 +8,7 @@
 #   powershell -ExecutionPolicy Bypass -File packaging\install.ps1
 #
 # Env:
-#   HAVEN_VERSION = v0.1.5   install a specific release tag (default: latest)
+#   HAVEN_VERSION = v0.1.7   install a specific release tag (default: latest)
 #   HAVEN_BIN_DIR = C:\path  install dir (default: %LOCALAPPDATA%\Programs\haven\bin)
 #   HAVEN_GRANT_CODEX_STORE_ACCESS = 1  opt into Codex write access for ~/.haven
 #
