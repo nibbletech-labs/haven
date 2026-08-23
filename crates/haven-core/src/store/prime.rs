@@ -114,7 +114,7 @@ const CONVENTIONS: &[&str] = &[
     "body is a one-line summary, NOT content — real content lives in files/artifacts under the item.",
     "Close the loop: finish work with `item complete <ref> --evidence \"…\"` (it reports what it unblocked).",
     "Raise findings/gaps in chat first and capture them only if the person agrees — an item they didn't ask for is backlog they have to triage.",
-    "CLI has a sticky current-project: pass -p <project> explicitly; MCP is per-call (project arg).",
+    "Agents carry the project per call: CLI -p <project>, MCP project arg. Repo links are a CLI safety default; sticky selection is for human shells.",
 ];
 
 impl Store {

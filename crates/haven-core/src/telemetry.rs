@@ -9,8 +9,8 @@
 //! - `tool` — the tool / op name (`haven_next`, `item.complete`, …).
 //! - `project_passed` — the `project` selector as the caller gave it (or null).
 //! - `project_resolved` — the project key the op actually resolved to. When this
-//!   differs from `project_passed` the sticky `current_project` fallback was in
-//!   play — the drift HV-153 surfaced for objects, now visible for everything.
+//!   differs from `project_passed`, a repo binding or sticky `current_project`
+//!   fallback supplied the key — observable instead of silent.
 //! - `error_class` — `ok` on success, else the [`HavenError::code`] bucket
 //!   (`not_found` / `invalid` / `conflict` / …).
 //! - `latency_ms` — wall time of the call, measured with [`std::time::Instant`].

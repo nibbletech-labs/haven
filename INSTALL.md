@@ -34,6 +34,12 @@ curl -fsSL https://raw.githubusercontent.com/nibbletech-labs/haven/main/packagin
 
 It downloads the matching release tarball, verifies its sha256, and installs to the first writable of `$HAVEN_BIN_DIR`, `/usr/local/bin`, `~/.local/bin`. Pin a version with `HAVEN_VERSION=v0.1.4`. On a platform without a prebuilt binary it falls back to building from source (needs cargo); force that with `--from-source` or `HAVEN_BUILD_FROM_SOURCE=1`.
 
+To include the narrow Codex store grant in installation, opt in explicitly:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/nibbletech-labs/haven/main/packaging/install.sh | HAVEN_GRANT_CODEX_STORE_ACCESS=1 sh
+```
+
 **Windows install script** (PowerShell, prebuilt x64 binary, no admin rights, no WSL):
 
 ```powershell
@@ -41,6 +47,9 @@ irm https://raw.githubusercontent.com/nibbletech-labs/haven/main/packaging/insta
 ```
 
 It downloads the x64 release tarball, verifies its sha256, extracts with the tar.exe that ships in Windows 10 1803+, installs `haven.exe` to `%LOCALAPPDATA%\Programs\haven\bin` (override with `HAVEN_BIN_DIR`), adds that directory to your user PATH, and runs `haven setup`. Pin a version with `$env:HAVEN_VERSION = 'v0.1.6'`. Windows on ARM has no prebuilt binary and the installer says so rather than guessing. Already-open terminals keep their old PATH; open a new one to pick up `haven`.
+
+Set `$env:HAVEN_GRANT_CODEX_STORE_ACCESS = '1'` before running the PowerShell
+installer to include the same explicit, narrow Codex store grant.
 
 **From source:**
 
@@ -54,7 +63,7 @@ cargo build --release
 
 ## What `haven setup` does
 
-`haven setup` is safe to run more than once. Beyond creating `~/.haven` and running migrations, it makes your AI agents Haven-aware: it installs a suite of skills (`haven`, plus the planning and execution skills) into your **user-scope** skills folders (`~/.claude/skills` for Claude, `~/.agents/skills` for Codex) and registers the `haven` MCP server for both. So every new Claude or Codex session, in any repo, already knows how to drive Haven from plain language and can act on it through the MCP tools: no per-project wiring, and a binary upgrade refreshes the skills automatically. A plain `setup` creates **no project**. A fresh install starts with none; pass `--project-key` (with `--project-title` and `--prefix`) to create one up front, or just let your AI create one the first time you ask it to track something. It writes nothing into the current directory.
+`haven setup` is safe to run more than once. Beyond creating `~/.haven` and running migrations, it makes your AI agents Haven-aware: it installs a suite of skills (`haven`, plus the planning and execution skills) into your **user-scope** skills folders (`~/.claude/skills` for Claude, `~/.agents/skills` for Codex) and registers the `haven` MCP server for both. So every new Claude or Codex session, in any repo, already knows how to drive Haven from plain language and can act on it through the MCP tools: no per-project wiring, and a binary upgrade refreshes the skills automatically. A plain `setup` creates **no project** and does not change sandbox permissions. A fresh install starts with none; pass `--project-key` (with `--project-title` and `--prefix`) to create one up front, or just let your AI create one the first time you ask it to track something. It writes nothing into the current directory.
 
 ## Projects
 
@@ -66,7 +75,9 @@ A fresh install starts with **no project**; there's no default. You get one of t
 haven setup --project-key my-work --project-title "My Work" --prefix MW
 ```
 
-Later commands use the current project by default. You can switch projects or target one command explicitly:
+Inside a linked repo, later CLI commands use that repo's project; outside one,
+human shell commands fall back to the sticky current project. An explicit
+`--project/-p` always wins:
 
 ```sh
 haven project add --key website --title "Website" --prefix WEB
@@ -92,6 +103,7 @@ haven self update             # apply the right update for how haven was install
 
 ```sh
 haven setup --agent codex
+haven setup --agent codex --grant-store-access
 haven setup --agent claude
 haven skill install --agent codex
 ```
@@ -103,6 +115,13 @@ Codex reads MCP servers from `~/.codex/config.toml` or trusted project `.codex/c
 command = "haven"
 args = ["mcp"]
 ```
+
+Codex's default workspace sandbox cannot normally write the canonical store
+outside a repo. `--grant-store-access` explicitly adds only the resolved Haven
+root to Codex's write policy, preserving other settings. It uses modern
+permission profiles unless the config already uses legacy sandbox settings; it
+never mixes the two and never enables Full Access. Restart Codex sessions after
+changing the policy. `haven doctor` reports the user-config result.
 
 On Windows the command is `haven.exe` in both agents' configs: MCP clients spawn the server without a shell, and a shell-less spawn does not resolve extensionless names.
 

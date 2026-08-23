@@ -5,14 +5,15 @@ steps, judgment heuristics, and real commands. Commands are the local CLI; for a
 remote/headless client, the MCP equivalent and the CLI↔MCP differences are in
 `surface-map.md`. JSON is the default output — read it to confirm refs and state.
 
-**Before any project-scoped op:** make sure you know which project you're in
-(every item lives in one). If the current CLI project is already known from repo
-instructions, prior session context, or `haven prime`, do **not** call
-`project list` again. If it is unknown, **CLI:** `haven project list` →
-`haven project use <key>` (sticky) or `haven project add …`. **MCP/remote:**
-`haven_list_projects` → pass `project: "<key>"` per call (no `use`);
-`haven_add_project` to create. Settle this once per session, not per command (see
-`surface-map.md` for the selection model).
+**Before any project-scoped op:** make sure you know the project key (every item
+lives in one). If it is already known from repo instructions, prior context, or
+prime, do **not** list projects again. Prefer MCP: `haven_list_projects` to
+discover, then pass `project: "<key>"` on every project-scoped call. CLI fallback:
+`haven project list`, then add `-p <P>` to every project-scoped command (the
+examples below use `<P>` for that key). **Agents never run `haven project use`**:
+its sticky selector is shared across concurrent sessions. `haven_add_project` /
+`haven project add …` creates a project. Settle the key once per session, then
+carry it per call (see `surface-map.md`).
 
 ## Contents
 - [Status routing (per-status action)](#status-routing)
@@ -78,10 +79,10 @@ dispatching:
   file and register it as an artifact (workflow 10) — don't cram it into `body`.
 
 ```bash
-haven item add "Rate-limit the public search endpoint" --body "Abuse vector flagged in perf review"
-haven item add "Add JWKS caching to auth verify path"
-haven item add "Decide: presigned vs inline content for large artifacts" --type research
-haven item list --icebox --pretty   # show the user what landed
+haven -p <P> item add "Rate-limit the public search endpoint" --body "Abuse vector flagged in perf review"
+haven -p <P> item add "Add JWKS caching to auth verify path"
+haven -p <P> item add "Decide: presigned vs inline content for large artifacts" --type research
+haven -p <P> item list --icebox --pretty   # show the user what landed
 ```
 
 ## 2. Plan / prioritise
@@ -177,12 +178,12 @@ the purpose-built briefing when available, and widen only when the visible
 candidates don't explain the choice:
 
 ```bash
-haven prime                         # once at session start, or skip if already read
-haven dispatch --owner ai --limit 5 # bounded next + targeted candidate context
-haven dispatch --owner ai --scope HV-30 --limit 5  # restrict to a subtree
-haven next --owner ai --limit 5      # fallback compact candidate list
-haven item get HV-12 --include edges,artifacts  # fallback detail for plausible candidates
-haven next --explain --owner ai      # only when next/dispatch is empty or surprising
+haven -p <P> prime                         # once at session start, or skip if already read
+haven -p <P> dispatch --owner ai --limit 5 # bounded next + targeted candidate context
+haven -p <P> dispatch --owner ai --scope HV-30 --limit 5  # restrict to a subtree
+haven -p <P> next --owner ai --limit 5      # fallback compact candidate list
+haven -p <P> item get HV-12 --include edges,artifacts  # fallback detail for plausible candidates
+haven -p <P> next --explain --owner ai      # only when next/dispatch is empty or surprising
 ```
 
 Avoid `haven graph` for ordinary "what should I work on?" dispatch. Use it when
@@ -198,11 +199,11 @@ verify. The store enforces this (`ready` requires `done_looks_like`), but treat
 it as deliberate intent, not something to discover by tripping the guard.
 
 ```bash
-haven next --pretty                 # top of the dispatch queue
-haven dispatch --owner ai --limit 5 # richer briefing, still bounded
-haven next --owner human --limit 3  # work assigned to a human
-haven next --owner ai               # work assigned to an AI (owner_kind = ai)
-haven next --explain --owner ai     # WHY the queue is empty (when it is)
+haven -p <P> next --pretty                 # top of the dispatch queue
+haven -p <P> dispatch --owner ai --limit 5 # richer briefing, still bounded
+haven -p <P> next --owner human --limit 3  # work assigned to a human
+haven -p <P> next --owner ai               # work assigned to an AI (owner_kind = ai)
+haven -p <P> next --explain --owner ai     # WHY the queue is empty (when it is)
 ```
 
 **Heuristics:**
@@ -244,8 +245,8 @@ Y", or similar.
   step that is not itself a release.
 
 ```bash
-haven item add "v1 auth hardening" --type release
-haven group HV-30 --add HV-12 --add HV-13 --add HV-14
+haven -p <P> item add "v1 auth hardening" --type release
+haven -p <P> group HV-30 --add HV-12 --add HV-13 --add HV-14
 ```
 
 **Shared-context check:** before telling an AI to work the group, inspect whether
@@ -306,12 +307,12 @@ a redesign replaces an item (supersede). All emit append-only lineage; sources
 become `superseded`.
 
 ```bash
-haven evolve split HV-10 \
+haven -p <P> evolve split HV-10 \
   --into "Backend API for auth" --into "Frontend login UI" \
   --rationale "Spans two owners and >1 day; splitting for independent dispatch"
-haven evolve merge HV-11 HV-12 --title "Unified auth flow" --rationale "Same problem, two angles"
-haven evolve supersede HV-13 --with HV-20 --rationale "Replaced by the redesign in HV-20"
-haven evolve graph HV-10 --direction descendants   # see what HV-10 became
+haven -p <P> evolve merge HV-11 HV-12 --title "Unified auth flow" --rationale "Same problem, two angles"
+haven -p <P> evolve supersede HV-13 --with HV-20 --rationale "Replaced by the redesign in HV-20"
+haven -p <P> evolve graph HV-10 --direction descendants   # see what HV-10 became
 ```
 
 **When to split:** spans more than one owner; or more than ~a day of work; or has
@@ -337,10 +338,10 @@ the owner, and sets the wait-state/status. Don't hand-assemble `assign` + `updat
 + `artifact add` — you'll do it inconsistently.
 
 ```bash
-haven item handoff HV-7 --to human \
+haven -p <P> item handoff HV-7 --to human \
   --note "Implemented the API; needs your review of the rate-limit defaults."
 # → owner=human, status=blocked, wait=on_human; a handoff artifact under notes/.
-haven item handoff HV-7 --to ai        # hand back: clears the wait, unblocks it
+haven -p <P> item handoff HV-7 --to ai        # hand back: clears the wait, unblocks it
 ```
 
 **Defaults (direction-aware; override with `--status` / `--wait`):**
@@ -366,7 +367,7 @@ records the evidence as an artifact (default role `delivery`), sets `status=done
 and **returns the items/gates the completion unblocked** — your next dispatch set.
 
 ```bash
-haven item complete HV-1 --evidence "cargo test --workspace: 72 passed"
+haven -p <P> item complete HV-1 --evidence "cargo test --workspace: 72 passed"
 # → {item: …done…, artifact: delivery.md, unblocked: [HV-2], warnings: []}
 ```
 
@@ -434,9 +435,9 @@ you already know:
 1. Create the gate node and give it **dependency** edges on the items it reviews
    (its "triggered after" set), with the pass-criteria as its acceptance:
    ```bash
-   haven item add "Auth feature review" --type gate \
+   haven -p <P> item add "Auth feature review" --type gate \
      --done-looks-like "rate-limit defaults signed off; no P1s open; security checklist passed"
-   haven depend HV-40 --on HV-21 --on HV-22 --on HV-23   # HV-40 = the gate
+   haven -p <P> depend HV-40 --on HV-21 --on HV-22 --on HV-23   # HV-40 = the gate
    ```
 2. The gate is blocked until all its triggers are `done`, so it **surfaces for
    review on its own** — it shows up in `haven next` (or `haven item list --type
@@ -471,13 +472,13 @@ path?*
 1. Check `haven docs` for an existing anchor before creating one.
 2. Create **a few thematic anchors** — not one catch-all, not one per doc:
    ```bash
-   haven item add "Acme — vision & direction" --type anchor
-   haven item add "Acme — style guides" --type anchor
-   haven item add "Acme — research" --type anchor
+   haven -p <P> item add "Acme — vision & direction" --type anchor
+   haven -p <P> item add "Acme — style guides" --type anchor
+   haven -p <P> item add "Acme — research" --type anchor
    ```
 3. Attach each doc with the role matching its nature:
    ```bash
-   haven artifact add HV-50 --role design --file docs/brand-style.md
+   haven -p <P> artifact add HV-50 --role design --file docs/brand-style.md
    ```
    `--file` copies it into `~/.haven/<project>/items/HV-50/`; remove the loose
    repo copy once migrated so there is one source of truth.
@@ -539,20 +540,20 @@ content for big artifacts. Park all that."
 
 ```bash
 # Capture: one node each, all floating/discovery. No edges, no commit.
-haven item add "Cache the auth JWKS lookup" --type code
-haven item add "Rate-limit the public search endpoint" --type code --body "Abuse vector flagged in perf review"
-haven item add "Decide: presigned vs inline content for large artifacts" --type research
-haven item list --icebox --pretty     # HV-1, HV-2, HV-3 — all discovery, uncommitted
+haven -p <P> item add "Cache the auth JWKS lookup" --type code
+haven -p <P> item add "Rate-limit the public search endpoint" --type code --body "Abuse vector flagged in perf review"
+haven -p <P> item add "Decide: presigned vs inline content for large artifacts" --type research
+haven -p <P> item list --icebox --pretty     # HV-1, HV-2, HV-3 — all discovery, uncommitted
 ```
 
 **User:** "Do the first two for the v1 hardening release. They're independent. The
 research one stays parked."
 
 ```bash
-haven item add "v1 auth hardening" --type release   # HV-4
-haven group HV-4 --add HV-1 --add HV-2
-haven item commit HV-1 --priority 1
-haven item commit HV-2 --priority 2
+haven -p <P> item add "v1 auth hardening" --type release   # HV-4
+haven -p <P> group HV-4 --add HV-1 --add HV-2
+haven -p <P> item commit HV-1 --priority 1
+haven -p <P> item commit HV-2 --priority 2
 # HV-3 stays floating — correct, not in play.
 ```
 
@@ -560,16 +561,16 @@ haven item commit HV-2 --priority 2
 dispatchable to the AI."
 
 ```bash
-haven artifact add HV-1 --role spec --content "# JWKS cache\nCache for 10m, refresh on kid-miss…" --name spec.md
-haven item update HV-1 --status ready
-haven item assign HV-1 --to ai
+haven -p <P> artifact add HV-1 --role spec --content "# JWKS cache\nCache for 10m, refresh on kid-miss…" --name spec.md
+haven -p <P> item update HV-1 --status ready
+haven -p <P> item assign HV-1 --to ai
 # HV-2 stays discovery — committed but not yet ready, so it won't dispatch.
 ```
 
 **User:** "What should the AI pick up?"
 
 ```bash
-haven next --owner ai --pretty
+haven -p <P> next --owner ai --pretty
 # → HV-1 only. HV-2 is committed but still discovery, so absent — correct.
 ```
 
@@ -579,7 +580,7 @@ done."
 ```bash
 # Not done yet — a human review is the remaining work. Hand it off atomically:
 # one call records the note, flips the owner to human, and parks it on_human.
-haven item handoff HV-1 --to human \
+haven -p <P> item handoff HV-1 --to human \
   --note "Cache implemented; p95 verify 3ms. One open call: TTL defaulted to 10m — confirm before ship."
 # → owner=human, status=blocked, wait=on_human, handoff artifact under notes/.
 # HV-1 drops out of `next` until the human acts — correct.
@@ -589,7 +590,7 @@ haven item handoff HV-1 --to human \
 
 ```bash
 # The human confirms → complete it with evidence; this also reports what it unblocked.
-haven item complete HV-1 --evidence "TTL reviewed and accepted at 10m. Shipping."
+haven -p <P> item complete HV-1 --evidence "TTL reviewed and accepted at 10m. Shipping."
 # → status=done; unblocked: [HV-4 ship gate, …] if anything depended on HV-1.
 ```
 

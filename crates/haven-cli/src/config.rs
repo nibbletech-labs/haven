@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use haven_auth::AuthConfig;
 use haven_core::{HavenError, Result, Store};
 use haven_sync::SyncConfig;
+use toml_edit::{value, Array, DocumentMut, Item, Table};
 
 pub struct Paths {
     pub root: PathBuf,
@@ -28,6 +29,28 @@ pub fn resolve() -> Result<Paths> {
         db: root.join("haven.db"),
         root,
     })
+}
+
+/// Resolve symlinks and relative components before granting an agent access to
+/// the store. The root exists by the time setup calls this (open_store creates
+/// it); the fallback keeps doctor useful when a damaged store cannot open.
+pub fn absolute_store_root(root: &Path) -> Result<PathBuf> {
+    let absolute = match std::fs::canonicalize(root) {
+        Ok(path) => path,
+        Err(_) if root.is_absolute() => root.to_path_buf(),
+        Err(_) => std::env::current_dir()?.join(root),
+    };
+    if absolute.parent().is_none()
+        || directories::BaseDirs::new()
+            .map(|b| b.home_dir() == absolute)
+            .unwrap_or(false)
+    {
+        return Err(HavenError::Invalid(format!(
+            "refusing to grant Codex write access to broad path {}",
+            absolute.display()
+        )));
+    }
+    Ok(absolute)
 }
 
 /// Ensure the root exists, then open the store (running migrations). Used by all
@@ -104,14 +127,18 @@ fn claude_mcp_config_path() -> Result<PathBuf> {
     }
 }
 
-/// The Codex config dir (`~/.codex`), overridable via `$HAVEN_CODEX_DIR` so tests
-/// and headless installs never mutate a developer's real config.
+/// The Codex config dir (`$CODEX_HOME`, falling back to `~/.codex`).
+/// `$HAVEN_CODEX_DIR` takes precedence as Haven's test/headless-install override,
+/// so those runs never mutate a developer's real config.
 fn codex_dir() -> Result<PathBuf> {
     match std::env::var_os("HAVEN_CODEX_DIR") {
         Some(d) => Ok(PathBuf::from(d)),
-        None => directories::BaseDirs::new()
-            .map(|b| b.home_dir().join(".codex"))
-            .ok_or_else(|| HavenError::Invalid("could not determine home directory".into())),
+        None => match std::env::var_os("CODEX_HOME") {
+            Some(d) => Ok(PathBuf::from(d)),
+            None => directories::BaseDirs::new()
+                .map(|b| b.home_dir().join(".codex"))
+                .ok_or_else(|| HavenError::Invalid("could not determine home directory".into())),
+        },
     }
 }
 
@@ -548,6 +575,7 @@ pub struct InstallCheck {
     pub claude_skills: BTreeMap<String, SkillInstallStatus>,
     pub codex_mcp_config_path: PathBuf,
     pub codex_mcp_registered: bool,
+    pub codex_store_access: CodexStoreAccess,
     /// Per-skill snapshot status under `<agents>/skills/<name>/`, keyed by name.
     pub codex_skills: BTreeMap<String, SkillInstallStatus>,
     /// `haven` resolved on `$PATH` — what the MCP `command: "haven"` stanza needs
@@ -568,7 +596,7 @@ pub struct SkillInstallStatus {
 
 /// Inspect the install wiring without mutating anything (the read side of
 /// `ensure_mcp_wiring` / `ensure_skill_installed`).
-pub fn install_check() -> Result<InstallCheck> {
+pub fn install_check(store_root: &Path) -> Result<InstallCheck> {
     let claude_mcp_config_path = claude_mcp_config_path()?;
     let claude_mcp_registered = std::fs::read_to_string(&claude_mcp_config_path)
         .ok()
@@ -591,6 +619,7 @@ pub fn install_check() -> Result<InstallCheck> {
     let codex_mcp_registered = std::fs::read_to_string(&codex_mcp_config_path)
         .map(|s| codex_config_has_haven(&s))
         .unwrap_or(false);
+    let codex_store_access = inspect_codex_store_access(store_root)?;
 
     // Per-skill snapshot health, for each shipped skill, on each agent.
     let claude_skills_base = claude_dir()?;
@@ -627,6 +656,7 @@ pub fn install_check() -> Result<InstallCheck> {
         claude_skills,
         codex_mcp_config_path,
         codex_mcp_registered,
+        codex_store_access,
         codex_skills,
         haven_on_path: haven_on_path(),
     })
@@ -716,94 +746,462 @@ pub fn ensure_codex_mcp_wiring() -> Result<PathBuf> {
         std::fs::create_dir_all(parent)?;
     }
     let raw = std::fs::read_to_string(&path).unwrap_or_default();
-    let command = format!("command = \"{BIN_NAME}\"");
-    let updated = upsert_toml_table(
-        &raw,
-        "mcp_servers.haven",
-        &[command.as_str(), "args = [\"mcp\"]"],
-    );
-    std::fs::write(&path, updated)?;
+    let mut doc = parse_codex_config(&raw)?;
+    let root = doc.as_table_mut();
+    if root
+        .get("mcp_servers")
+        .map(|item| !item.is_table())
+        .unwrap_or(false)
+    {
+        return Err(HavenError::Invalid(
+            "mcp_servers is not a standard TOML table; left Codex config unchanged".into(),
+        ));
+    }
+    let servers = table_or_insert(root, "mcp_servers");
+    if servers
+        .get("haven")
+        .map(|item| !item.is_table())
+        .unwrap_or(false)
+    {
+        return Err(HavenError::Invalid(
+            "mcp_servers.haven is not a standard TOML table; left Codex config unchanged".into(),
+        ));
+    }
+    let haven = table_or_insert(servers, "haven");
+    upsert_preserving_decor(haven, "command", value(BIN_NAME));
+    let mut args = Array::new();
+    args.push("mcp");
+    upsert_preserving_decor(haven, "args", value(args));
+    std::fs::write(&path, doc.to_string())?;
     Ok(path)
 }
 
 fn codex_config_has_haven(raw: &str) -> bool {
-    let section = find_toml_section(raw, "mcp_servers.haven");
-    let Some(section) = section else {
+    raw.parse::<DocumentMut>()
+        .ok()
+        .and_then(|doc| {
+            let haven = doc
+                .get("mcp_servers")?
+                .as_table()?
+                .get("haven")?
+                .as_table()?;
+            let command = haven.get("command")?.as_str()?;
+            let args = haven.get("args")?.as_array()?;
+            Some(command == BIN_NAME && args.len() == 1 && args.get(0)?.as_str()? == "mcp")
+        })
+        .unwrap_or(false)
+}
+
+const CODEX_HAVEN_PROFILE: &str = "haven-local";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CodexStoreAccessStatus {
+    Granted,
+    AlreadySufficient,
+    Missing,
+    Unsupported,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct CodexStoreAccess {
+    pub status: CodexStoreAccessStatus,
+    pub mode: String,
+    pub root: PathBuf,
+    pub config_path: PathBuf,
+    pub detail: String,
+}
+
+fn parse_codex_config(raw: &str) -> Result<DocumentMut> {
+    raw.parse::<DocumentMut>().map_err(|e| {
+        HavenError::Invalid(format!(
+            "cannot parse Codex config.toml; left it unchanged: {e}"
+        ))
+    })
+}
+
+fn table_or_insert<'a>(parent: &'a mut Table, key: &str) -> &'a mut Table {
+    if !parent.get(key).map(Item::is_table).unwrap_or(false) {
+        parent.insert(key, Item::Table(Table::new()));
+    }
+    parent
+        .get_mut(key)
+        .and_then(Item::as_table_mut)
+        .expect("table inserted above")
+}
+
+fn upsert_preserving_decor(table: &mut Table, key: &str, mut new_item: Item) {
+    if let Some(old_item) = table.get_mut(key) {
+        if let (Some(old), Some(new)) = (old_item.as_value(), new_item.as_value_mut()) {
+            *new.decor_mut() = old.decor().clone();
+        }
+        *old_item = new_item;
+    } else {
+        table.insert(key, new_item);
+    }
+}
+
+fn contains_legacy_sandbox(table: &Table) -> bool {
+    table.contains_key("sandbox_mode")
+        || table.contains_key("sandbox_workspace_write")
+        || table.iter().any(|(_, item)| {
+            item.as_table()
+                .map(contains_legacy_sandbox)
+                .unwrap_or(false)
+        })
+}
+
+fn access_result(
+    status: CodexStoreAccessStatus,
+    mode: &str,
+    root: &Path,
+    config_path: &Path,
+    detail: impl Into<String>,
+) -> CodexStoreAccess {
+    CodexStoreAccess {
+        status,
+        mode: mode.into(),
+        root: root.to_path_buf(),
+        config_path: config_path.to_path_buf(),
+        detail: detail.into(),
+    }
+}
+
+fn legacy_writable_roots(doc: &DocumentMut) -> Option<&Array> {
+    doc.get("sandbox_workspace_write")?
+        .as_table()?
+        .get("writable_roots")?
+        .as_array()
+}
+
+fn modern_haven_access_granted(doc: &DocumentMut, root: &Path) -> bool {
+    if doc.get("default_permissions").and_then(Item::as_str) != Some(CODEX_HAVEN_PROFILE) {
+        return false;
+    }
+    let Some(root) = root.to_str() else {
         return false;
     };
-    let command = format!("command = \"{BIN_NAME}\"");
-    let has_command = section.lines().any(|line| line.trim() == command);
-    let has_args = section
-        .lines()
-        .any(|line| line.trim() == "args = [\"mcp\"]");
-    has_command && has_args
+    doc.get("permissions")
+        .and_then(Item::as_table)
+        .and_then(|p| p.get(CODEX_HAVEN_PROFILE))
+        .and_then(Item::as_table)
+        .and_then(|p| p.get("filesystem"))
+        .and_then(Item::as_table)
+        .and_then(|fs| fs.get(root))
+        .and_then(Item::as_str)
+        == Some("write")
 }
 
-fn find_toml_section<'a>(raw: &'a str, header: &str) -> Option<&'a str> {
-    let target = format!("[{header}]");
-    // Walk with real byte offsets: split_inclusive keeps each line's own
-    // terminator, so CRLF files (the Windows norm) can't drift the offsets one
-    // byte per line the way a `lines().len() + 1` reconstruction did.
-    let mut offset = 0;
-    let mut section_start = None;
-    for line in raw.split_inclusive('\n') {
-        let end = offset + line.len();
-        let trimmed = line.trim();
-        match section_start {
-            None => {
-                if trimmed == target {
-                    section_start = Some(end);
+fn inspect_codex_doc(doc: &DocumentMut, root: &Path, config_path: &Path) -> CodexStoreAccess {
+    let top = doc.as_table();
+    if let Some(mode_item) = top.get("sandbox_mode") {
+        let Some(mode) = mode_item.as_str() else {
+            return access_result(
+                CodexStoreAccessStatus::Unsupported,
+                "legacy",
+                root,
+                config_path,
+                "sandbox_mode is not a string",
+            );
+        };
+        return match mode {
+            "danger-full-access" => access_result(
+                CodexStoreAccessStatus::AlreadySufficient,
+                "legacy",
+                root,
+                config_path,
+                "legacy danger-full-access already permits the store; Haven made no change",
+            ),
+            "read-only" => access_result(
+                CodexStoreAccessStatus::Unsupported,
+                "legacy",
+                root,
+                config_path,
+                "legacy read-only cannot be widened with writable_roots",
+            ),
+            "workspace-write" => match legacy_writable_roots(doc) {
+                Some(roots)
+                    if roots
+                        .iter()
+                        .filter_map(|v| v.as_str())
+                        .any(|p| Path::new(p) == root) =>
+                {
+                    access_result(
+                        CodexStoreAccessStatus::Granted,
+                        "legacy",
+                        root,
+                        config_path,
+                        "resolved Haven root is in sandbox_workspace_write.writable_roots",
+                    )
                 }
-            }
-            Some(start) => {
-                if trimmed.starts_with('[') && trimmed.ends_with(']') {
-                    return raw.get(start..offset);
-                }
-            }
-        }
-        offset = end;
+                Some(_) | None => access_result(
+                    CodexStoreAccessStatus::Missing,
+                    "legacy",
+                    root,
+                    config_path,
+                    "resolved Haven root is absent from sandbox_workspace_write.writable_roots",
+                ),
+            },
+            other => access_result(
+                CodexStoreAccessStatus::Unsupported,
+                "legacy",
+                root,
+                config_path,
+                format!("unsupported legacy sandbox_mode {other:?}"),
+            ),
+        };
     }
-    section_start.map(|start| &raw[start..])
+
+    if top.contains_key("sandbox_workspace_write") {
+        return match legacy_writable_roots(doc) {
+            Some(roots)
+                if roots
+                    .iter()
+                    .filter_map(|v| v.as_str())
+                    .any(|p| Path::new(p) == root) =>
+            {
+                access_result(
+                    CodexStoreAccessStatus::Granted,
+                    "legacy",
+                    root,
+                    config_path,
+                    "resolved Haven root is in sandbox_workspace_write.writable_roots",
+                )
+            }
+            Some(_) | None => access_result(
+                CodexStoreAccessStatus::Missing,
+                "legacy",
+                root,
+                config_path,
+                "resolved Haven root is absent from sandbox_workspace_write.writable_roots",
+            ),
+        };
+    }
+
+    if contains_legacy_sandbox(top) {
+        return access_result(
+            CodexStoreAccessStatus::Unsupported,
+            "legacy",
+            root,
+            config_path,
+            "legacy sandbox settings exist outside the user-config root; refusing to mix permission systems",
+        );
+    }
+
+    if top.get("default_permissions").and_then(Item::as_str) == Some(":danger-full-access") {
+        return access_result(
+            CodexStoreAccessStatus::AlreadySufficient,
+            "permissions",
+            root,
+            config_path,
+            "danger-full-access already permits the store; Haven made no change",
+        );
+    }
+    if modern_haven_access_granted(doc, root) {
+        access_result(
+            CodexStoreAccessStatus::Granted,
+            "permissions",
+            root,
+            config_path,
+            "haven-local grants write access to the resolved Haven root",
+        )
+    } else {
+        access_result(
+            CodexStoreAccessStatus::Missing,
+            "permissions",
+            root,
+            config_path,
+            "Codex store access is not enabled; opt in with `haven setup --agent codex --grant-store-access`",
+        )
+    }
 }
 
-fn upsert_toml_table(raw: &str, header: &str, body: &[&str]) -> String {
-    let target = format!("[{header}]");
-    let mut out = String::new();
-    let mut lines = raw.lines().peekable();
-    let mut replaced = false;
-    while let Some(line) = lines.next() {
-        if line.trim() == target {
-            push_toml_table(&mut out, header, body);
-            replaced = true;
-            while let Some(next) = lines.peek() {
-                let trimmed = next.trim();
-                if trimmed.starts_with('[') && trimmed.ends_with(']') {
-                    break;
+pub fn inspect_codex_store_access(store_root: &Path) -> Result<CodexStoreAccess> {
+    let root = absolute_store_root(store_root)?;
+    let config_path = codex_mcp_config_path()?;
+    let raw = std::fs::read_to_string(&config_path).unwrap_or_default();
+    match parse_codex_config(&raw) {
+        Ok(doc) => Ok(inspect_codex_doc(&doc, &root, &config_path)),
+        Err(e) => Ok(access_result(
+            CodexStoreAccessStatus::Unsupported,
+            "unknown",
+            &root,
+            &config_path,
+            e.to_string(),
+        )),
+    }
+}
+
+/// Opt-in, least-privilege Codex access to the canonical Haven store. Modern
+/// permission profiles and legacy sandbox settings are intentionally handled as
+/// separate branches because Codex does not compose them.
+pub fn ensure_codex_store_access(store_root: &Path) -> Result<CodexStoreAccess> {
+    let root = absolute_store_root(store_root)?;
+    let config_path = codex_mcp_config_path()?;
+    if let Some(parent) = config_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let raw = std::fs::read_to_string(&config_path).unwrap_or_default();
+    let mut doc = match parse_codex_config(&raw) {
+        Ok(doc) => doc,
+        Err(e) => {
+            return Ok(access_result(
+                CodexStoreAccessStatus::Unsupported,
+                "unknown",
+                &root,
+                &config_path,
+                e.to_string(),
+            ))
+        }
+    };
+
+    let before = inspect_codex_doc(&doc, &root, &config_path);
+    match before.status {
+        CodexStoreAccessStatus::Granted
+        | CodexStoreAccessStatus::AlreadySufficient
+        | CodexStoreAccessStatus::Unsupported => return Ok(before),
+        CodexStoreAccessStatus::Missing => {}
+    }
+
+    if doc.as_table().contains_key("sandbox_mode")
+        || doc.as_table().contains_key("sandbox_workspace_write")
+    {
+        if doc
+            .as_table()
+            .get("sandbox_workspace_write")
+            .map(|item| !item.is_table())
+            .unwrap_or(false)
+        {
+            return Ok(access_result(
+                CodexStoreAccessStatus::Unsupported,
+                "legacy",
+                &root,
+                &config_path,
+                "sandbox_workspace_write is not a standard table; left config unchanged",
+            ));
+        }
+        let legacy = table_or_insert(doc.as_table_mut(), "sandbox_workspace_write");
+        if legacy
+            .get("writable_roots")
+            .map(|v| !v.is_array())
+            .unwrap_or(false)
+        {
+            return Ok(access_result(
+                CodexStoreAccessStatus::Unsupported,
+                "legacy",
+                &root,
+                &config_path,
+                "sandbox_workspace_write.writable_roots is not an array; left config unchanged",
+            ));
+        }
+        if !legacy.contains_key("writable_roots") {
+            legacy.insert("writable_roots", value(Array::new()));
+        }
+        let roots = legacy
+            .get_mut("writable_roots")
+            .and_then(Item::as_array_mut)
+            .expect("array inserted above");
+        let root_str = root.to_string_lossy();
+        if !roots
+            .iter()
+            .filter_map(|v| v.as_str())
+            .any(|p| p == root_str)
+        {
+            roots.push(root_str.as_ref());
+        }
+    } else {
+        let default = match doc.as_table().get("default_permissions") {
+            Some(item) => match item.as_str() {
+                Some(value) => value.to_string(),
+                None => {
+                    return Ok(access_result(
+                        CodexStoreAccessStatus::Unsupported,
+                        "permissions",
+                        &root,
+                        &config_path,
+                        "default_permissions is not a string; left config unchanged",
+                    ))
                 }
-                lines.next();
-            }
+            },
+            None => ":workspace".to_string(),
+        };
+        let parent = if default == CODEX_HAVEN_PROFILE {
+            doc.get("permissions")
+                .and_then(Item::as_table)
+                .and_then(|p| p.get(CODEX_HAVEN_PROFILE))
+                .and_then(Item::as_table)
+                .and_then(|p| p.get("extends"))
+                .and_then(Item::as_str)
+                .filter(|p| *p != CODEX_HAVEN_PROFILE && *p != ":danger-full-access")
+                .unwrap_or(":workspace")
+                .to_string()
         } else {
-            out.push_str(line);
-            out.push('\n');
-        }
-    }
-    if !replaced {
-        if !out.trim().is_empty() {
-            out.push('\n');
-        }
-        push_toml_table(&mut out, header, body);
-    }
-    out
-}
+            default
+        };
 
-fn push_toml_table(out: &mut String, header: &str, body: &[&str]) {
-    out.push('[');
-    out.push_str(header);
-    out.push_str("]\n");
-    for line in body {
-        out.push_str(line);
-        out.push('\n');
+        if doc
+            .as_table()
+            .get("permissions")
+            .map(|v| !v.is_table())
+            .unwrap_or(false)
+        {
+            return Ok(access_result(
+                CodexStoreAccessStatus::Unsupported,
+                "permissions",
+                &root,
+                &config_path,
+                "permissions is not a table; left config unchanged",
+            ));
+        }
+        let permissions = table_or_insert(doc.as_table_mut(), "permissions");
+        if permissions
+            .get(CODEX_HAVEN_PROFILE)
+            .map(|item| !item.is_table())
+            .unwrap_or(false)
+        {
+            return Ok(access_result(
+                CodexStoreAccessStatus::Unsupported,
+                "permissions",
+                &root,
+                &config_path,
+                "permissions.haven-local is not a standard table; left config unchanged",
+            ));
+        }
+        let profile = table_or_insert(permissions, CODEX_HAVEN_PROFILE);
+        upsert_preserving_decor(
+            profile,
+            "description",
+            value("Workspace access plus the local Haven store."),
+        );
+        upsert_preserving_decor(profile, "extends", value(parent));
+        if profile
+            .get("filesystem")
+            .map(|item| !item.is_table())
+            .unwrap_or(false)
+        {
+            return Ok(access_result(
+                CodexStoreAccessStatus::Unsupported,
+                "permissions",
+                &root,
+                &config_path,
+                "permissions.haven-local.filesystem is not a standard table; left config unchanged",
+            ));
+        }
+        let filesystem = table_or_insert(profile, "filesystem");
+        upsert_preserving_decor(filesystem, &root.to_string_lossy(), value("write"));
+        upsert_preserving_decor(
+            doc.as_table_mut(),
+            "default_permissions",
+            value(CODEX_HAVEN_PROFILE),
+        );
     }
+
+    let updated = doc.to_string();
+    if updated != raw {
+        std::fs::write(&config_path, updated)?;
+    }
+    let after = inspect_codex_doc(&doc, &root, &config_path);
+    Ok(after)
 }
 
 pub struct LinkResult {
@@ -1859,16 +2257,11 @@ mod update_tests {
     }
 
     #[test]
-    fn find_toml_section_handles_crlf() {
-        // CRLF is the norm for ~/.codex/config.toml written on Windows; byte
-        // offsets must not drift one byte per line (they did when offsets were
-        // rebuilt as `line.len() + 1` over `str::lines()`).
+    fn codex_mcp_check_handles_crlf() {
+        // CRLF is the norm for ~/.codex/config.toml written on Windows.
         let raw = format!(
             "[other]\r\nx = 1\r\n\r\n[mcp_servers.haven]\r\ncommand = \"{BIN_NAME}\"\r\nargs = [\"mcp\"]\r\n\r\n[zzz]\r\ny = 2\r\n"
         );
-        let section = find_toml_section(&raw, "mcp_servers.haven").unwrap();
-        assert!(section.contains("args = [\"mcp\"]"));
-        assert!(!section.contains("[zzz]"));
         assert!(codex_config_has_haven(&raw));
 
         // LF behaviour unchanged.

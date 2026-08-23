@@ -78,7 +78,7 @@ fn hide_cloud_sync_status(v: &mut serde_json::Value) {
 #[derive(Parser)]
 #[command(name = "haven", version, about = "Local-first work-graph store")]
 struct Cli {
-    /// Project key (defaults to the current project set by `haven project use`).
+    /// Project key (defaults to this repo's link, then `haven project use`).
     #[arg(short, long, global = true)]
     project: Option<String>,
 
@@ -97,9 +97,12 @@ enum Command {
         /// Agent wiring to install: all, claude, or codex.
         #[arg(long, value_enum, default_value_t = AgentTarget::All)]
         agent: AgentTarget,
-        /// Skip installing the Claude skill (headless / non-Claude installs).
+        /// Skip installing agent skill snapshots.
         #[arg(long)]
         no_skill: bool,
+        /// Grant Codex write access to the resolved Haven store root.
+        #[arg(long)]
+        grant_store_access: bool,
         /// Optional first project key to create/select during setup.
         #[arg(long = "project-key")]
         project_key: Option<String>,
@@ -1233,22 +1236,39 @@ fn guard_outcome(
 /// Gate a mis-filing write / warn a cross-project read when this repo carries a
 /// Haven binding and the op's target project differs (HV-147). No binding → no-op
 /// (project resolution is unchanged), so this is purely additive.
-fn guard_repo_binding(cli: &Cli) -> Result<()> {
+fn explicit_project(cli: &Cli) -> Option<&str> {
+    cli.project.as_deref().or(match &cli.command {
+        Command::Status { project_key } | Command::Prime { project_key } => project_key.as_deref(),
+        _ => None,
+    })
+}
+
+fn uses_project_selector(command: &Command) -> bool {
+    guard_kind(command) != GuardKind::Exempt
+        || matches!(command, Command::Link { .. } | Command::Sync { .. })
+}
+
+/// Resolve the CLI's per-call project without consulting shared store metadata:
+/// an explicit selector wins, then a repo link. Returning `None` deliberately
+/// leaves the Store's sticky `current_project` fallback in charge outside a
+/// linked repo (the interactive-human workflow).
+fn effective_project<'a>(cli: &'a Cli, bound: Option<&'a str>) -> Option<&'a str> {
+    explicit_project(cli).or_else(|| {
+        uses_project_selector(&cli.command)
+            .then_some(bound)
+            .flatten()
+    })
+}
+
+fn guard_repo_binding(cli: &Cli, bound: Option<&str>, target: Option<&str>) -> Result<()> {
     let kind = guard_kind(&cli.command);
     if kind == GuardKind::Exempt {
         return Ok(());
     }
-    let Some(bound) = config::repo_binding()? else {
+    let Some(bound) = bound else {
         return Ok(());
     };
-    // Resolved target = explicit -p, else the global current project (best-effort).
-    let target = match cli.project.as_deref() {
-        Some(p) => Some(p.to_string()),
-        None => config::open_store()
-            .ok()
-            .and_then(|s| s.current_project().ok().flatten()),
-    };
-    match guard_outcome(kind, &bound, target.as_deref(), cli.project.is_some()) {
+    match guard_outcome(kind, bound, target, explicit_project(cli).is_some()) {
         GuardOutcome::Allow => Ok(()),
         GuardOutcome::Warn(msg) => {
             eprintln!("warn: {msg}");
@@ -1259,18 +1279,27 @@ fn guard_repo_binding(cli: &Cli) -> Result<()> {
 }
 
 fn run(cli: &Cli) -> Result<Output> {
-    let project = cli.project.as_deref();
-    guard_repo_binding(cli)?;
+    // Resolve once. A concurrent session may change the global selector after
+    // this point, but linked-repo calls already carry their own project key.
+    let binding = if uses_project_selector(&cli.command) {
+        config::repo_binding()?
+    } else {
+        None
+    };
+    let project = effective_project(cli, binding.as_deref());
+    guard_repo_binding(cli, binding.as_deref(), project)?;
     match &cli.command {
         Command::Setup {
             agent,
             no_skill,
+            grant_store_access,
             project_key,
             project_title,
             prefix,
         } => cmd_setup(
             *agent,
             *no_skill,
+            *grant_store_access,
             project_key.as_deref(),
             project_title.as_deref(),
             prefix.as_deref(),
@@ -1295,7 +1324,7 @@ fn run(cli: &Cli) -> Result<Output> {
         Command::Doctor => cmd_doctor(),
         Command::Config { cmd } => cmd_config(cmd),
         Command::Project { cmd } => cmd_project(cmd),
-        Command::Item { cmd } => cmd_item_telemetered(project, cmd),
+        Command::Item { cmd } => cmd_item_telemetered(explicit_project(cli), project, cmd),
         Command::Import { file, if_absent } => cmd_import(project, file, *if_absent),
         Command::Next(a) => {
             let s = config::open_store()?;
@@ -1804,7 +1833,8 @@ fn maybe_render(cli: &Cli) {
         return;
     }
     if let Ok(s) = config::open_store() {
-        let _ = s.render(cli.project.as_deref());
+        let binding = config::repo_binding().ok().flatten();
+        let _ = s.render(effective_project(cli, binding.as_deref()));
     }
 }
 
@@ -1848,6 +1878,7 @@ fn warn_if_quarantined() {
 fn cmd_setup(
     agent: AgentTarget,
     no_skill: bool,
+    grant_store_access: bool,
     project_key: Option<&str>,
     project_title: Option<&str>,
     prefix: Option<&str>,
@@ -1884,6 +1915,31 @@ fn cmd_setup(
         }
     } else {
         "skipped (--agent claude)".to_string()
+    };
+    let codex_store_access = if grant_store_access && agent.includes_codex() {
+        let root = config::absolute_store_root(&config::resolve()?.root)?;
+        match config::ensure_codex_store_access(&root) {
+            Ok(access) => {
+                if access.status == config::CodexStoreAccessStatus::Unsupported {
+                    warnings.push(format!("Codex store access not changed: {}", access.detail));
+                }
+                serde_json::to_value(access)?
+            }
+            Err(e) => {
+                warnings.push(format!("Codex store access skipped: {e}"));
+                serde_json::json!({ "status": "error", "detail": e.to_string() })
+            }
+        }
+    } else if grant_store_access {
+        serde_json::json!({
+            "status": "skipped",
+            "detail": "--grant-store-access only applies when --agent includes codex"
+        })
+    } else {
+        serde_json::json!({
+            "status": "skipped",
+            "detail": "opt in with --grant-store-access"
+        })
     };
 
     // Install every shipped skill for each in-scope agent; collect per-skill
@@ -1970,6 +2026,7 @@ fn cmd_setup(
         "claude_mcp_config": claude_mcp_config,
         "claude_skills": claude_skills,
         "codex_mcp_config": codex_mcp_config,
+        "codex_store_access": codex_store_access,
         "codex_skills": codex_skills,
         "pruned": pruned,
         "current_project": current_project,
@@ -2429,7 +2486,7 @@ fn doctor_report(store: Result<Store>, paths: &config::Paths) -> Result<serde_js
     };
 
     // 2–6. Install wiring: MCP stanzas, skill snapshots, binary on PATH.
-    match config::install_check() {
+    match config::install_check(&paths.root) {
         Ok(w) => {
             let skill_check =
                 |agent: &str, name: &str, st: &config::SkillInstallStatus| -> serde_json::Value {
@@ -2507,6 +2564,27 @@ fn doctor_report(store: Result<Store>, paths: &config::Paths) -> Result<serde_js
                         w.codex_mcp_config_path.display()
                     ),
                 )
+            });
+
+            checks.push(match w.codex_store_access.status {
+                config::CodexStoreAccessStatus::Granted
+                | config::CodexStoreAccessStatus::AlreadySufficient => check(
+                    "codex_store_access",
+                    "ok",
+                    w.codex_store_access.detail.clone(),
+                ),
+                // Store access is explicitly opt-in, so its absence is
+                // informational. A contradictory/malformed config is a warning.
+                config::CodexStoreAccessStatus::Missing => check(
+                    "codex_store_access",
+                    "ok",
+                    w.codex_store_access.detail.clone(),
+                ),
+                config::CodexStoreAccessStatus::Unsupported => check(
+                    "codex_store_access",
+                    "warn",
+                    w.codex_store_access.detail.clone(),
+                ),
             });
 
             for (name, st) in &w.codex_skills {
@@ -2869,11 +2947,15 @@ fn item_op_name(cmd: &ItemCmd) -> &'static str {
 /// The CLI item-dispatch chokepoint (HV-166): run the op timed, then emit ONE
 /// structured telemetry line to **stderr** for every item op — mirroring the MCP
 /// `handle_tool_call` line so drift between CLI and MCP is observable the same
-/// way. `project_passed` is the `-p`/`--project` selector as given; `project_resolved`
-/// is the key the op would resolve to (sticky `current_project` when none passed —
-/// the HV-153 drift), resolved best-effort with a read-only store open. stderr
+/// way. `project_passed` is the explicit selector as given; `project_resolved`
+/// is the key the op resolved through explicit, repo-binding, or sticky precedence,
+/// resolved best-effort with a read-only store open. stderr
 /// only: stdout is the structured `Output` channel and must stay clean.
-fn cmd_item_telemetered(project: Option<&str>, cmd: &ItemCmd) -> Result<Output> {
+fn cmd_item_telemetered(
+    project_passed: Option<&str>,
+    project: Option<&str>,
+    cmd: &ItemCmd,
+) -> Result<Output> {
     let started = Instant::now();
     let result = cmd_item(project, cmd);
     let latency_ms = started.elapsed().as_millis();
@@ -2883,7 +2965,7 @@ fn cmd_item_telemetered(project: Option<&str>, cmd: &ItemCmd) -> Result<Output> 
         .and_then(|s| s.resolve_project_key(project).ok());
     TelemetryLine::new(
         item_op_name(cmd),
-        project.map(str::to_string),
+        project_passed.map(str::to_string),
         project_resolved,
         telemetry::error_class(&result),
         latency_ms,

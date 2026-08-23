@@ -12,8 +12,10 @@
 #   HAVEN_VERSION=v0.1.6        install a specific release tag (default: latest)
 #   HAVEN_BIN_DIR=/path         install dir (else /usr/local/bin, then ~/.local/bin)
 #   HAVEN_BUILD_FROM_SOURCE=1   skip the prebuilt path and compile (needs cargo)
+#   HAVEN_GRANT_CODEX_STORE_ACCESS=1  opt into Codex write access for ~/.haven
 # Flags:
 #   --from-source               same as HAVEN_BUILD_FROM_SOURCE=1
+#   --grant-store-access        same as HAVEN_GRANT_CODEX_STORE_ACCESS=1
 set -eu
 
 REPO="https://github.com/nibbletech-labs/haven"
@@ -24,9 +26,11 @@ die() { printf '\033[1;31merror:\033[0m %s\n' "$1" >&2; exit 1; }
 have() { command -v "$1" >/dev/null 2>&1; }
 
 FROM_SOURCE="${HAVEN_BUILD_FROM_SOURCE:-}"
+GRANT_STORE_ACCESS="${HAVEN_GRANT_CODEX_STORE_ACCESS:-}"
 for arg in "$@"; do
     case "$arg" in
         --from-source) FROM_SOURCE=1 ;;
+        --grant-store-access) GRANT_STORE_ACCESS=1 ;;
         *) die "unknown argument: $arg" ;;
     esac
 done
@@ -165,7 +169,11 @@ install -m 0755 "$BIN" "$DEST/haven"
 
 # Wire MCP + skill (idempotent; never fatal).
 log "Running haven setup"
-"$DEST/haven" setup || log "setup skipped (run \`haven setup\` manually)."
+if [ -n "$GRANT_STORE_ACCESS" ]; then
+    "$DEST/haven" setup --grant-store-access || log "setup skipped (run \`haven setup --grant-store-access\` manually)."
+else
+    "$DEST/haven" setup || log "setup skipped (run \`haven setup\` manually)."
+fi
 
 case ":$PATH:" in
     *":$DEST:"*) ;;

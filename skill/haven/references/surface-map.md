@@ -38,14 +38,15 @@ values error.
   build-ready brief on a grouping container; resolution keys on the role).
 - **Artifact kind** (`--kind`, usually inferred): `file`, `external`, `delivery`.
 
-**Global CLI flags:** `--project/-p <key>` (defaults to the current project),
-`--pretty` (tables instead of JSON).
+**Global CLI flags:** `--project/-p <key>` (explicit > nearest repo link > sticky
+human-shell selector), `--pretty` (tables instead of JSON). Agent CLI fallbacks
+always pass `-p <key>` on project-scoped commands.
 
 ## CLI command surface
 
 ```
 # Setup & introspection
-haven setup [--agent all|claude|codex] [--no-skill] | init | status [<key>] | doctor
+haven setup [--agent all|claude|codex] [--no-skill] [--grant-store-access] | init | status [<key>] | doctor
                                                     # `status <key>` resolves like `-p <key>`
 haven config get <key> | set <key> <value>
 haven link [--name _haven] | unlink [--name <dir>]   # repo-local projection only (unlink discovers the dir if unnamed); canonical state stays in ~/.haven
@@ -238,7 +239,7 @@ return an array — so "mark these ready, archive those, commit these two" is on
 each. `update` applies the *same* change to every ref. Over MCP, apply one ref per
 call (loop); there's no batch tool.
 
-**Selecting a project over MCP.** A remote/headless client has no local
+**Selecting a project over MCP.** An agent does not rely on local
 `current_project`. It calls `haven_list_projects` to see what's available, then
 **passes `project: "<key>"` on every subsequent call** — selection is per-call
 (carry the chosen key through the conversation), not a stored default. There's no
@@ -286,7 +287,8 @@ corrective command — you don't have to memorise the table, but here it is.
 These have **no MCP tool** in v1 — a remote/headless client can't do them and
 must rely on a local CLI or a pre-arranged state:
 
-- **`project use` / `get`** — local conveniences. (`project list` / `add` /
+- **`project use` / `get`** — human-shell conveniences; agents never call `use`
+  because its selector is shared across sessions. (`project list` / `add` /
   `archive` / `reopen` *are* available over MCP via `haven_list_projects` /
   `haven_add_project` / `haven_archive_project` / `haven_reopen_project` — see
   "Selecting a project over MCP" above; a remote client discovers backlogs and
@@ -301,6 +303,16 @@ must rely on a local CLI or a pre-arranged state:
 `haven setup` wires selected agent integrations. `--agent all` is the default.
 It never writes into the current working directory: discovery is via the
 installed skills plus the registered MCP server, not a repo-local file.
+
+Codex store access is a separate, explicit opt-in:
+
+```sh
+haven setup --agent codex --grant-store-access
+```
+
+It grants write access only to the resolved Haven root, preserves unrelated
+Codex configuration, and uses either modern permission profiles or existing
+legacy workspace-write roots — never both. It never introduces Full Access.
 
 Claude MCP lives in the Claude user config and its skill snapshot lives under
 `~/.claude/skills/haven`. Codex MCP lives in `~/.codex/config.toml` or a trusted

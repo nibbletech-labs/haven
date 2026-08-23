@@ -20,8 +20,9 @@ half-formed idea, task, research question, release — **and human task** (a rev
 approval, decision, or real-world action) — is a **node**. AI-owned and
 human-owned work share one graph, and passing items between them is first-class.
 
-You drive it through the **`haven` CLI** (local agent with a terminal) or the
-**`haven_*` MCP tools** (remote/headless client) — both over the identical store.
+Use the **`haven_*` MCP tools** when they are available. Fall back to the
+**`haven` CLI** only when MCP is unavailable — both operate on the identical
+store, but MCP already carries the project explicitly on every call.
 Your job is **judgment**: knowing *when* to split / commit / leave floating, and
 what *not* to do. The tools are complete.
 
@@ -37,7 +38,8 @@ Run every Haven interaction through these five steps:
 
 1. **Establish the project, then prime.** Every item lives in one (each mints its
    own `HV-1`, `HV-2`… refs). Settle it once per session — see *Selecting a
-   project* below — then run **`haven prime`** (`haven_prime`) once at session
+   project* below — then run **`haven -p <key> prime`**
+   (`haven_prime {project: "<key>"}`) once at session
    start: it returns ONE compact block — project state, the committed queue with
    the next-eligible items flagged, in-progress/waiting (with owners), the core
    conventions, and the untriaged inbox — so you orient from one read instead of
@@ -222,15 +224,17 @@ a separate item.)
 
 ## Selecting a project
 
-- **Local (CLI):** `haven project list`, then `haven project use <key>` sets a
-  sticky current project (or `haven project add` to create one).
-- **Remote (MCP):** `haven_list_projects` to discover, then **pass `project:
-  "<key>"` on every call** — there is no sticky session and no
-  `haven_use_project`; selection is per-call, carried through the conversation.
-  `haven_add_project` creates one. If a call errors with `project_required`, the
-  message lists the available keys.
+- **MCP (preferred):** `haven_list_projects` to discover, then **pass `project:
+  "<key>"` on every project-scoped call**. `haven_add_project` creates one.
+- **CLI fallback:** use `haven project list` to discover, then pass **`-p <key>`
+  on every project-scoped command**. Inside a linked repo, the `.haven-project`
+  binding is a safety default, but keep `-p` explicit in agent commands.
+- **Agents never run `haven project use`.** It mutates a shared sticky selector
+  and another concurrent session can change it. Sticky selection remains a
+  human-shell convenience outside linked repos.
 
-Settle this once per session; don't nag. One project per product/repo.
+Settle the key once per session, carry it on every call, and don't nag. One
+project per product/repo.
 
 ## How to act: workflows
 

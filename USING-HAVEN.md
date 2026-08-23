@@ -2,7 +2,7 @@
 
 Haven is built to be driven by an AI agent, not typed at by hand. Once it's installed (see the [README](README.md)), your Claude and Codex sessions already know how to use it: the install gives them the **skills** that teach them *how*, and wires Haven in as an **MCP server** so they can act on it.
 
-From then on you work with Haven entirely by talking to your AI in plain language: "add this to the backlog", "what's next?", "break this down", "run the build". You don't run anything yourself; the agent does the work for you. (Under the hood it mostly uses Haven's command-line interface; the MCP surface is mainly groundwork for future **remote** clients (web, desktop, mobile) that drive Haven without a local install.) This doc shows both halves: the asks that drive each skill, and the kinds of actions they perform. For what those actions actually store (items, edges, acceptance, and attached docs), see [`DATA-MODEL.md`](DATA-MODEL.md).
+From then on you work with Haven entirely by talking to your AI in plain language: "add this to the backlog", "what's next?", "break this down", "run the build". You don't run anything yourself; the agent does the work for you. Under the hood it prefers Haven's MCP tools and carries the project key on every call; if it must fall back to the CLI, it passes `-p <key>` rather than changing a shared selector. This doc shows the asks that drive each skill and the kinds of actions they perform. For what those actions actually store (items, edges, acceptance, and attached docs), see [`DATA-MODEL.md`](DATA-MODEL.md).
 
 ## Your first project
 

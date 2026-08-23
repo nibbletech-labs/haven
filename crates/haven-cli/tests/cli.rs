@@ -387,6 +387,7 @@ fn skill_install_and_setup_write_the_snapshot() {
     // starts with none; one is created when the user first names some work.
     assert_eq!(setup["current_project"], serde_json::Value::Null);
     assert_eq!(setup["project_created"], false);
+    assert_eq!(setup["codex_store_access"]["status"], "skipped");
     let codex_config = std::fs::read_to_string(fresh.home.join(".codex/config.toml")).unwrap();
     assert!(codex_config.contains("[mcp_servers.haven]"));
     // The stanza names the platform binary: haven.exe on Windows (shell-less
@@ -400,6 +401,231 @@ fn skill_install_and_setup_write_the_snapshot() {
     assert_eq!(out["skill"], "skipped (--no-skill)");
     assert!(!skipped.home.join(".claude/skills/haven/SKILL.md").exists());
     assert!(!skipped.home.join(".agents/skills/haven/SKILL.md").exists());
+}
+
+#[test]
+fn setup_can_grant_modern_codex_access_without_clobbering_config() {
+    let h = Haven::new();
+    let config = h.home.join(".codex/config.toml");
+    std::fs::create_dir_all(config.parent().unwrap()).unwrap();
+    std::fs::write(
+        &config,
+        "# keep this comment\ndefault_permissions = \"project-edit\"\n\n[permissions.project-edit]\nextends = \":workspace\"\n\n[permissions.haven-local]\ndescription = \"old description\"\nextends = \":read-only\"\n\n[permissions.haven-local.network]\nenabled = true\n\n[mcp_servers.haven]\ncommand = \"custom-haven\"\nargs = [\"old\"]\nstartup_timeout_sec = 9\n\n[unrelated]\nkeep = true\n",
+    )
+    .unwrap();
+
+    let out = h.json(&[
+        "setup",
+        "--agent",
+        "codex",
+        "--grant-store-access",
+        "--no-skill",
+    ]);
+    assert_eq!(out["codex_store_access"]["status"], "granted");
+    assert_eq!(out["codex_store_access"]["mode"], "permissions");
+
+    let first = std::fs::read_to_string(&config).unwrap();
+    assert!(first.contains("# keep this comment"));
+    let doc = first.parse::<toml_edit::DocumentMut>().unwrap();
+    assert_eq!(doc["default_permissions"].as_str(), Some("haven-local"));
+    assert_eq!(
+        doc["permissions"]["haven-local"]["extends"].as_str(),
+        Some("project-edit")
+    );
+    let root = std::fs::canonicalize(&h.home).unwrap();
+    assert_eq!(
+        doc["permissions"]["haven-local"]["filesystem"]
+            .as_table()
+            .unwrap()
+            .get(root.to_str().unwrap())
+            .and_then(toml_edit::Item::as_str),
+        Some("write")
+    );
+    assert_eq!(doc["unrelated"]["keep"].as_bool(), Some(true));
+    assert_eq!(
+        doc["permissions"]["haven-local"]["network"]["enabled"].as_bool(),
+        Some(true)
+    );
+    assert_eq!(
+        doc["mcp_servers"]["haven"]["startup_timeout_sec"].as_integer(),
+        Some(9)
+    );
+
+    // Exact idempotency: no duplicate path, no self-extension, no formatting churn.
+    let again = h.json(&[
+        "setup",
+        "--agent",
+        "codex",
+        "--grant-store-access",
+        "--no-skill",
+    ]);
+    assert_eq!(again["codex_store_access"]["status"], "granted");
+    assert_eq!(std::fs::read_to_string(&config).unwrap(), first);
+    assert_eq!(status_of(&h.json(&["doctor"]), "codex_store_access"), "ok");
+}
+
+#[test]
+fn setup_and_doctor_honor_codex_home_for_config_and_access() {
+    let h = Haven::new();
+    let codex_home = h.home.join("custom-codex-home");
+    let default_config = h.home.join(".codex/config.toml");
+
+    let mut setup = h.cmd(&[
+        "setup",
+        "--agent",
+        "codex",
+        "--grant-store-access",
+        "--no-skill",
+    ]);
+    setup.env_remove("HAVEN_CODEX_DIR");
+    setup.env("CODEX_HOME", &codex_home);
+    let output = setup.output().unwrap();
+    assert!(
+        output.status.success(),
+        "setup failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["codex_store_access"]["status"], "granted");
+    assert_eq!(
+        report["codex_store_access"]["config_path"],
+        codex_home.join("config.toml").to_string_lossy().as_ref()
+    );
+    assert!(codex_home.join("config.toml").exists());
+    assert!(!default_config.exists());
+
+    let mut doctor = h.cmd(&["doctor"]);
+    doctor.env_remove("HAVEN_CODEX_DIR");
+    doctor.env("CODEX_HOME", &codex_home);
+    let output = doctor.output().unwrap();
+    assert!(
+        output.status.success(),
+        "doctor failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(status_of(&report, "codex_store_access"), "ok");
+}
+
+#[test]
+fn setup_extends_legacy_workspace_roots_without_mixing_permissions() {
+    let h = Haven::new();
+    let config = h.home.join(".codex/config.toml");
+    std::fs::create_dir_all(config.parent().unwrap()).unwrap();
+    std::fs::write(
+        &config,
+        "sandbox_mode = \"workspace-write\"\n\n[sandbox_workspace_write]\nwritable_roots = [\"/already-there\"]\nnetwork_access = false\n\n[unrelated]\nkeep = true\n",
+    )
+    .unwrap();
+
+    let out = h.json(&[
+        "setup",
+        "--agent",
+        "codex",
+        "--grant-store-access",
+        "--no-skill",
+    ]);
+    assert_eq!(out["codex_store_access"]["status"], "granted");
+    assert_eq!(out["codex_store_access"]["mode"], "legacy");
+    let first = std::fs::read_to_string(&config).unwrap();
+    let doc = first.parse::<toml_edit::DocumentMut>().unwrap();
+    assert!(
+        doc.get("permissions").is_none(),
+        "must not mix permission systems"
+    );
+    let roots = doc["sandbox_workspace_write"]["writable_roots"]
+        .as_array()
+        .unwrap();
+    assert!(roots.iter().any(|v| v.as_str() == Some("/already-there")));
+    let root = std::fs::canonicalize(&h.home).unwrap();
+    assert!(roots.iter().any(|v| v.as_str() == root.to_str()));
+    assert_eq!(
+        doc["sandbox_workspace_write"]["network_access"].as_bool(),
+        Some(false)
+    );
+    assert_eq!(doc["unrelated"]["keep"].as_bool(), Some(true));
+
+    h.json(&[
+        "setup",
+        "--agent",
+        "codex",
+        "--grant-store-access",
+        "--no-skill",
+    ]);
+    assert_eq!(std::fs::read_to_string(&config).unwrap(), first);
+}
+
+#[test]
+fn setup_does_not_override_legacy_read_only_or_malformed_codex_config() {
+    let h = Haven::new();
+    let config = h.home.join(".codex/config.toml");
+    std::fs::create_dir_all(config.parent().unwrap()).unwrap();
+    std::fs::write(&config, "sandbox_mode = \"read-only\"\n").unwrap();
+    let read_only = h.json(&[
+        "setup",
+        "--agent",
+        "codex",
+        "--grant-store-access",
+        "--no-skill",
+    ]);
+    assert_eq!(read_only["codex_store_access"]["status"], "unsupported");
+    let preserved = std::fs::read_to_string(&config).unwrap();
+    assert!(preserved.contains("sandbox_mode = \"read-only\""));
+    assert!(!preserved.contains("permissions.haven-local"));
+    assert_eq!(
+        status_of(&h.json(&["doctor"]), "codex_store_access"),
+        "warn"
+    );
+
+    let malformed = "not_valid = [\n";
+    std::fs::write(&config, malformed).unwrap();
+    let bad = h.json(&[
+        "setup",
+        "--agent",
+        "codex",
+        "--grant-store-access",
+        "--no-skill",
+    ]);
+    assert_eq!(bad["codex_store_access"]["status"], "unsupported");
+    assert_eq!(std::fs::read_to_string(&config).unwrap(), malformed);
+}
+
+#[test]
+fn setup_never_replaces_existing_full_access() {
+    for raw in [
+        "default_permissions = \":danger-full-access\"\n",
+        "sandbox_mode = \"danger-full-access\"\n",
+    ] {
+        let h = Haven::new();
+        let config = h.home.join(".codex/config.toml");
+        std::fs::create_dir_all(config.parent().unwrap()).unwrap();
+        std::fs::write(&config, raw).unwrap();
+        let out = h.json(&[
+            "setup",
+            "--agent",
+            "codex",
+            "--grant-store-access",
+            "--no-skill",
+        ]);
+        assert_eq!(out["codex_store_access"]["status"], "already_sufficient");
+        let updated = std::fs::read_to_string(&config).unwrap();
+        assert!(updated.contains("danger-full-access"));
+        assert!(!updated.contains("permissions.haven-local"));
+    }
+}
+
+#[test]
+fn setup_store_grant_is_skipped_when_codex_is_not_selected() {
+    let h = Haven::new();
+    let out = h.json(&[
+        "setup",
+        "--agent",
+        "claude",
+        "--grant-store-access",
+        "--no-skill",
+    ]);
+    assert_eq!(out["codex_store_access"]["status"], "skipped");
+    assert!(!h.home.join(".codex/config.toml").exists());
 }
 
 #[test]
@@ -2044,9 +2270,9 @@ fn read_only_command_triggers_daily_backup_once(/* HV-89 */) {
 }
 
 #[test]
-fn repo_binding_gates_writes_and_warns_reads_on_project_mismatch() {
+fn repo_binding_is_session_safe_and_explicit_project_still_overrides() {
     let h = Haven::new();
-    // Two projects; bind this repo (cwd = HAVEN_HOME) to `haven`.
+    // Three projects; bind this repo (cwd = HAVEN_HOME) to `haven`.
     h.json(&[
         "project", "add", "--key", "haven", "--title", "Haven", "--prefix", "HV",
     ]);
@@ -2054,24 +2280,54 @@ fn repo_binding_gates_writes_and_warns_reads_on_project_mismatch() {
     h.json(&[
         "project", "add", "--key", "other", "--title", "Other", "--prefix", "OT",
     ]);
+    h.json(&[
+        "project", "add", "--key", "third", "--title", "Third", "--prefix", "TH",
+    ]);
+    h.ok(&["item", "add", "Haven seed", "--type", "task", "-p", "haven"]);
+    h.ok(&["item", "add", "Other seed", "--type", "task", "-p", "other"]);
+    h.ok(&["item", "add", "Third seed", "--type", "task", "-p", "third"]);
     let linked = h.json(&["link", "-p", "haven", "--name", "Workspace"]);
     assert!(path_ends_with(
         linked["binding"].as_str().unwrap(),
         ".haven-project"
     ));
 
-    // Flip the global current project away from the binding.
+    // Flip the global current project away from the binding. An implicit read
+    // still resolves to the repo link and emits no mismatch warning.
     h.ok(&["project", "use", "other"]);
+    let first = h.cmd(&["item", "list"]).output().unwrap();
+    assert!(first.status.success());
+    assert!(!String::from_utf8_lossy(&first.stderr).contains("linked project"));
+    let telemetry = telemetry_obj(&String::from_utf8_lossy(&first.stderr));
+    assert!(telemetry["project_passed"].is_null());
+    assert_eq!(telemetry["project_resolved"], "haven");
+    let first_items: Value = serde_json::from_slice(&first.stdout).unwrap();
+    assert!(first_items
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|n| n["title"] == "Haven seed"));
+    assert!(!first_items
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|n| n["title"] == "Other seed"));
 
-    // A write with no -p resolves to `other` != bound `haven` → BLOCKED (mis-file guard).
-    let err = h.fail(&["item", "add", "Mistake", "--type", "task"]);
-    assert_eq!(err["error"]["code"], "invalid");
-    let msg = err["error"]["message"].as_str().unwrap();
-    assert!(
-        msg.contains("linked to project 'haven'"),
-        "blocked msg: {msg}"
-    );
-    assert!(msg.contains("-p haven"), "should guide to -p: {msg}");
+    // Another session changes the selector between reads. The second read and
+    // a no--p mutation remain on the linked project.
+    h.ok(&["project", "use", "third"]);
+    let second = h.json(&["item", "list"]);
+    assert!(second
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|n| n["title"] == "Haven seed"));
+    assert!(!second
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|n| n["title"] == "Third seed"));
+    h.ok(&["item", "add", "Bound write", "--type", "task"]);
 
     // Explicit -p matching the binding proceeds (no mismatch).
     h.ok(&["item", "add", "Right", "--type", "task", "-p", "haven"]);
@@ -2086,32 +2342,77 @@ fn repo_binding_gates_writes_and_warns_reads_on_project_mismatch() {
     );
     assert!(String::from_utf8_lossy(&cross.stderr).contains("-p override"));
 
-    // A read with the mismatched current project warns but still succeeds.
-    let read = h.cmd(&["next"]).output().unwrap();
-    assert!(read.status.success(), "read must not be blocked");
-    assert!(
-        String::from_utf8_lossy(&read.stderr).contains("linked project 'haven'"),
-        "read should warn on mismatch"
-    );
-
-    // Sanity: the deliberate -p writes actually landed in their target projects.
+    // Sanity: implicit and deliberate writes landed in their target projects.
     let haven_items = h.json(&["item", "list", "-p", "haven"]);
     assert!(haven_items
         .as_array()
         .unwrap()
         .iter()
         .any(|n| n["title"] == "Right"));
+    assert!(haven_items
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|n| n["title"] == "Bound write"));
     let other_items = h.json(&["item", "list", "-p", "other"]);
     assert!(other_items
         .as_array()
         .unwrap()
         .iter()
         .any(|n| n["title"] == "Cross"));
-    assert!(!other_items
+
+    // The post-mutation projection uses the same effective project, not the
+    // concurrently changed sticky selector.
+    let backlog = std::fs::read_to_string(linked["canonical_backlog"].as_str().unwrap()).unwrap();
+    assert!(backlog.contains("Bound write"));
+
+    // Outside the linked tree, the interactive sticky fallback is unchanged.
+    let outside = h._home.path().join("outside");
+    std::fs::create_dir_all(&outside).unwrap();
+    let outside_items = h.json_in_dir(&["item", "list"], &outside);
+    assert!(outside_items
         .as_array()
         .unwrap()
         .iter()
-        .any(|n| n["title"] == "Mistake"));
+        .any(|n| n["title"] == "Third seed"));
+}
+
+#[test]
+fn nearest_repo_binding_wins_but_prime_positional_remains_explicit() {
+    let h = Haven::new();
+    for (key, title, prefix) in [
+        ("outer", "Outer", "OU"),
+        ("inner", "Inner", "IN"),
+        ("sticky", "Sticky", "ST"),
+    ] {
+        h.json(&[
+            "project", "add", "--key", key, "--title", title, "--prefix", prefix,
+        ]);
+        h.ok(&["item", "add", title, "--type", "task", "-p", key]);
+    }
+    h.ok(&["project", "use", "sticky"]);
+    h.json(&["link", "-p", "outer", "--name", "Workspace"]);
+
+    let nested = h.home.join("nested/deeper");
+    std::fs::create_dir_all(&nested).unwrap();
+    std::fs::write(h.home.join("nested/.haven-project"), "inner\n").unwrap();
+    let items = h.json_in_dir(&["item", "list"], &nested);
+    assert!(items
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|n| n["title"] == "Inner"));
+
+    // A positional prime selector has the same precedence as explicit -p.
+    let out = h
+        .cmd(&["prime", "outer"])
+        .current_dir(&nested)
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let prime = String::from_utf8_lossy(&out.stdout);
+    assert!(prime.contains("PROJECT outer"), "prime was: {prime}");
+    assert!(String::from_utf8_lossy(&out.stderr).contains("linked project 'inner'"));
 }
 
 // ───────────────────────── HV-158: verb-divergence ─────────────────────────

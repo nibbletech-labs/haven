@@ -55,7 +55,7 @@ haven setup
 haven doctor
 ```
 
-`haven setup` installs the skills and registers the MCP server; it doesn't create a project, and there's no default. From here you don't run anything else: just talk to your AI. Ask it to "add this to the backlog" and it creates your first project and starts tracking. See **[Using Haven through your AI](USING-HAVEN.md)**. (You can also name a project up front yourself; that and other setup details are in **[INSTALL.md](INSTALL.md)**, along with other platforms, building from source, agent configuration, and updating.)
+`haven setup` installs the skills and registers the MCP server; it doesn't create a project, and there's no default. From here you don't run anything else: just talk to your AI. Ask it to "add this to the backlog" and it creates your first project and starts tracking. Codex users can also opt into narrow write access for the out-of-repo Haven store with `haven setup --agent codex --grant-store-access`; see **[INSTALL.md](INSTALL.md)**. See **[Using Haven through your AI](USING-HAVEN.md)** for the everyday workflow.
 
 ## How it fits together
 

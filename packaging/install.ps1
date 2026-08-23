@@ -10,6 +10,7 @@
 # Env:
 #   HAVEN_VERSION = v0.1.5   install a specific release tag (default: latest)
 #   HAVEN_BIN_DIR = C:\path  install dir (default: %LOCALAPPDATA%\Programs\haven\bin)
+#   HAVEN_GRANT_CODEX_STORE_ACCESS = 1  opt into Codex write access for ~/.haven
 #
 # The installer places the binary and nothing else. It deliberately does NOT
 # compute the data directory: `haven setup` resolves ~/.haven itself via the
@@ -113,8 +114,13 @@ try {
 
     # --- Wire up (idempotent; never fatal) --------------------------------------
     Write-Step 'Running haven setup'
-    & $dest setup
-    if ($LASTEXITCODE -ne 0) { Write-Host 'setup skipped (run `haven setup` manually).' }
+    if ($env:HAVEN_GRANT_CODEX_STORE_ACCESS) {
+        & $dest setup --grant-store-access
+        if ($LASTEXITCODE -ne 0) { Write-Host 'setup skipped (run `haven setup --grant-store-access` manually).' }
+    } else {
+        & $dest setup
+        if ($LASTEXITCODE -ne 0) { Write-Host 'setup skipped (run `haven setup` manually).' }
+    }
 
     Write-Step 'Done. Try: haven item add "First item"; haven doctor'
 } finally {
