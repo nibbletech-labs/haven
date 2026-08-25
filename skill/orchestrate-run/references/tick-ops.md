@@ -219,10 +219,23 @@ feeds a **fresh fix agent** dispatched through the plan-first pipeline (§ 6), a
 ## Convergence-time ops
 
 - **Promote undrained punch-list survivors** to floating items (§ 9e) so no non-blocking finding is lost.
-- **Post-run audit (the ratchet):** file the run-vs-skill deltas as **one floating item** —
-  CLI `haven item add "orchestrate-run audit: <run>" -p <P>` (uncommitted floater; one-line body,
-  detail as a `research` artifact on it). Nothing to report is a fine outcome — skip the item, not
-  the diff.
+- **Post-run audit (the ratchet) — never a new item in the run's project.** The run-vs-skill
+  deltas are about *this skill*, not the product you just built; filing them where the run
+  happened litters that project's backlog with process commentary (the rule used to say
+  "floating research item on the project", and that is exactly how it misfired). Put the
+  headline deltas in the **convergence report**, then route by kind:
+  - *This skill should change* → **one** item in the project that owns the skill's **source**
+    (for the skills Haven ships, that is Haven's own backlog): CLI
+    `haven item add "orchestrate-run audit: <run>" -p haven --why "<run project> <root ref>"`
+    (uncommitted floater; one-line body, detail as a `research` artifact on it). No such
+    project to file into → leave it in the report and say so.
+  - *Repo-specific trap* (a build quirk, a flaky command, a path that bites) → that repo's
+    `CLAUDE.md` / agent notes, not any backlog.
+  - *How-we-work preference* → your own memory / user instructions.
+  - *A real gap in the product you just built* → that **is** work: a normal floating item in
+    the run's project, same as a punch-list survivor.
+
+  Nothing to report is a fine outcome — skip the filing, not the diff.
 - **Report the remaining AI queue / human queue:** `haven next --owner ai` / `--owner human`.
 - **Container progress:** `rollup_state` rides the step-0 graph read (Dormant|Queued|Active|Done).
 - **Follow a stale ref** from a resume note: CLI `haven evolve resolve <ref> -p <P>` · MCP

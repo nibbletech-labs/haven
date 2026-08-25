@@ -357,9 +357,13 @@ flight → **promote any undrained `punch-list.md` items to floating Haven items
 priority, xref the source leaf) so nothing is lost (`references/tick-ops.md` § Convergence-time),
 then **run the post-run audit — the ratchet**: diff what this run actually did against what
 this skill prescribes (deviations declared, tripwires fired or missed, failures nothing
-covers, places the model outperformed the procedure) and **file the deltas as one floating
-research item** on the project (capture, don't structure — `references/tick-ops.md`
-§ Convergence-time; nothing-to-report skips the item, never the diff). The ratchet is how
+covers, places the model outperformed the procedure). Those deltas describe **this skill**,
+not the product you just built, so **they never become items in the run's project** — put
+the headline in the convergence report and route the rest by kind (`references/tick-ops.md`
+§ Convergence-time): a change this skill needs goes to the project that owns the skill's
+source, a repo-specific trap to that repo's `CLAUDE.md`, a working preference to your own
+memory, and a genuine gap in the product you just built is real work, so that one *is* a
+floating item here. Nothing to report skips the filing, never the diff. The ratchet is how
 this skill ages: it changes on run evidence, never on speculation. Then report
 blocked-on-human items (`next --owner human` / `wait_state on_human`) and any
 strike-escalated items, then stop (inline) or sleep (`/loop`, v4).
