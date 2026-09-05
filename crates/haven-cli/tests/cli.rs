@@ -120,6 +120,9 @@ impl Haven {
         c.env("HAVEN_CODEX_DIR", self.home.join(".codex"));
         c.env("HAVEN_AGENTS_DIR", self.home.join(".agents"));
         c.env("HAVEN_CLOUD_SYNC_PREVIEW", "0");
+        // Hermetic: a developer's exported HAVEN_TELEMETRY must not move the
+        // line between stderr and the file under test (HV-306).
+        c.env_remove("HAVEN_TELEMETRY");
         c.current_dir(&self.home);
         c.args(args);
         c

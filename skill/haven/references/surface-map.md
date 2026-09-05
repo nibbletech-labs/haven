@@ -44,6 +44,8 @@ always pass `-p <key>` on project-scoped commands.
 
 ## CLI command surface
 
+Streams: stdout is JSON (or tables with `--pretty`); a **successful command writes nothing to stderr** (the per-op telemetry line goes to `$HAVEN_HOME/telemetry.jsonl`; `HAVEN_TELEMETRY=stderr` puts it back on stderr, `off` drops it). A failing command prints the `{"error":{code,message}}` envelope to stderr and exits 1, so don't `2>/dev/null` — you'd hide the reason. `--json` is accepted as a no-op (JSON is already the default).
+
 ```
 # Setup & introspection
 haven setup [--agent all|claude|codex] [--no-skill] [--grant-store-access] | init | status [<key>] | doctor
@@ -77,8 +79,8 @@ haven item commit <ref>… [--priority N] [--rationale "…"]  # one or more ref
 haven item uncommit <ref>… [--rationale "…"]
 haven item claim <ref> [--as ai|human] [--actor <name>]   # atomic: owner + in_progress in one op
 haven item assign <ref> --to human|ai [--actor <name>]
-haven item handoff <ref> --to human|ai [--from] [--note "…"] [--status] [--wait] [--actor]
-haven item complete <ref> [--evidence "…"] [--role delivery] [--by]
+haven item handoff <ref> --to human|ai [--from] [--note "…"] [--status] [--wait <state>|none] [--actor]
+haven item complete <ref> [--evidence "…"] [--role delivery] [--by]   # evidence file: delivery.md, then delivery-2.md… (never collides)
 haven item rank <ref> [--before <ref>] [--after <ref>] [--rationale "…"]
 haven item archive <ref>… [--rationale "…"]  # one or more refs (grooming)
 haven item reopen  <ref> [--rationale "…"]
