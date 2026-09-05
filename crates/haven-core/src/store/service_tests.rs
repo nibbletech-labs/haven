@@ -114,7 +114,7 @@ fn complete_records_evidence_marks_done_and_reports_unblocked() {
         None,
         NewItem {
             title: "B".into(),
-            depends_on: Some("HV-1".into()),
+            depends_on: vec!["HV-1".into()],
             ..Default::default()
         },
     )
@@ -124,7 +124,7 @@ fn complete_records_evidence_marks_done_and_reports_unblocked() {
         None,
         NewItem {
             title: "C".into(),
-            depends_on: Some("HV-1".into()),
+            depends_on: vec!["HV-1".into()],
             ..Default::default()
         },
     )
@@ -851,7 +851,7 @@ fn add_with_axes_and_edges() {
                 commit: true,
                 assign: Some(OwnerKind::Ai),
                 parent: Some(parent.reference.clone()),
-                depends_on: Some(dep.reference.clone()),
+                depends_on: vec![dep.reference.clone()],
                 ..Default::default()
             },
         )
@@ -1072,7 +1072,7 @@ fn next_respects_ready_committed_wait_and_dependencies() {
                 status: Some(Status::Ready),
                 done_looks_like: Some("blocked done".into()),
                 commit: true,
-                depends_on: Some(prereq.reference.clone()),
+                depends_on: vec![prereq.reference.clone()],
                 ..Default::default()
             },
         )

@@ -847,7 +847,23 @@ fn dispatch_tool(store: &Store, name: &str, a: &Value) -> Result<Value> {
                 commit: opt_bool(a, "commit").unwrap_or(false),
                 assign: opt_str(a, "assign").map(OwnerKind::parse).transpose()?,
                 parent: opt_str(a, "parent").map(String::from),
-                depends_on: opt_str(a, "depends_on").map(String::from),
+                depends_on: match a.get("depends_on") {
+                    None | Some(Value::Null) => Vec::new(),
+                    Some(Value::String(s)) => vec![s.clone()],
+                    Some(Value::Array(items)) => items
+                        .iter()
+                        .map(|v| {
+                            v.as_str().map(String::from).ok_or_else(|| {
+                                HavenError::Invalid("depends_on entries must be strings".into())
+                            })
+                        })
+                        .collect::<Result<Vec<_>>>()?,
+                    Some(_) => {
+                        return Err(HavenError::Invalid(
+                            "depends_on must be a ref string or an array of refs".into(),
+                        ))
+                    }
+                },
                 group: opt_str(a, "group").map(String::from),
                 metadata: a.get("metadata").cloned(),
             };
@@ -1394,7 +1410,7 @@ fn tools_list() -> Value {
         { "name": "haven_rank", "description": "Reorder an item within its priority band: place it immediately before or after another item (exactly one of `before`/`after`). Fine ordering for 'do X before Y' — use `haven_update_item {priority}` for coarse band moves. Pass `rationale` when the ordering judgment should be auditable in lineage.",
           "inputSchema": obj(json!({"ref":{"type":"string"},"project":{"type":"string"},"before":{"type":"string"},"after":{"type":"string"},"rationale":{"type":"string"}}), json!(["ref"])) },
         { "name": "haven_add_item", "description": "Create a work-graph item (node). `done_looks_like` is the acceptance statement output is verified against; `why` is a one-line provenance trace. `due_at` is an optional deadline as a calendar date YYYY-MM-DD (no time/timezone), validated on write. Pass `if_absent: true` to return an existing live item with the same normalized title (marked `existing: true`) instead of creating a duplicate; responses may carry `similar` — up to 3 live items with overlapping titles (advisory).",
-          "inputSchema": obj(json!({"title":{"type":"string"},"project":{"type":"string"},"type":{"type":"string","enum":["task","code","research","data","design","admin","release","phase","gate","anchor"],"description":"Node type. Leaves: task (default), code, research, data, design, admin. Containers (the only valid group targets): release, phase, gate. anchor = a long-lived project-docs / overview node."},"body":{"type":"string"},"done_looks_like":{"type":"string"},"why":{"type":"string"},"due_at":{"type":"string"},"status":{"type":"string","enum":["discovery","definition","ready","in_progress","blocked","done","superseded","archived"]},"priority":{"type":"integer","minimum":0,"maximum":4},"commit":{"type":"boolean"},"assign":{"type":"string","enum":["human","ai"]},"parent":{"type":"string"},"depends_on":{"type":"string"},"group":{"type":"string","description":"Add this new item to a release/phase/gate container (creates a grouping edge from that container to this item)."},"if_absent":{"type":"boolean"}}), json!(["title"])) },
+          "inputSchema": obj(json!({"title":{"type":"string"},"project":{"type":"string"},"type":{"type":"string","enum":["task","code","research","data","design","admin","release","phase","gate","anchor"],"description":"Node type. Leaves: task (default), code, research, data, design, admin. Containers (the only valid group targets): release, phase, gate. anchor = a long-lived project-docs / overview node."},"body":{"type":"string"},"done_looks_like":{"type":"string"},"why":{"type":"string"},"due_at":{"type":"string"},"status":{"type":"string","enum":["discovery","definition","ready","in_progress","blocked","done","superseded","archived"]},"priority":{"type":"integer","minimum":0,"maximum":4},"commit":{"type":"boolean"},"assign":{"type":"string","enum":["human","ai"]},"parent":{"type":"string"},"depends_on":{"type":["string","array"],"items":{"type":"string"},"description":"A ref, or an array of refs — one dependency edge each, all in the same add."},"group":{"type":"string","description":"Add this new item to a release/phase/gate container (creates a grouping edge from that container to this item)."},"if_absent":{"type":"boolean"}}), json!(["title"])) },
         { "name": "haven_import", "description": "Bulk-add an N-node sub-graph in ONE atomic call — the `haven import` envelope inline. `items` is a JSON array; each element carries the haven_add_item fields (title*, type, body, done_looks_like, why, status, priority, commit, assign) PLUS a temp `id` (file-local, lets siblings reference it) and ref-or-temp-id edge fields `parent` / `depends_on` (array) / `group`. Edge targets may be an existing ref OR a temp id from this batch, including forward references (a target appearing later in the array). All-or-nothing: any failure — a bad edge target, a cycle, a born-engaged item — rolls the WHOLE batch back, ref counter included. `if_absent: true` skips items whose normalized title matches a live item (their temp ids resolve to the match). Like haven_add_item, items cannot be born in an engaged state (status in_progress/blocked/done or commit:true), and a `ready` item needs done_looks_like. Returns one outcome per input item (temp `id` echoed, the created/matched item, and `existing`).",
           "inputSchema": obj(json!({"items":{"type":"array","items":import_item_schema},"if_absent":{"type":"boolean"},"project":{"type":"string"}}), json!(["items"])) },
         { "name": "haven_update_item", "description": "Update maturity/commitment/ownership/grouping of an item. Set `done_looks_like` (acceptance) when it becomes ready so dispatch can verify against it. `due_at` sets the YYYY-MM-DD deadline (validated on write); pass `\"none\"` to clear it. Pass `group` to add the item to a release/phase/gate container (mirrors haven_add_item). Pass `rationale` with `priority` or `commit` when the priority/commitment judgment should be auditable in lineage. Returns the updated item in full (same shape as haven_get_item). If the ref is superseded/archived the update still applies, but the response carries `stale_ref` {ref, resolved_to} — re-target the live item. To pass the work baton between ai and human (flip owner + record a note + set wait/status atomically), use haven_handoff, not a bare assign/update here.",

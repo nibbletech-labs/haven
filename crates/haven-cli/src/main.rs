@@ -86,8 +86,34 @@ struct Cli {
     #[arg(long, global = true)]
     pretty: bool,
 
+    /// Silent alias (HV-308): JSON is already the default, but agents reach
+    /// for `--json` by habit from other CLIs. Accepted and ignored.
+    #[arg(long, global = true, hide = true)]
+    json: bool,
+
+    /// Silent alias (HV-308): `--format json` ≡ default, `--format pretty` ≡
+    /// `--pretty`. Anything else is rejected.
+    #[arg(long, global = true, hide = true, value_name = "FORMAT")]
+    format: Option<String>,
+
     #[command(subcommand)]
     command: Command,
+}
+
+impl Cli {
+    /// `--pretty` wins; else `--format pretty|table|tables`; else JSON.
+    fn wants_pretty(&self) -> Result<bool> {
+        if self.pretty {
+            return Ok(true);
+        }
+        match self.format.as_deref() {
+            None | Some("json") => Ok(false),
+            Some("pretty") | Some("table") | Some("tables") => Ok(true),
+            Some(other) => Err(HavenError::Invalid(format!(
+                "invalid --format value {other:?} — valid: json (default), pretty"
+            ))),
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -456,9 +482,14 @@ struct ArtifactListArgs {
 #[derive(Args)]
 struct ArtifactGetArgs {
     reference: String,
+    /// Silent positional role (HV-308): `haven artifact get REF spec`. An
+    /// explicit `--role` wins.
+    #[arg(hide = true)]
+    role_pos: Option<String>,
     #[arg(long)]
     role: Option<String>,
-    #[arg(long)]
+    /// Full relative path (`items/REF/spec.md`) or just the file name.
+    #[arg(long, alias = "name")]
     path: Option<String>,
 }
 
@@ -469,7 +500,7 @@ struct ArtifactRmArgs {
     #[arg(long)]
     role: Option<String>,
     /// Select by file name (the path basename).
-    #[arg(long)]
+    #[arg(long, alias = "path")]
     name: Option<String>,
     /// Select by artifact public id.
     #[arg(long)]
@@ -485,7 +516,7 @@ struct ArtifactMvArgs {
     #[arg(long)]
     role: Option<String>,
     /// Select by file name (the path basename).
-    #[arg(long)]
+    #[arg(long, alias = "path")]
     name: Option<String>,
     /// Select by artifact public id.
     #[arg(long)]
@@ -559,6 +590,7 @@ struct ProjectListArgs {
 #[derive(Subcommand)]
 enum ItemCmd {
     /// Create an item. Defaults to uncommitted discovery work in the icebox.
+    #[command(alias = "create")]
     Add(ItemAddArgs),
     /// List items with optional filters.
     List(ItemListArgs),
@@ -579,7 +611,7 @@ enum ItemCmd {
         #[arg(long)]
         priority: Option<i64>,
         /// Why this priority/commitment decision is being made.
-        #[arg(long)]
+        #[arg(long, alias = "reason")]
         rationale: Option<String>,
     },
     /// Mark one or more items uncommitted. Priority is retained.
@@ -587,7 +619,7 @@ enum ItemCmd {
         #[arg(required = true)]
         references: Vec<String>,
         /// Why this priority/commitment decision is being made.
-        #[arg(long)]
+        #[arg(long, alias = "reason")]
         rationale: Option<String>,
     },
     /// Claim an item: set owner + in_progress atomically (errors if already claimed).
@@ -604,13 +636,13 @@ enum ItemCmd {
     Archive {
         #[arg(required = true)]
         references: Vec<String>,
-        #[arg(long)]
+        #[arg(long, alias = "reason")]
         rationale: Option<String>,
     },
     /// Reopen an archived/superseded item into discovery.
     Reopen {
         reference: String,
-        #[arg(long)]
+        #[arg(long, alias = "reason")]
         rationale: Option<String>,
     },
     /// Record/list/remove an item's external references (Jira/Linear/GitHub) for
@@ -694,7 +726,13 @@ struct ExtrefFindArgs {
 
 #[derive(Args)]
 struct ItemAddArgs {
-    title: String,
+    // Also accepted as a hidden `--title` flag (HV-308); exactly one of the two
+    // is required. Kept out of a clap ArgGroup so the usage line shows only the
+    // documented positional.
+    #[arg(required_unless_present = "title_flag", conflicts_with = "title_flag")]
+    title: Option<String>,
+    #[arg(long = "title", hide = true)]
+    title_flag: Option<String>,
     /// task | code | research | data | design | admin | release | phase | gate | anchor.
     #[arg(long = "type")]
     node_type: Option<String>,
@@ -717,14 +755,14 @@ struct ItemAddArgs {
     #[arg(long)]
     commit: bool,
     /// Owner kind: human | ai.
-    #[arg(long)]
+    #[arg(long, alias = "owner")]
     assign: Option<String>,
     /// Add a decomposition parent edge.
     #[arg(long)]
     parent: Option<String>,
     /// Add a dependency edge; this item depends on the referenced item.
     #[arg(long = "depends-on")]
-    depends_on: Option<String>,
+    depends_on: Vec<String>,
     /// Add this item to a release/phase/gate group.
     #[arg(long)]
     group: Option<String>,
@@ -735,6 +773,17 @@ struct ItemAddArgs {
     /// creating a duplicate, when a normalized-title match exists.
     #[arg(long = "if-absent")]
     if_absent: bool,
+}
+
+impl ItemAddArgs {
+    fn title(&self) -> Result<String> {
+        self.title
+            .clone()
+            .or_else(|| self.title_flag.clone())
+            .ok_or_else(|| {
+                HavenError::Invalid("a title is required: haven item add <TITLE>".into())
+            })
+    }
 }
 
 #[derive(Args)]
@@ -807,7 +856,7 @@ struct ItemUpdateArgs {
     #[arg(long)]
     priority: Option<i64>,
     /// Why this priority-band decision is being made.
-    #[arg(long)]
+    #[arg(long, alias = "reason")]
     rationale: Option<String>,
     /// task | code | research | data | design | admin | release | phase | gate | anchor.
     #[arg(long = "type")]
@@ -853,7 +902,7 @@ struct ItemAssignArgs {
     #[arg(long = "to")]
     to: String,
     /// Optional actor handle, e.g. ai:claude or human:tom.
-    #[arg(long)]
+    #[arg(long, alias = "by")]
     actor: Option<String>,
 }
 
@@ -861,10 +910,10 @@ struct ItemAssignArgs {
 struct ItemClaimArgs {
     reference: String,
     /// Who's taking it: ai (default) | human. Claim-on-pickup is the agent case.
-    #[arg(long = "as", default_value = "ai")]
+    #[arg(long = "as", default_value = "ai", alias = "owner")]
     owner: String,
     /// Optional actor handle recorded as the assignee, e.g. ai:claude or human:tom.
-    #[arg(long)]
+    #[arg(long, alias = "by")]
     actor: Option<String>,
 }
 
@@ -887,7 +936,7 @@ struct ItemHandoffArgs {
     #[arg(long)]
     wait: Option<String>,
     /// Actor handle recorded as the new assignee / note author.
-    #[arg(long)]
+    #[arg(long, alias = "by")]
     actor: Option<String>,
 }
 
@@ -901,7 +950,7 @@ struct ItemCompleteArgs {
     #[arg(long)]
     role: Option<String>,
     /// Creator handle recorded on the evidence artifact.
-    #[arg(long)]
+    #[arg(long, alias = "actor")]
     by: Option<String>,
 }
 
@@ -915,7 +964,7 @@ struct ItemRankArgs {
     #[arg(long)]
     after: Option<String>,
     /// Why this fine-ordering decision is being made.
-    #[arg(long)]
+    #[arg(long, alias = "reason")]
     rationale: Option<String>,
 }
 
@@ -1006,7 +1055,7 @@ struct EvolveSplitArgs {
     reference: String,
     #[arg(long = "into")]
     into: Vec<String>,
-    #[arg(long)]
+    #[arg(long, alias = "reason")]
     rationale: Option<String>,
     #[arg(long)]
     by: Option<String>,
@@ -1017,7 +1066,7 @@ struct EvolveMergeArgs {
     references: Vec<String>,
     #[arg(long)]
     title: String,
-    #[arg(long)]
+    #[arg(long, alias = "reason")]
     rationale: Option<String>,
     #[arg(long)]
     by: Option<String>,
@@ -1028,7 +1077,7 @@ struct EvolveSupersedeArgs {
     reference: String,
     #[arg(long)]
     with: String,
-    #[arg(long)]
+    #[arg(long, alias = "reason")]
     rationale: Option<String>,
     #[arg(long)]
     by: Option<String>,
@@ -1078,9 +1127,13 @@ fn main() {
     // Loud, on every command: a quarantined snapshot freezes rotation until the
     // operator clears it. stderr only (stdout is structured Output / the MCP channel).
     warn_if_quarantined();
+    let pretty = match cli.wants_pretty() {
+        Ok(p) => p,
+        Err(err) => std::process::exit(output::render_error(&err)),
+    };
     match run(&cli) {
         Ok(out) => {
-            out.render(cli.pretty);
+            out.render(pretty);
             maybe_render(&cli);
             maybe_daily_backup();
         }
@@ -1105,6 +1158,16 @@ fn corrective_for_unknown(words: &[String]) -> Option<String> {
         }
     };
     let tip = match verb.as_str() {
+        // Edge verbs (HV-308): `haven edge add A B` has no `add` subcommand
+        // equivalent — name the real shape instead of echoing the tail.
+        "edge" | "edges" | "depends" | "dependency" => {
+            "did you mean `haven depend <node> --on <ref>` (or `haven decompose` / `haven group` / `haven link`)?".to_string()
+        }
+        "create" => with_tail("haven item add"),
+        "claim" => with_tail("haven item claim"),
+        "set-extref" | "extref" | "extrefs" => with_tail("haven item extref add"),
+        "next-explain" | "explain" => with_tail("haven next --explain"),
+        "add-artifact" | "artifacts" => with_tail("haven artifact add"),
         "list-items" | "items" => with_tail("haven item list"),
         // MCP tools are flat (`haven_get_item`, `haven_archive`, …); the CLI nests
         // these under `item`. A user reaching for the flat name lands here.
@@ -1722,7 +1785,10 @@ fn cmd_artifact(project: Option<&str>, cmd: &ArtifactCmd) -> Result<Output> {
             )?)?))
         }
         ArtifactCmd::Get(a) => {
-            let role = opt_parse(&a.role, ArtifactRole::parse)?;
+            let role = opt_parse(
+                &a.role.clone().or_else(|| a.role_pos.clone()),
+                ArtifactRole::parse,
+            )?;
             let got = match s.get_artifact(project, &a.reference, role, a.path.as_deref()) {
                 // Content synced to Storage but not on this machine: lazy-pull
                 // it (SPEC §5), cache it in the content tree, and retry once.
@@ -3015,7 +3081,7 @@ fn cmd_item(project: Option<&str>, cmd: &ItemCmd) -> Result<Output> {
     match cmd {
         ItemCmd::Add(a) => {
             let new = NewItem {
-                title: a.title.clone(),
+                title: a.title()?,
                 node_type: opt_parse(&a.node_type, NodeType::parse)?,
                 body: a.body.clone(),
                 done_looks_like: a.done_looks_like.clone(),

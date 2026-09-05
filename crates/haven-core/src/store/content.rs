@@ -977,9 +977,15 @@ impl Store {
         let artifacts = self.load_artifacts(node_id)?;
 
         let chosen = if let Some(path) = path {
-            artifacts
-                .into_iter()
-                .find(|a| a.path.as_deref() == Some(path))
+            // Full relative path, or just the file name (HV-308: `--name` and
+            // `--path` are one selector across get/rm/mv).
+            artifacts.into_iter().rfind(|a| {
+                a.path.as_deref() == Some(path)
+                    || a.path
+                        .as_deref()
+                        .and_then(|p| p.rsplit('/').next())
+                        .is_some_and(|base| base == path)
+            })
         } else if let Some(role) = role {
             // Latest of that role (load_artifacts is id-ascending).
             artifacts.into_iter().rfind(|a| a.role == role)
@@ -1042,11 +1048,12 @@ impl Store {
             ArtifactSelector::Name(name) => artifacts
                 .into_iter()
                 .filter(|a| {
-                    a.path
-                        .as_deref()
-                        .and_then(|p| p.rsplit('/').next())
-                        .map(|base| base == name)
-                        .unwrap_or(false)
+                    a.path.as_deref() == Some(name.as_str())
+                        || a.path
+                            .as_deref()
+                            .and_then(|p| p.rsplit('/').next())
+                            .map(|base| base == name)
+                            .unwrap_or(false)
                 })
                 .collect(),
             ArtifactSelector::Id(id) => artifacts
@@ -1863,7 +1870,7 @@ mod tests {
             NewItem {
                 title: "Blocked".into(),
                 commit: true,
-                depends_on: Some(dep.reference.clone()),
+                depends_on: vec![dep.reference.clone()],
                 ..Default::default()
             },
         )

@@ -53,7 +53,9 @@ pub struct NewItem {
     pub commit: bool,
     pub assign: Option<OwnerKind>,
     pub parent: Option<String>,
-    pub depends_on: Option<String>,
+    /// Dependencies this item has on existing items (each becomes one edge,
+    /// all inside the add transaction). Repeatable on the CLI (HV-308).
+    pub depends_on: Vec<String>,
     pub group: Option<String>,
     pub metadata: Option<serde_json::Value>,
 }
@@ -331,7 +333,7 @@ impl Store {
             let parent_id = self.resolve_node_id(project_id, parent)?;
             self.insert_decomposition(&tx, parent_id, node_id)?;
         }
-        if let Some(dep) = &new.depends_on {
+        for dep in &new.depends_on {
             let dep_id = self.resolve_node_id(project_id, dep)?;
             self.insert_dependency(&tx, node_id, dep_id)?;
         }

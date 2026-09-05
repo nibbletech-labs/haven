@@ -60,7 +60,7 @@ haven project reopen  <key> [--by <name>]                                     # 
 # Items (nodes)
 haven item add "<title>" [--type] [--body] [--done-looks-like "…"] [--why "…"]
                          [--status] [--priority N] [--commit] [--assign human|ai] [--due-at YYYY-MM-DD]
-                         [--parent <ref>] [--depends-on <ref>] [--group <ref>]
+                         [--parent <ref>] [--depends-on <ref>]… [--group <ref>]   # --depends-on repeats
                          [--if-absent]   # normalized-title dedupe: return the existing item
 haven import <file.json> [--if-absent]  # bulk add: one validated, all-or-nothing transaction;
                                         # items take the add fields + temp `id` and ref-or-temp-id
@@ -122,7 +122,7 @@ haven artifact add <ref> --role <role> [--file <path> | --content "…"] [--name
                          # --replace overwrites an existing same-path artifact in place;
                          # --xref-* writes a typed metadata.xref[] entry
 haven artifact list <ref> [--role <role>]
-haven artifact get  <ref> [--role <role>] [--path <relpath>]
+haven artifact get  <ref> [--role <role>] [--path <relpath-or-filename>]
 haven artifact rm   <ref> (--role <r> | --name <f> | --id <pid>)   # remove row + file
 haven artifact mv   <ref> <new-name> (--role <r> | --name <f> | --id <pid>)  # rename file
 haven note <ref> "<text>"

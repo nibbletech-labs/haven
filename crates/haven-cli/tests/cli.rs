@@ -3121,3 +3121,154 @@ fn cli_truncation_notes_stay_off_a_non_terminal_stderr() {
         "graph leaves stderr empty:\n{stderr}"
     );
 }
+
+/// HV-308: the spellings agents guess (mined from two weeks of transcripts)
+/// are accepted silently and behave exactly like their documented twins.
+#[test]
+fn cli_silent_aliases_behave_like_their_documented_twins() {
+    let h = Haven::new();
+    h.ok(&["setup", "--project-key", "demo", "--prefix", "DM"]);
+    // --title as a flag; item create as a verb.
+    let a = h.json(&["item", "add", "--title", "Alpha", "-p", "demo"]);
+    assert_eq!(a["title"], "Alpha");
+    let b = h.json(&["item", "create", "Beta", "-p", "demo"]);
+    assert_eq!(b["ref"], "DM-2");
+    // --json and --format json are no-ops; --format pretty renders tables.
+    let g = h.json(&["item", "get", "DM-1", "--json", "-p", "demo"]);
+    assert_eq!(g["ref"], "DM-1");
+    let g = h.json(&["item", "get", "DM-1", "--format", "json", "-p", "demo"]);
+    assert_eq!(g["ref"], "DM-1");
+    let (stdout, _) = h.run_capturing(&["--format", "pretty", "item", "get", "DM-1", "-p", "demo"]);
+    assert!(
+        serde_json::from_str::<Value>(stdout.trim()).is_err(),
+        "--format pretty must not print JSON:\n{stdout}"
+    );
+    let err = h.fail(&["item", "get", "DM-1", "--format", "xml", "-p", "demo"]);
+    assert_eq!(err["error"]["code"], "invalid");
+    // Repeatable --depends-on lands two edges in one add.
+    let c = h.json(&[
+        "item",
+        "add",
+        "Gamma",
+        "-p",
+        "demo",
+        "--depends-on",
+        "DM-1",
+        "--depends-on",
+        "DM-2",
+    ]);
+    let edges = h.json(&[
+        "item",
+        "get",
+        c["ref"].as_str().unwrap(),
+        "--include",
+        "edges",
+        "-p",
+        "demo",
+    ]);
+    let deps = edges["edges"]["depends_on"].as_array().unwrap();
+    assert_eq!(deps.len(), 2, "two dependency edges: {}", edges["edges"]);
+    // Owner / actor spellings.
+    let d = h.json(&["item", "add", "Delta", "--owner", "ai", "-p", "demo"]);
+    assert_eq!(d["owner_kind"], "ai");
+    let cl = h.json(&[
+        "item",
+        "claim",
+        "DM-1",
+        "--owner",
+        "ai",
+        "--by",
+        "ai:claude",
+        "-p",
+        "demo",
+    ]);
+    assert_eq!(cl["owner_kind"], "ai");
+    assert_eq!(cl["assignee"], "ai:claude");
+    let done = h.json(&[
+        "item",
+        "complete",
+        "DM-1",
+        "--evidence",
+        "shipped",
+        "--actor",
+        "ai:claude",
+        "-p",
+        "demo",
+    ]);
+    assert_eq!(done["artifact"]["created_by"], "ai:claude");
+    // Artifact selectors: --name on get, positional role on get, --path on rm.
+    let got = h.json(&[
+        "artifact",
+        "get",
+        "DM-1",
+        "--name",
+        "delivery.md",
+        "-p",
+        "demo",
+    ]);
+    assert_eq!(got["content"], "shipped");
+    let got = h.json(&["artifact", "get", "DM-1", "delivery", "-p", "demo"]);
+    assert_eq!(got["content"], "shipped");
+    let got = h.json(&[
+        "artifact",
+        "get",
+        "DM-1",
+        "--path",
+        "items/DM-1/delivery.md",
+        "-p",
+        "demo",
+    ]);
+    assert_eq!(got["content"], "shipped");
+    h.ok(&[
+        "artifact",
+        "rm",
+        "DM-1",
+        "--path",
+        "delivery.md",
+        "-p",
+        "demo",
+    ]);
+    assert_eq!(
+        h.fail(&["artifact", "get", "DM-1", "delivery", "-p", "demo"])["error"]["code"],
+        "not_found"
+    );
+    // --reason everywhere --rationale is.
+    h.ok(&["item", "commit", "DM-2", "--reason", "go", "-p", "demo"]);
+    h.ok(&["item", "archive", "DM-2", "--reason", "park", "-p", "demo"]);
+    let re = h.json(&["item", "reopen", "DM-2", "--reason", "back", "-p", "demo"]);
+    assert_eq!(re["status"], "discovery");
+    // Top-level verb guesses name a runnable command.
+    for (args, expect) in [
+        (
+            vec!["edge", "add", "DM-1", "DM-2"],
+            "haven depend <node> --on <ref>",
+        ),
+        (vec!["claim", "DM-1"], "haven item claim DM-1"),
+        (vec!["next-explain"], "haven next --explain"),
+        (vec!["set-extref", "DM-1"], "haven item extref add DM-1"),
+        (vec!["add-artifact", "DM-1"], "haven artifact add DM-1"),
+        (vec!["create", "Zeta"], "haven item add Zeta"),
+    ] {
+        let err = h.fail(&args);
+        let msg = err["error"]["message"].as_str().unwrap();
+        assert!(msg.contains(expect), "{args:?} → {msg}");
+    }
+    // None of the aliases leak into --help.
+    for (args, hidden) in [
+        (vec!["item", "add", "--help"], vec!["--title", "--owner"]),
+        (vec!["item", "claim", "--help"], vec!["--owner", "--by"]),
+        (vec!["item", "complete", "--help"], vec!["--actor"]),
+        (
+            vec!["artifact", "get", "--help"],
+            vec!["--name", "ROLE_POS"],
+        ),
+        (vec!["artifact", "rm", "--help"], vec!["--path"]),
+        (vec!["item", "archive", "--help"], vec!["--reason"]),
+        (vec!["--help"], vec!["--json", "--format"]),
+    ] {
+        let (stdout, _) = h.run_capturing(&args);
+        for h_ in hidden {
+            assert!(!stdout.contains(h_), "{args:?} help leaks {h_}:\n{stdout}");
+        }
+    }
+}
