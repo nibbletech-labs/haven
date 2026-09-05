@@ -2696,8 +2696,7 @@ fn telemetry_obj(h: &Haven) -> Value {
         .unwrap_or_else(|e| panic!("no telemetry file at {}: {e}", path.display()));
     let line = text
         .lines()
-        .filter(|l| l.trim_start().starts_with("haven-telemetry "))
-        .next_back()
+        .rfind(|l| l.trim_start().starts_with("haven-telemetry "))
         .unwrap_or_else(|| panic!("no telemetry line in {}:\n{text}", path.display()));
     telemetry_obj_from(line)
 }
