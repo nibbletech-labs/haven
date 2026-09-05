@@ -73,11 +73,23 @@ judgment:
 
 - **Every long-running command gets an explicit ceiling and an observable log.** Run
   build/test/e2e commands wrapped — `timeout <ceiling> <cmd> 2>&1 | tee -a
-  <worktree>/.orch/cmd.log` — or via the harness's background execution with a hard
-  kill deadline. A stuck test then dies at the ceiling regardless of what the agent is
-  thinking, and the log's mtime is the agent's **liveness evidence**: the coordinator's
-  watchdog (SKILL.md § Evidence watchdog) watches it, and a silent agent with a stale
-  log gets killed.
+  <worktree>/.orch/cmd.log` — **in the foreground**, with the tool call's own
+  timeout set to the ceiling (the per-call maximum is 10 minutes). A stuck test then
+  dies at the ceiling regardless of what the agent is thinking, and the log's mtime is
+  the agent's **liveness evidence**: the coordinator's watchdog (SKILL.md § Evidence
+  watchdog) watches it, and a silent agent with a stale log gets killed.
+- **Foreground only — never end a turn with a background command or Monitor in
+  flight.** Measured over two weeks of runs: 156 times a spawned teammate ended its
+  turn to "wait for the notification" of a backgrounded suite or an armed Monitor, and
+  **not one was woken by it** — 98 sat idle until the run was abandoned, the rest until
+  the coordinator happened to message them (up to two hours later). Completion events
+  are delivered to a *running* turn; an idle teammate has none. So: a suite that fits
+  one call runs in that call; a longer one is split (per crate / per package / by test
+  filter), or started with `nohup … > .orch/cmd.log` and then **polled from a
+  foreground loop** — `until grep -q '^RESULT:' .orch/cmd.log; do sleep 15; done` in
+  slices under the per-call limit, re-issued until it exits. Backgrounding is for
+  fire-and-forget side processes the agent never waits on (a dev server, the host
+  keep-awake), nothing whose result the agent needs.
 - **Ceilings are relative, not global.** Set them per command type against the known
   baseline (a ~3-minute suite gets ~10; a cold build gets more) — never one hard-coded
   number. Log the expected runtime + ceiling on one line *before* the command starts.

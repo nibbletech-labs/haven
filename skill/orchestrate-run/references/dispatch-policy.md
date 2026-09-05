@@ -284,19 +284,52 @@ Apply it to *every* spawn — the build agent, the verifier, the fixer. The pack
 is most of this synthesis pre-done; your job is to forward it whole plus the leaf-specific edges,
 not to gesture at it.
 
-One delivery clause in every verifier/reporter brief: **"your final message must BE the report
-delivery (SendMessage), not prose about it"** — agents repeatedly end with the report as plain
-final text instead; the pull recovers it but costs a round-trip.
+## Transport: plain subagent by default, named teammate only when you must steer it
+
+Two ways to spawn, with different delivery guarantees:
+
+- **Plain subagent (no `name`)** — its final message *is* the task result, returned to you
+  when it completes, and background-job / Monitor completions **do wake it**. This is the
+  transport for every one-shot reporter: the plan agent, the plan-gate validator, the
+  verifier, the checkpoint reviewer, a fixer with a bounded brief. Nothing to pull.
+- **Named in-process teammate** — addressable by `SendMessage`, so you can steer it
+  mid-flight (a new ruling, a gate note). The price: its final plain-text message is **never
+  delivered** to you, the idle notification that replaces it carries **no result**, and
+  **nothing wakes it** once it idles on a background job. Measured over two weeks: 58% of
+  teammates went idle without ever messaging the lead, 95 had to `ToolSearch` just to load
+  `SendMessage`, and 0 of 156 idles-on-a-background-job were woken by the job. Use this
+  transport only for a builder you genuinely expect to steer, and only with the contract
+  below in its brief.
+
+**Teammate contract — forward verbatim into every named-teammate brief:**
+
+> 1. Your first action is `ToolSearch` with `select:SendMessage` — the tool is deferred and
+>    you cannot report without it.
+> 2. Your final report is a `SendMessage` to `team-lead`, sent *before* your last message.
+>    A plain-text final message is not delivered to anyone; the idle notice that replaces it
+>    is empty. Ending without the SendMessage means the coordinator has to guess.
+> 3. Never end a turn with a background command or Monitor still running. Nothing wakes
+>    you when it finishes. Run suites in the foreground under a timeout, or poll their log
+>    from a foreground loop, until you hold the result — then report.
+> 4. If the coordinator messages you while you are idle, that message is your wake-up:
+>    collect any finished work, then answer with a `SendMessage`.
+
+For plain subagents, one delivery clause still belongs in the brief: **"your final message
+must BE the report, in the structured shape asked for"** — the harness returns that message
+as the result, so prose about the report is the report.
 
 ## Don't peek, don't race
 
 Once a batch is dispatched, **do not read the agent's working files mid-flight**, and **do not
 predict or fabricate its results**. Wait for completion — then **explicitly retrieve and confirm
-the agent's report before processing it**: an idle/completion signal is **not** the report (agents
-frequently go idle without delivering one), so `SendMessage` to pull the structured result and
-**never advance on an absent or empty verdict** (a silent missing verdict must not read as a pass);
-after two failed pulls the agent is unrecoverable — switch to objective state per SKILL.md
-§ Collecting a spawned agent's result (builders: done-marker decides; verifiers: respawn fresh).
+the agent's report before processing it**. For a plain subagent the completion result *is* the
+report; for a named teammate an idle notification is **not** the report (see § Transport: the
+teammate's plain-text ending is undeliverable), so an idle notice with an empty result is a
+**chase now** trigger — `SendMessage` it immediately (that message is also what wakes it if it
+idled on a background job) — and **never advance on an absent or empty verdict** (a silent
+missing verdict must not read as a pass); after two failed pulls the agent is unrecoverable —
+switch to objective state per SKILL.md § Collecting a spawned agent's result (builders:
+done-marker decides; verifiers: respawn fresh).
 Peeking tempts you to act on a half-written state (which the stateless reorient does not model)
 and racing tempts you to invent a verdict the verifier hasn't returned — both poison the one
 truth the loop trusts. The graph's `in_progress` status, the worktree, and the done-marker are
