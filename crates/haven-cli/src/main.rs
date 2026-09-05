@@ -40,7 +40,7 @@ fn cap_list<T>(items: Vec<T>, offset: Option<usize>, limit: Option<usize>) -> Ve
     let lim = limit.unwrap_or(CLI_DEFAULT_LIST_LIMIT);
     let take = if lim == 0 { usize::MAX } else { lim };
     let out: Vec<T> = items.into_iter().skip(off).take(take).collect();
-    if out.len() < total {
+    if out.len() < total && stderr_is_terminal() {
         eprintln!(
             "note: showing {} of {} items (--limit 0 for all, or --limit/--offset N)",
             out.len(),
@@ -1411,10 +1411,12 @@ fn run(cli: &Cli) -> Result<Output> {
                         page.totals.lineage
                     ));
                 }
-                eprintln!(
-                    "note: showing {} (--full for the whole graph); the JSON carries truncated/omitted/limits",
-                    capped.join(", ")
-                );
+                if stderr_is_terminal() {
+                    eprintln!(
+                        "note: showing {} (--full for the whole graph); the JSON carries truncated/omitted/limits",
+                        capped.join(", ")
+                    );
+                }
             }
             Ok(Output::Json(serde_json::to_value(page)?))
         }
@@ -2963,15 +2965,49 @@ fn cmd_item_telemetered(
     let project_resolved = config::open_store()
         .ok()
         .and_then(|s| s.resolve_project_key(project).ok());
-    TelemetryLine::new(
+    emit_cli_telemetry(&TelemetryLine::new(
         item_op_name(cmd),
         project_passed.map(str::to_string),
         project_resolved,
         telemetry::error_class(&result),
         latency_ms,
-    )
-    .emit();
+    ));
     result
+}
+
+/// `note:` hints (list/graph truncation) are for a person at a terminal. An
+/// agent capturing `2>&1` would get the hint glued onto the JSON it is about to
+/// parse (HV-306), and the JSON already carries the truncation fields.
+fn stderr_is_terminal() -> bool {
+    use std::io::IsTerminal;
+    std::io::stderr().is_terminal()
+}
+
+/// Where the CLI's per-op telemetry line goes (HV-306). Default: appended to
+/// `$HAVEN_HOME/telemetry.jsonl`, so a successful command leaves stderr empty —
+/// the stderr line was the reason agents reached for `2>/dev/null`, which then
+/// hid the error envelope too. `HAVEN_TELEMETRY=stderr` restores the line on
+/// stderr (the HV-166 behaviour); `HAVEN_TELEMETRY=off` drops it. Best effort:
+/// telemetry never fails the op it measures. The MCP server keeps emitting to
+/// its own stderr — that channel is a log, not a tool result.
+fn emit_cli_telemetry(line: &TelemetryLine) {
+    match std::env::var("HAVEN_TELEMETRY").as_deref() {
+        Ok("stderr") => line.emit(),
+        Ok("off") | Ok("0") | Ok("none") => {}
+        _ => {
+            let Ok(paths) = config::resolve() else {
+                return;
+            };
+            let _ = std::fs::create_dir_all(&paths.root);
+            if let Ok(mut f) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(paths.root.join("telemetry.jsonl"))
+            {
+                let _ = line.write_to(&mut f);
+            }
+        }
+    }
 }
 
 fn cmd_item(project: Option<&str>, cmd: &ItemCmd) -> Result<Output> {

@@ -16,11 +16,11 @@
 //! - `latency_ms` — wall time of the call, measured with [`std::time::Instant`].
 //!
 //! The line is emitted as a single-line JSON object prefixed `haven-telemetry `
-//! so it's both grep-able and machine-parseable. Emission is **always-on** to
-//! stderr — the acceptance requires a test to assert the line is present, so the
-//! default must satisfy "emits one structured line"; gating it behind an env var
-//! would make the default silent. (Callers that want quiet interactive use can
-//! redirect stderr; the line is one terse object, not a log spew.)
+//! so it's both grep-able and machine-parseable. The MCP server always emits it
+//! to stderr (its stderr is a log channel). The CLI appends it to
+//! `$HAVEN_HOME/telemetry.jsonl` by default and only puts it on stderr under
+//! `HAVEN_TELEMETRY=stderr` (HV-306): agents were silencing stderr to dodge the
+//! line and lost the error envelope with it.
 
 use std::io::Write;
 

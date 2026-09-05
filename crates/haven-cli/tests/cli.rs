@@ -2298,7 +2298,7 @@ fn repo_binding_is_session_safe_and_explicit_project_still_overrides() {
     let first = h.cmd(&["item", "list"]).output().unwrap();
     assert!(first.status.success());
     assert!(!String::from_utf8_lossy(&first.stderr).contains("linked project"));
-    let telemetry = telemetry_obj(&String::from_utf8_lossy(&first.stderr));
+    let telemetry = telemetry_obj(&h);
     assert!(telemetry["project_passed"].is_null());
     assert_eq!(telemetry["project_resolved"], "haven");
     let first_items: Value = serde_json::from_slice(&first.stdout).unwrap();
@@ -2687,22 +2687,36 @@ fn item_list_status_filter_still_reaches_dead_items() {
     );
 }
 
-/// Pull the single `haven-telemetry {...}` line out of captured stderr (HV-166).
-fn telemetry_obj(stderr: &str) -> Value {
-    let line = stderr
+/// Pull the LAST `haven-telemetry {...}` line out of the CLI telemetry file
+/// (`$HAVEN_HOME/telemetry.jsonl`, HV-306) — the default sink since the line
+/// left stderr. `telemetry_obj_from` parses the same shape from any text.
+fn telemetry_obj(h: &Haven) -> Value {
+    let path = h.home.join("telemetry.jsonl");
+    let text = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("no telemetry file at {}: {e}", path.display()));
+    let line = text
+        .lines()
+        .filter(|l| l.trim_start().starts_with("haven-telemetry "))
+        .next_back()
+        .unwrap_or_else(|| panic!("no telemetry line in {}:\n{text}", path.display()));
+    telemetry_obj_from(line)
+}
+
+fn telemetry_obj_from(text: &str) -> Value {
+    let line = text
         .lines()
         .find(|l| l.trim_start().starts_with("haven-telemetry "))
-        .unwrap_or_else(|| panic!("no telemetry line in stderr:\n{stderr}"));
+        .unwrap_or_else(|| panic!("no telemetry line in:\n{text}"));
     let payload = line.trim_start().strip_prefix("haven-telemetry ").unwrap();
     serde_json::from_str(payload).unwrap_or_else(|e| panic!("bad telemetry json: {e}\n{line}"))
 }
 
 #[test]
-fn cli_item_op_emits_telemetry_line_on_stderr() {
+fn cli_item_op_appends_telemetry_line_to_file_and_leaves_stderr_empty() {
     let h = Haven::new();
     h.ok(&["setup", "--project-key", "demo", "--prefix", "DM"]);
     // A known item op with an explicit project: stdout stays clean JSON, stderr
-    // carries exactly one well-formed telemetry line.
+    // is EMPTY (HV-306), and the telemetry file gains one well-formed line.
     let (stdout, stderr) = h.run_capturing(&["item", "add", "A telemetered task", "-p", "demo"]);
     // stdout is the structured Output channel — it must remain parseable JSON,
     // i.e. the telemetry line is NOT on stdout.
@@ -2712,7 +2726,11 @@ fn cli_item_op_emits_telemetry_line_on_stderr() {
         !stdout.contains("haven-telemetry"),
         "telemetry must never be on stdout:\n{stdout}"
     );
-    let v = telemetry_obj(&stderr);
+    assert!(
+        stderr.trim().is_empty(),
+        "a successful command leaves stderr empty by default:\n{stderr}"
+    );
+    let v = telemetry_obj(&h);
     assert_eq!(v["tool"], "item.add");
     assert_eq!(v["project_passed"], "demo");
     assert_eq!(v["project_resolved"], "demo");
@@ -2730,8 +2748,8 @@ fn cli_telemetry_surfaces_sticky_project_drift() {
     // != project_resolved ("demo") must be readable from the line — HV-153 drift.
     let h = Haven::new();
     h.ok(&["setup", "--project-key", "demo", "--prefix", "DM"]);
-    let (_stdout, stderr) = h.run_capturing(&["item", "list"]);
-    let v = telemetry_obj(&stderr);
+    let (_stdout, _stderr) = h.run_capturing(&["item", "list"]);
+    let v = telemetry_obj(&h);
     assert_eq!(v["tool"], "item.list");
     assert!(v["project_passed"].is_null(), "no -p was passed: {v}");
     assert_eq!(v["project_resolved"], "demo");
@@ -2746,7 +2764,7 @@ fn cli_telemetry_error_class_buckets_a_not_found() {
     let h = Haven::new();
     h.ok(&["setup", "--project-key", "demo", "--prefix", "DM"]);
     // Completing a nonexistent ref fails NotFound → error_class "not_found".
-    let (_stdout, stderr) = h.run_capturing(&[
+    let (_stdout, _stderr) = h.run_capturing(&[
         "item",
         "complete",
         "DM-9999",
@@ -2755,7 +2773,7 @@ fn cli_telemetry_error_class_buckets_a_not_found() {
         "-p",
         "demo",
     ]);
-    let v = telemetry_obj(&stderr);
+    let v = telemetry_obj(&h);
     assert_eq!(v["tool"], "item.complete");
     assert_eq!(v["error_class"], "not_found");
     assert_eq!(v["project_resolved"], "demo");
@@ -3039,5 +3057,68 @@ fn next_advertises_orchestrate_family_on_run_shaped_frontier() {
         json.as_array().unwrap().len(),
         4,
         "below threshold next stays a bare items array: {json}",
+    );
+}
+
+#[test]
+fn cli_telemetry_env_stderr_restores_the_line_and_off_writes_nothing() {
+    let h = Haven::new();
+    h.ok(&["setup", "--project-key", "demo", "--prefix", "DM"]);
+    let out = h
+        .cmd(&["item", "add", "Loud", "-p", "demo"])
+        .env("HAVEN_TELEMETRY", "stderr")
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let v = telemetry_obj_from(&String::from_utf8_lossy(&out.stderr));
+    assert_eq!(v["tool"], "item.add");
+    let after_stderr = std::fs::read_to_string(h.home.join("telemetry.jsonl")).unwrap_or_default();
+
+    let out = h
+        .cmd(&["item", "add", "Quiet", "-p", "demo"])
+        .env("HAVEN_TELEMETRY", "off")
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).trim().is_empty());
+    let after_off = std::fs::read_to_string(h.home.join("telemetry.jsonl")).unwrap_or_default();
+    assert_eq!(
+        after_stderr, after_off,
+        "off must not append to the file either"
+    );
+
+    // A failing op still prints its envelope on stderr, exit 1, with the
+    // telemetry line in the file — not interleaved with the envelope.
+    let out = h
+        .cmd(&["item", "get", "DM-9999", "-p", "demo"])
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let env: Value = serde_json::from_str(stderr.trim())
+        .unwrap_or_else(|e| panic!("stderr is exactly the error envelope: {e}\n{stderr}"));
+    assert_eq!(env["error"]["code"], "not_found");
+    assert_eq!(telemetry_obj(&h)["error_class"], "not_found");
+}
+
+#[test]
+fn cli_truncation_notes_stay_off_a_non_terminal_stderr() {
+    let h = Haven::new();
+    h.ok(&["setup", "--project-key", "demo", "--prefix", "DM"]);
+    for i in 0..3 {
+        h.ok(&["item", "add", &format!("Item {i}"), "-p", "demo"]);
+    }
+    // A capped list and a capped graph both leave stderr empty when it is a pipe.
+    let (stdout, stderr) = h.run_capturing(&["item", "list", "--limit", "1", "-p", "demo"]);
+    let v: Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(v.as_array().unwrap().len(), 1);
+    assert!(
+        stderr.trim().is_empty(),
+        "no note on a piped stderr:\n{stderr}"
+    );
+    let (_stdout, stderr) = h.run_capturing(&["graph", "-p", "demo"]);
+    assert!(
+        stderr.trim().is_empty(),
+        "graph leaves stderr empty:\n{stderr}"
     );
 }
