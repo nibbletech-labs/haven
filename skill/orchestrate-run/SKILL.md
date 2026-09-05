@@ -320,15 +320,21 @@ in-process teammates** for a builder you expect to steer mid-flight, and only wi
 the teammate contract in its brief (`references/dispatch-policy.md` § Transport) —
 because a teammate's plain-text ending is **never delivered**, its idle notification
 carries **no result**, and **nothing wakes it** once it idles on a background job
-(measured: 0 of 156). So an idle notice with an empty result is a *"chase now"*
-signal, never the report: **explicitly retrieve and confirm its structured result**
-— the build self-check outcome, the plan-gate APPROVE·REVISE·REJECT, or the
-PASS·NEEDS-HUMAN·FAIL verdict plus evidence — by `SendMessage`, which is also what
-wakes a teammate that idled waiting on a job. **Never advance the tick on a missing
-or empty report** — a silent absent verdict must not be read as a pass. The loop
-waits for the *report*, not merely the completion notification. **After two failed
-pulls the agent is unrecoverable — stop messaging it and read objective state
-instead** (worktree + done-marker + graph status,
+(measured: 0 of 156).
+
+So an idle notice with an empty result is a *"chase now"* signal, never the report.
+**Confirm the structured result** — the build self-check outcome, the plan-gate
+APPROVE·REVISE·REJECT, or the PASS·NEEDS-HUMAN·FAIL verdict plus evidence. For a
+plain subagent that is the task result itself. For a teammate, pull it by
+`SendMessage`, which is also what wakes a teammate that idled waiting on a job.
+**Never advance the tick on a missing or empty report** — a silent absent verdict
+must not be read as a pass. The loop waits for the *report*, not merely the
+completion notification.
+
+Recovery is per transport. A plain subagent gets no pulls: one empty result is
+final — read objective state (builder) or respawn (verifier). A teammate gets two:
+**after two failed pulls the agent is unrecoverable — stop messaging it and read
+objective state instead** (worktree + done-marker + graph status,
 `references/worktree-merge.md` § RECOVER): a builder's narrative is a convenience,
 never the gate's input, so a dead builder with a done-marker proceeds to the gate;
 no done-marker means the build did not finish — redispatch fresh in the same
@@ -342,13 +348,14 @@ identical from outside. So every dispatched agent must leave **observable eviden
 while it works**: tee'd command logs for builders/verifiers
 (`references/executor-discipline.md` § Command liveness), screenshot/evidence-file
 mtimes for UI drives. No mtime movement for N minutes (~10 for a UI drive; a
-builder's declared command ceiling plus slack) → treat the agent as dead — kill it
-and recover from objective state (§ above), respawn fresh, or drive the remaining
-steps inline. Never wait on an idle signal from an agent that has stopped
-producing evidence. One more shape to recognise: a teammate whose log **finished**
-(the suite's result line is there) but which has gone idle with no report is not
-dead and not stuck — it idled on a background job that cannot wake it. Message it;
-that is the wake-up.
+builder's declared command ceiling plus slack) → **first read the log tail**: a
+result line there means the shape below, not death. Otherwise treat the agent as
+dead — kill it and recover from objective state (§ above), respawn fresh, or drive
+the remaining steps inline. Never wait on an idle signal from an agent that has
+stopped producing evidence. The shape to recognise: a teammate whose log
+**finished** (the suite's result line is there) but which has gone idle with no
+report is not dead and not stuck — it idled on a background job that cannot wake
+it. Message it; that is the wake-up.
 
 **Resumed or interrupted coordinator turn → audit before diagnosing.** When your
 own turn was aborted or resumed (a steer, a crash, a `/loop` wake), your first

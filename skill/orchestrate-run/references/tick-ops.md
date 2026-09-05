@@ -133,8 +133,8 @@ definitions (`references/verdict-contract.md`), the independence rule (judge fro
 lens (`references/evaluation-lens.md`). **Trim to the leaf's mode** (why:
 `references/dispatch-policy.md` § GATE): code leaf → the lens's code sections only, no a11y /
 design-eval material, no `browser-mode.md`; UI-acceptance leaf → also `browser-mode.md` + the a11y /
-design-eval lens sections. **Collect the verdict explicitly** — an idle signal means *fetch the
-verdict*, never proceed on an absent one; **a Mode-2 verdict without its evidence bundle
+design-eval lens sections. **Collect the verdict explicitly** — the verifier is a plain subagent, so its task
+result *is* the verdict, and an empty result is an absent verdict: respawn, never proceed; **a Mode-2 verdict without its evidence bundle
 (per-clause table, screenshots, step transcript) is an absent verdict.**
 
 **Mode-2 evidence write-back (coordinator, after the merge, alongside step 9's complete):**

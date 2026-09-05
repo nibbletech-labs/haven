@@ -305,12 +305,18 @@ Two ways to spawn, with different delivery guarantees:
 
 > 1. Your first action is `ToolSearch` with `select:SendMessage` — the tool is deferred and
 >    you cannot report without it.
-> 2. Your final report is a `SendMessage` to `team-lead`, sent *before* your last message.
->    A plain-text final message is not delivered to anyone; the idle notice that replaces it
->    is empty. Ending without the SendMessage means the coordinator has to guess.
+> 2. Your report is a `SendMessage` to the lead — the name your system reminder lists for
+>    it (`team-lead` in a team run; if the send errors, `ListAgents` and retry with the
+>    name it shows). The SendMessage *is* your report; anything you print after it is not
+>    read. A plain-text final message is not delivered to anyone and the idle notice that
+>    replaces it is empty, so ending without the SendMessage means the coordinator has to
+>    guess.
 > 3. Never end a turn with a background command or Monitor still running. Nothing wakes
->    you when it finishes. Run suites in the foreground under a timeout, or poll their log
->    from a foreground loop, until you hold the result — then report.
+>    you when it finishes. Run suites in the foreground with the Bash tool's `timeout`
+>    parameter set to the ceiling (maximum 600000 ms); for anything longer, detach it
+>    with a result line and poll its log from a foreground `until … do sleep 15; done`
+>    loop, one call at a time, until you hold the result — then report. A bare `sleep` is
+>    blocked by the harness.
 > 4. If the coordinator messages you while you are idle, that message is your wake-up:
 >    collect any finished work, then answer with a `SendMessage`.
 
@@ -321,15 +327,17 @@ as the result, so prose about the report is the report.
 ## Don't peek, don't race
 
 Once a batch is dispatched, **do not read the agent's working files mid-flight**, and **do not
-predict or fabricate its results**. Wait for completion — then **explicitly retrieve and confirm
-the agent's report before processing it**. For a plain subagent the completion result *is* the
-report; for a named teammate an idle notification is **not** the report (see § Transport: the
-teammate's plain-text ending is undeliverable), so an idle notice with an empty result is a
-**chase now** trigger — `SendMessage` it immediately (that message is also what wakes it if it
-idled on a background job) — and **never advance on an absent or empty verdict** (a silent
-missing verdict must not read as a pass); after two failed pulls the agent is unrecoverable —
-switch to objective state per SKILL.md § Collecting a spawned agent's result (builders:
-done-marker decides; verifiers: respawn fresh).
+predict or fabricate its results**. Wait for completion — then **confirm the agent's report
+before processing it**. For a plain subagent the completion result *is* the report: confirm it
+has the structured shape you asked for, and treat an empty result as an absent one. For a named
+teammate an idle notification is **not** the report (see § Transport: the teammate's plain-text
+ending is undeliverable), so an idle notice with an empty result is a **chase now** trigger —
+`SendMessage` it immediately; that message is also what wakes it if it idled on a background
+job. Either way, **never advance on an absent or empty verdict** — a silent missing verdict must
+not read as a pass. Recovery differs by transport: a teammate is unrecoverable after two failed
+pulls; a plain subagent gets no pulls, one empty result is final. Then switch to objective state
+per SKILL.md § Collecting a spawned agent's result (builders: done-marker decides; verifiers:
+respawn fresh).
 Peeking tempts you to act on a half-written state (which the stateless reorient does not model)
 and racing tempts you to invent a verdict the verifier hasn't returned — both poison the one
 truth the loop trusts. The graph's `in_progress` status, the worktree, and the done-marker are

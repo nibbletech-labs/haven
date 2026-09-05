@@ -119,7 +119,7 @@ git branch -d run/<C>                      # -D after a discarded/failed batch
 
 | graph leaf | worktree on disk | live build agent | action |
 |---|---|---|---|
-| `in_progress` | yes | yes | healthy in-flight batch (from a prior tick) — leave it |
+| `in_progress` | yes | yes | healthy in-flight batch (from a prior tick) — leave it. "Live" = running, or idle-but-messageable with fresh evidence; an idle teammate whose log has finished is not live-and-working, it is waiting to be messaged (SKILL § Collecting) |
 | `in_progress` | yes, branch has the done-marker, gate passes | no | crashed after build — resume at MERGE (step 8) |
 | `in_progress` | yes, no/partial marker | no | crashed mid-build — `git worktree remove --force` + prune, send batch to failure path (strike count survives in the container fix-log) |
 | `in_progress` | none | no | crashed after claim before spawn (or after merge before complete) — if the work is already on `<base>` (marker in `<base>` history) `complete` it; else reset `status: ready` and re-dispatch |

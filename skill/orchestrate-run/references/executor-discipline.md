@@ -81,15 +81,32 @@ judgment:
 - **Foreground only — never end a turn with a background command or Monitor in
   flight.** Measured over two weeks of runs: 156 times a spawned teammate ended its
   turn to "wait for the notification" of a backgrounded suite or an armed Monitor, and
-  **not one was woken by it** — 98 sat idle until the run was abandoned, the rest until
-  the coordinator happened to message them (up to two hours later). Completion events
-  are delivered to a *running* turn; an idle teammate has none. So: a suite that fits
-  one call runs in that call; a longer one is split (per crate / per package / by test
-  filter), or started with `nohup … > .orch/cmd.log` and then **polled from a
-  foreground loop** — `until grep -q '^RESULT:' .orch/cmd.log; do sleep 15; done` in
-  slices under the per-call limit, re-issued until it exits. Backgrounding is for
-  fire-and-forget side processes the agent never waits on (a dev server, the host
-  keep-awake), nothing whose result the agent needs.
+  **not one was woken by it** — 98 were never woken at all, the rest only when the
+  coordinator happened to message them (median 1 minute, max 135). Completion events
+  are delivered to a *running* turn; an idle teammate has none. The rule holds for
+  every spawned agent regardless of transport — the tee'd log is also your liveness
+  evidence. So: a suite that fits one call runs in that call, with the Bash tool's
+  `timeout` parameter set to the ceiling (its maximum is 600000 ms; a ceiling above
+  that means the split/poll path, never one call). A longer suite is split (per
+  crate / per package / by test filter), or detached with a result line appended at
+  the end —
+
+  ```
+  nohup sh -c '<cmd> 2>&1; echo "RESULT: $?"' >> .orch/cmd.log 2>&1 &
+  ```
+
+  — and then **polled from a foreground loop**, one slice per call, re-issued until
+  the result line appears:
+
+  ```
+  timeout 540 sh -c 'until grep -q "^RESULT:" .orch/cmd.log; do sleep 15; done'
+  ```
+
+  (`until … do sleep N; done` is a loop the harness allows; a bare `sleep N` is
+  blocked.) Detaching is fine — *idling* on the detached job is what is forbidden.
+  Backgrounding without polling is only for fire-and-forget side processes the agent
+  never waits on (a dev server, the host keep-awake), nothing the agent idles waiting
+  on.
 - **Ceilings are relative, not global.** Set them per command type against the known
   baseline (a ~3-minute suite gets ~10; a cold build gets more) — never one hard-coded
   number. Log the expected runtime + ceiling on one line *before* the command starts.
