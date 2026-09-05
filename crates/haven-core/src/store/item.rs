@@ -129,6 +129,18 @@ pub enum WaitUpdate {
     Clear,
 }
 
+impl WaitUpdate {
+    /// Parse a caller's wait selector: `none` clears, anything else must be a
+    /// real [`WaitState`]. One parser for `item update` and `item handoff`, CLI
+    /// and MCP alike (HV-307).
+    pub fn parse(s: &str) -> Result<Self> {
+        match s {
+            "none" => Ok(WaitUpdate::Clear),
+            other => Ok(WaitUpdate::Set(WaitState::parse(other)?)),
+        }
+    }
+}
+
 /// How to change a node's `due_at`: set it to a date, or clear it
 /// (`--due-at none`). Mirrors [`WaitUpdate`] so "clear" is explicit in the type
 /// and never collides with a literal date string. The `Set` value is validated
@@ -151,9 +163,9 @@ pub struct HandoffInput<'a> {
     /// Status on pickup. Defaults to `blocked` when handing to a human (the work
     /// is now waiting on them); unchanged otherwise.
     pub status: Option<Status>,
-    /// Wait-state. Defaults to `on_human` when the target is human; unchanged
-    /// otherwise.
-    pub wait: Option<WaitState>,
+    /// Wait-state. Defaults to `on_human` when the target is human, cleared
+    /// otherwise; an explicit `WaitUpdate::Clear` ("none") overrides either.
+    pub wait: Option<WaitUpdate>,
     /// Actor handle recorded as the new assignee and the artifact author.
     pub actor: Option<&'a str>,
 }
@@ -1217,7 +1229,7 @@ impl Store {
         // 3. Wait-state + status, direction-aware (see the doc comment). An
         //    explicit caller value always wins over the default.
         let wait = match opts.wait {
-            Some(w) => WaitUpdate::Set(w),
+            Some(w) => w,
             None if to == OwnerKind::Human => WaitUpdate::Set(WaitState::OnHuman),
             None => WaitUpdate::Clear,
         };
@@ -1254,7 +1266,7 @@ impl Store {
         selector: &str,
         input: CompleteInput,
     ) -> Result<CompleteResult> {
-        let (project_id, _key) = self.require_project_mut(project)?;
+        let (project_id, project_key) = self.require_project_mut(project)?;
         let node_id = self.resolve_node_id(project_id, selector)?;
         let before = self.get_item(project, selector, &[])?;
         if matches!(before.status, Status::Superseded | Status::Archived) {
@@ -1273,19 +1285,28 @@ impl Store {
             );
         }
 
-        // 1. Record evidence as an artifact (default role: delivery).
+        // 1. Record evidence as an artifact (default role: delivery). A second
+        //    completion (after a reopen, or of an already-done item) must not
+        //    collide with the earlier evidence file — that history is the point
+        //    — so pick the next free `<role>-N.md` (HV-307).
         let artifact = match input.evidence {
-            Some(evidence) => Some(self.add_artifact(
-                project,
-                selector,
-                NewArtifact {
-                    role: input.artifact_role.unwrap_or(ArtifactRole::Delivery),
-                    kind: ArtifactKind::File,
-                    content: Some(evidence.to_string()),
-                    created_by: input.by.map(String::from),
-                    ..Default::default()
-                },
-            )?),
+            Some(evidence) => {
+                let role = input.artifact_role.unwrap_or(ArtifactRole::Delivery);
+                let name =
+                    self.next_free_evidence_name(node_id, &project_key, &before.reference, role)?;
+                Some(self.add_artifact(
+                    project,
+                    selector,
+                    NewArtifact {
+                        role,
+                        kind: ArtifactKind::File,
+                        content: Some(evidence.to_string()),
+                        name: Some(name),
+                        created_by: input.by.map(String::from),
+                        ..Default::default()
+                    },
+                )?)
+            }
             None => None,
         };
 
@@ -1330,6 +1351,37 @@ impl Store {
     /// dependency — i.e. became dispatchable/reviewable when it completed. Run
     /// after `completed_id` is marked done. Includes gate nodes whose triggers
     /// are all complete.
+    /// The evidence filename `item complete` will write: `<role>.md` when free,
+    /// else `<role>-2.md`, `<role>-3.md`, … A name is taken if an artifact row
+    /// already claims it on this node OR a file of that name already sits in
+    /// the item directory (a hand-written note must never be clobbered).
+    /// Handoff evidence lives under `notes/`, matching `add_artifact`.
+    fn next_free_evidence_name(
+        &self,
+        node_id: i64,
+        project_key: &str,
+        node_ref: &str,
+        role: ArtifactRole,
+    ) -> Result<String> {
+        let existing: Vec<String> = self
+            .load_artifacts(node_id)?
+            .into_iter()
+            .filter_map(|a| a.path)
+            .filter_map(|p| p.rsplit('/').next().map(str::to_string))
+            .collect();
+        let dir = self.artifact_dir_for(project_key, node_ref, role);
+        let base = role.as_str();
+        let taken = |name: &str| existing.iter().any(|e| e == name) || dir.join(name).exists();
+        let first = format!("{base}.md");
+        if !taken(&first) {
+            return Ok(first);
+        }
+        Ok((2..)
+            .map(|n| format!("{base}-{n}.md"))
+            .find(|name| !taken(name))
+            .expect("an unbounded range always yields a free name"))
+    }
+
     fn unblocked_dependents(&self, completed_id: i64) -> Result<Vec<Item>> {
         let sql = format!(
             "SELECT {ITEM_SELECT} FROM {ITEM_FROM}

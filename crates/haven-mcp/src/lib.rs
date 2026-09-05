@@ -1232,7 +1232,7 @@ fn dispatch_tool(store: &Store, name: &str, a: &Value) -> Result<Value> {
                 from: opt_str(a, "from").map(OwnerKind::parse).transpose()?,
                 note: opt_str(a, "note"),
                 status: opt_str(a, "status").map(Status::parse).transpose()?,
-                wait: opt_str(a, "wait").map(WaitState::parse).transpose()?,
+                wait: opt_str(a, "wait").map(WaitUpdate::parse).transpose()?,
                 actor: opt_str(a, "actor"),
             };
             to_value(store.handoff(project, req_str(a, "ref")?, to, input)?)
@@ -1440,7 +1440,7 @@ fn tools_list() -> Value {
         { "name": "haven_claim", "description": "Atomically claim an item to work it: set the owner + status=in_progress in one guarded compare-and-set. `owner` defaults to `ai` (claim-on-pickup is the agent case); `actor` is an optional handle recorded as the assignee. Race-safe — if the item is already claimed/in_progress (or in a terminal state), it errors with a conflict and changes nothing. Per-call `project`. Frame in_progress as a soft claim: check `haven_list_items {status:\"in_progress\"}` before starting to spot a clash.",
           "inputSchema": obj(json!({"ref":{"type":"string"},"owner":{"type":"string","enum":["human","ai"]},"actor":{"type":"string"},"project":{"type":"string"}}), json!(["ref"])) },
         { "name": "haven_handoff", "description": "Atomic baton-pass (ai↔human): records a handoff note (stamped from/to), flips the owner, and sets wait/status in one call. To a human defaults to blocked + on_human; to ai clears the wait and unblocks. Prefer this over doing assign + update + add_artifact separately.",
-          "inputSchema": obj(json!({"ref":{"type":"string"},"to":{"type":"string","enum":["human","ai"]},"from":{"type":"string","enum":["human","ai"]},"note":{"type":"string"},"status":{"type":"string"},"wait":{"type":"string","enum":["on_human","on_dependency","on_external"]},"actor":{"type":"string"},"project":{"type":"string"}}), json!(["ref","to"])) },
+          "inputSchema": obj(json!({"ref":{"type":"string"},"to":{"type":"string","enum":["human","ai"]},"from":{"type":"string","enum":["human","ai"]},"note":{"type":"string"},"status":{"type":"string"},"wait":{"type":"string","enum":["on_human","on_dependency","on_external","none"],"description":"none clears the wait (overrides the to-human default of on_human)"},"actor":{"type":"string"},"project":{"type":"string"}}), json!(["ref","to"])) },
         { "name": "haven_complete_item", "description": "Mark an item done: record `evidence` as an artifact (default role delivery), set status=done, and return the items/gates this unblocked (newly dispatchable, as compact items). Warns if no acceptance (done_looks_like) was set. The reliable 'I finished this' path — prefer over a bare status update.",
           "inputSchema": obj(json!({"ref":{"type":"string"},"evidence":{"type":"string"},"artifact_role":{"type":"string"},"by":{"type":"string"},"project":{"type":"string"}}), json!(["ref"])) },
         { "name": "haven_set_extref", "description": "Record (upsert) an item-level external reference — the handoff LOCATOR for work executing in an external PM/dev system (Jira/Linear/GitHub) — at items.metadata.external_refs[]. Distinct from artifact xref (haven_xref, content provenance). Upserts by (store,target). Flips the item to status=in_progress by default (active external execution); pass `in_progress:false` to record the locator without changing status. Leaves owner + wait_state UNTOUCHED — this is NOT the ai↔human handoff. `store`+`target` required; `url`/`status`/`execution_canonical`/`receipt` (a free-text handoff record) optional. Returns the updated item. Per-call `project`.",
@@ -1644,15 +1644,17 @@ mod tests {
                 );
             }
         }
-        // wait enums are real WaitState values; the update_item SETTER also offers
-        // the `none` clear-sentinel (the list/handoff filters do not).
-        for v in enum_of(&props("haven_update_item"), "wait") {
-            assert!(
-                v == "none" || WaitState::parse(&v).is_ok(),
-                "wait enum {v:?} not WaitState|none"
-            );
+        // wait enums are real WaitState values; the update_item and handoff
+        // SETTERS also offer the `none` clear-sentinel (the list filter does not).
+        for tool in ["haven_update_item", "haven_handoff"] {
+            for v in enum_of(&props(tool), "wait") {
+                assert!(
+                    v == "none" || WaitState::parse(&v).is_ok(),
+                    "{tool}.wait enum {v:?} not WaitState|none"
+                );
+            }
         }
-        for (tool, key) in [("haven_list_items", "wait"), ("haven_handoff", "wait")] {
+        for (tool, key) in [("haven_list_items", "wait")] {
             for v in enum_of(&props(tool), key) {
                 assert!(
                     WaitState::parse(&v).is_ok(),
@@ -3944,5 +3946,37 @@ mod tests {
         assert_eq!(art["metadata"]["xref"][0]["target"], "o/r#1");
         // a malformed xref (unknown relation) is rejected on the public path.
         assert_eq!(out[1]["result"]["isError"], true);
+    }
+
+    /// HV-307 through the MCP surface: a second completion never collides, and
+    /// `haven_handoff` accepts `wait: "none"`.
+    #[test]
+    fn complete_item_twice_and_handoff_wait_none_over_mcp() {
+        let store = store();
+        call_tool(&store, "haven_add_item", &json!({"title": "Twice"})).unwrap();
+        let first = call_tool(
+            &store,
+            "haven_complete_item",
+            &json!({"ref": "HV-1", "evidence": "one"}),
+        )
+        .unwrap();
+        assert_eq!(first["artifact"]["path"], "items/HV-1/delivery.md");
+        call_tool(&store, "haven_reopen", &json!({"ref": "HV-1"})).unwrap();
+        let second = call_tool(
+            &store,
+            "haven_complete_item",
+            &json!({"ref": "HV-1", "evidence": "two"}),
+        )
+        .unwrap();
+        assert_eq!(second["artifact"]["path"], "items/HV-1/delivery-2.md");
+        assert_eq!(second["item"]["status"], "done");
+
+        let res = call_tool(
+            &store,
+            "haven_handoff",
+            &json!({"ref": "HV-1", "to": "human", "wait": "none"}),
+        )
+        .unwrap();
+        assert!(res["item"]["wait_state"].is_null(), "{res}");
     }
 }

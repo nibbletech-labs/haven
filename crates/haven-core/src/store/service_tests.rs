@@ -3811,3 +3811,36 @@ fn prime_reports_the_cached_update_nudge_and_stays_offline() {
     assert!(rendered.contains("v0.2.0 is available"));
     assert!(rendered.contains("ask before updating"));
 }
+
+/// HV-307: `wait: none` on a handoff clears the wait even when the direction's
+/// default would set one (to a human ⇒ `on_human`).
+#[test]
+fn handoff_wait_none_clears_the_to_human_default() {
+    let s = store();
+    add(&s, "Baton");
+    let res = s
+        .handoff(
+            None,
+            "HV-1",
+            OwnerKind::Human,
+            HandoffInput {
+                wait: Some(WaitUpdate::parse("none").unwrap()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(res.item.owner_kind, Some(OwnerKind::Human));
+    assert_eq!(
+        res.item.wait_state, None,
+        "explicit none beats the on_human default"
+    );
+
+    // Without it the default still applies.
+    let res = s
+        .handoff(None, "HV-1", OwnerKind::Human, HandoffInput::default())
+        .unwrap();
+    assert_eq!(res.item.wait_state, Some(WaitState::OnHuman));
+
+    // A bogus value is still rejected by the shared parser.
+    assert!(WaitUpdate::parse("later").is_err());
+}

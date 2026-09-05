@@ -317,6 +317,22 @@ impl Store {
         self.content_root().join(project_key)
     }
 
+    /// Where `add_artifact` files a content artifact of `role` on `node_ref`
+    /// (handoffs under `notes/`, everything else in the item dir).
+    pub(crate) fn artifact_dir_for(
+        &self,
+        project_key: &str,
+        node_ref: &str,
+        role: ArtifactRole,
+    ) -> PathBuf {
+        let subdir = if role == ArtifactRole::Handoff {
+            format!("items/{node_ref}/notes")
+        } else {
+            format!("items/{node_ref}")
+        };
+        self.project_dir(project_key).join(subdir)
+    }
+
     /// Derive the context pack governing a leaf (HV-75): the LIVE grouping
     /// containers it belongs to that carry a `context-pack` artifact (HV-124),
     /// deduped by container. Returns `(pack, clash)` of which at most one is
@@ -2774,5 +2790,98 @@ mod tests {
             "replace UPDATE binds the new metadata: {:?}",
             updated.metadata
         );
+    }
+
+    /// HV-307: completing again (after a reopen, or an already-done item) must
+    /// never collide on `delivery.md` — the earlier evidence is history. The
+    /// next free `delivery-N.md` is chosen against BOTH artifact rows and
+    /// files already on disk.
+    #[test]
+    fn complete_item_picks_the_next_free_evidence_name() {
+        use crate::store::CompleteInput;
+        let tmp = tempfile::tempdir().unwrap();
+        let s = store_with_root(tmp.path());
+        let item = s
+            .add_item(
+                None,
+                NewItem {
+                    title: "Ship it".into(),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let complete = |evidence: &str| {
+            s.complete_item(
+                None,
+                &item.reference,
+                CompleteInput {
+                    evidence: Some(evidence),
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+        };
+        let first = complete("first pass");
+        assert_eq!(
+            first.artifact.unwrap().path.as_deref(),
+            Some("items/HV-1/delivery.md")
+        );
+
+        s.reopen_item(None, "HV-1", Some("more to do"), None)
+            .unwrap();
+        let second = complete("second pass");
+        assert_eq!(second.item.status, Status::Done);
+        assert_eq!(
+            second.artifact.unwrap().path.as_deref(),
+            Some("items/HV-1/delivery-2.md")
+        );
+
+        // Completing an already-done item still records fresh evidence.
+        let third = complete("third pass");
+        assert_eq!(
+            third.artifact.unwrap().path.as_deref(),
+            Some("items/HV-1/delivery-3.md")
+        );
+
+        // A hand-written file that no row knows about is never clobbered.
+        let handwritten = tmp.path().join("haven/items/HV-1/delivery-4.md");
+        std::fs::write(&handwritten, "mine").unwrap();
+        let fifth = complete("fifth pass");
+        assert_eq!(
+            fifth.artifact.unwrap().path.as_deref(),
+            Some("items/HV-1/delivery-5.md")
+        );
+        assert_eq!(std::fs::read_to_string(&handwritten).unwrap(), "mine");
+
+        // Every evidence file carries its own content.
+        let dir = tmp.path().join("haven/items/HV-1");
+        assert_eq!(
+            std::fs::read_to_string(dir.join("delivery.md")).unwrap(),
+            "first pass"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.join("delivery-2.md")).unwrap(),
+            "second pass"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.join("delivery-5.md")).unwrap(),
+            "fifth pass"
+        );
+
+        // A non-default role follows the same rule.
+        let art = s
+            .complete_item(
+                None,
+                "HV-1",
+                CompleteInput {
+                    evidence: Some("scratch note"),
+                    artifact_role: Some(ArtifactRole::Scratch),
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+            .artifact
+            .unwrap();
+        assert_eq!(art.path.as_deref(), Some("items/HV-1/scratch.md"));
     }
 }

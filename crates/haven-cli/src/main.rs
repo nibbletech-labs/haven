@@ -3089,11 +3089,7 @@ fn cmd_item(project: Option<&str>, cmd: &ItemCmd) -> Result<Output> {
             if let Some(tip) = a.misused_commit_tip() {
                 return Err(HavenError::Invalid(tip));
             }
-            let wait = match a.wait.as_deref() {
-                None => None,
-                Some("none") => Some(WaitUpdate::Clear),
-                Some(w) => Some(WaitUpdate::Set(WaitState::parse(w)?)),
-            };
+            let wait = opt_parse(&a.wait, WaitUpdate::parse)?;
             let due = match a.due_at.as_deref() {
                 None => None,
                 Some("none") => Some(DueUpdate::Clear),
@@ -3159,7 +3155,7 @@ fn cmd_item(project: Option<&str>, cmd: &ItemCmd) -> Result<Output> {
                 from: opt_parse(&a.from, OwnerKind::parse)?,
                 note: a.note.as_deref(),
                 status: opt_parse(&a.status, Status::parse)?,
-                wait: opt_parse(&a.wait, WaitState::parse)?,
+                wait: opt_parse(&a.wait, WaitUpdate::parse)?,
                 actor: a.actor.as_deref(),
             };
             Ok(Output::Json(serde_json::to_value(s.handoff(
