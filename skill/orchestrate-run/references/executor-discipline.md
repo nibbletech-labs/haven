@@ -95,8 +95,9 @@ judgment:
   nohup sh -c '<cmd> 2>&1; echo "RESULT: $?"' >> .orch/cmd.log 2>&1 &
   ```
 
-  — and then **polled from a foreground loop**, one slice per call, re-issued until
-  the result line appears:
+  — and then **polled from a foreground loop**, one slice per call with the Bash
+  tool's `timeout` parameter raised to cover it (≥ 560000 ms; the default 120 s would
+  cut the slice short), re-issued until the result line appears:
 
   ```
   timeout 540 sh -c 'until grep -q "^RESULT:" .orch/cmd.log; do sleep 15; done'
