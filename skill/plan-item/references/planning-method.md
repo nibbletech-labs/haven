@@ -26,32 +26,34 @@ already safe in the graph and what's being gated is the build.
 
 ### The process, run inline
 
-Plan mode's value was never the mode — it's the discipline it imposes. Run that here:
+Plan mode's value was never the mode — it's the discipline it imposes. That discipline is
+written out once, for every consumer, in the `haven` skill's
+**`references/code-planning-method.md`** — read it now; it is the method, and the list
+below is only how this skill applies it.
 
-1. **Explore before you propose.** Glob / grep / read the areas the work touches, rather
-   than reasoning from the request alone. **Name the real files in the spec** — the
-   shippability linter demands it, and it's the fastest tell that the exploration
-   actually happened.
-2. **Follow the patterns already in the codebase.** A plan that invents a second way to do
-   something the repo already does is a worse plan, however tidy it reads.
-3. **Weigh more than one approach** where the task admits several, and record in the spec
-   which you took and why. One line about the rejected alternative saves the whole
-   argument being had again in three weeks.
-4. **Delegate the exploring to a read-only planning subagent** where the harness has one.
-   In Claude Code that's the `Plan` agent type: architect-grade, every write tool removed,
-   and it **returns** the plan to you instead of taking over the session. That is how you
-   get plan mode's rigour without plan mode's exit — the subagent thinks, *you* write the
-   spec, and the artifact still lands on the item. No such agent? Do it inline; the points
-   above are the whole method.
-5. **Stay at spec altitude.** The output is the item's `spec`, not a file-by-file edit
-   list. That last layer is stale the moment code moves, and belongs in the build session
-   rather than the graph.
+1. **Read the code before you propose.** Follow the method: trace the path the behaviour
+   being changed actually takes, find the similar feature already in the repo, hunt for
+   the functions and utilities to reuse, look at how the area is tested. Reasoning from
+   the request alone is the failure the method exists to prevent.
+2. **Explore first, then hand the architect its brief.** Where the harness has a read-only
+   architect agent (Claude Code's `Plan` type), it is a designer that expects requirements
+   and a perspective — not an explorer to send off with a bare ref. Explore inline or
+   with a read-only search agent per focus, then hand the architect the requirements,
+   constraints, the traces and filenames you found, and one perspective; it returns a
+   design and *you* write the spec, so the artifact still lands on the item. No such
+   agent? Do the design inline; the method is the whole of it.
+3. **Weigh more than one approach**, along the axes the method names for the task type,
+   and record in the spec which you took and why the runner-up lost. One line saves the
+   whole argument being had again in three weeks.
+4. **Write at spec altitude.** The spec keeps the seams the trace found (entry point,
+   landing layer, effect — by file), the similar feature and the reuse targets by path,
+   and the chosen approach. **Name the real files** — the shippability linter demands it,
+   and it is the fastest tell that the reading actually happened. Sequencing, anticipated
+   challenges, and the test-pattern note go to the build checklist
+   (`references/build-handoff.md`) on a one-pass call; the file-by-file edit list never
+   goes in the spec — it's stale the moment code moves, and belongs to the build session.
 
-**Prefer your harness's own version of this where you can read it without entering the
-mode.** The list above is transcribed from what a native plan mode asks for, and it's
-written out here so the method survives on a harness that has no plan mode at all — but
-it's a snapshot, and first-party guidance moves. In Claude Code the `EnterPlanMode` tool
-description is readable directly (via `ToolSearch`) and carries the current version; read
-it and follow it where it's richer than the list. **Do not call `EnterPlanMode` to find
-out** — reading the guidance is free, entering the mode is the thing this whole section
-exists to avoid.
+Do not call `EnterPlanMode` to get the native version of this: entering the mode is the
+thing this whole section exists to avoid, and its tool description is only the thin
+summary — the discipline lives in the reminders the mode injects, which is what
+`code-planning-method.md` transcribes.

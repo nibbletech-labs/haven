@@ -53,8 +53,10 @@ plan-item  →  one build pass?  ──yes──→  build it (spec + checklist,
 
 Read the `haven` skill's **`references/spec-quality.md`** — it is the bar this whole
 skill writes to (the field map, adaptive ceremony, clarify-first, the shippability
-linter). Read its `references/surface-map.md` for CLI⇄MCP op detail rather than
-restating arguments from memory. The gotchas that bite here:
+linter) — and its **`references/code-planning-method.md`** — how to read the code
+(trace the path, find the similar feature, hunt reuse, check the tests) before
+proposing how it changes. Read its `references/surface-map.md` for CLI⇄MCP op detail
+rather than restating arguments from memory. The gotchas that bite here:
 
 - **Structure only through ops; content as files.** Node fields move via
   `haven …` / `haven_*`; the spec is a **file** under `~/.haven/<project>/items/<ref>/`.
@@ -73,8 +75,9 @@ restating arguments from memory. The gotchas that bite here:
 **This skill's own references**, pulled in when the step reaches them rather than up front:
 
 - **`references/planning-method.md`** — steps 3–5: how to work out the approach with plan
-  mode's rigour but not inside plan mode, and the read-only planning subagent to delegate
-  the exploring to.
+  mode's rigour but not inside plan mode, applying the `haven` skill's
+  `code-planning-method.md` at spec altitude, and how to brief the read-only architect
+  agent (explore first; it designs, you write).
 - **`references/build-handoff.md`** — steps 5–6, **one-pass branch only**: the build
   checklist and the fresh-eyes review the item can't complete without. A plan headed for
   decomposition needs neither.
@@ -151,8 +154,10 @@ restating arguments from memory. The gotchas that bite here:
      boundary and constraints are the load-bearing parts.
 
    Do this thinking **inline**, in this session — not inside the harness's plan mode.
-   Read **`references/planning-method.md`** for why that costs you the artifact, the
-   method to run instead, and the read-only planning subagent to hand the exploring to.
+   Read **`references/planning-method.md`** for why that costs you the artifact, and
+   how to apply the `haven` skill's `code-planning-method.md` here: trace the path
+   the behaviour takes, find the similar feature, name the reuse targets — the spec
+   cites real files because you read them, not because you grepped for them.
 
    Then run the **shippability linter** (`spec-quality.md`): kill weasel words,
    every contract carries a schema *and* an example, architecture claims name real

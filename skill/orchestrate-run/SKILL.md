@@ -229,13 +229,18 @@ always-read and never routed** — the router trims mechanics, never safety.
    - **6a Plan.** For a complex/ultracode batch — the plan-gate dial,
      `references/dispatch-policy.md` § PLAN-GATE; a **mechanical** batch skips
      6a/6b and builds directly. Spawn a **read-only plan agent** (BUILD_TIER —
-     § MODEL_TIERS) handed: the container's `context-pack.md`
+     § MODEL_TIERS; a plain unnamed general-purpose subagent) handed: the
+     container's `context-pack.md`
      (`haven_get_artifact {ref:container, role:context-pack}`), the members'
-     `done_looks_like`, and the envelope. It **produces a build plan and writes
-     it as `build-plan.md` on the container** (`role:scratch` —
+     `done_looks_like`, the envelope, **and — inlined verbatim, since it inherits
+     no skill — the `haven` skill's `references/code-planning-method.md`
+     § The method** (trace the path, find the similar feature, hunt reuse, read
+     the tests, sequence, name risks, critical files). It **produces a build
+     plan and writes it as `build-plan.md` on the container** (`role:scratch` —
      `references/tick-ops.md` § 6). It does **not** modify code. The plan must
      pass the synthesis test *on its own* — rich enough that a fresh builder
-     could execute from it plus the pack alone.
+     could execute from it plus the pack alone — and **show its trace**: a plan
+     that names files without the path between them has not read the code.
    - **6b Plan-gate — validate the tick's plan(s) as a whole, fresh eyes at
      VERIFY_TIER.** Once the plans are in, spawn a **separate** validator over
      the **plans together** — never a plan/build agent; fresh eyes. The whole-set

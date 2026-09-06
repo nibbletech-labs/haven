@@ -123,11 +123,21 @@ Same on/off rule as TDD:
   re-derivations hid real regressions that neither the builder's own probes nor a bare suite
   run caught.
 
+**The plan agent's brief carries the method, because the agent inherits nothing.** It is a plain,
+unnamed subagent of the harness's general-purpose type (§ Transport; the read-only architect type
+has its write tools removed and cannot write the plan file you register). After the leaf, its
+acceptance, the envelope, and the paths to read, **forward verbatim** the `haven` skill's
+`references/code-planning-method.md` § The method — trace the code path for the behaviour being
+changed, find the similar feature, hunt reuse before proposing new code, read the tests, weigh
+approaches, sequence, name risks, end with the critical files. Sixty-five plan-agent briefs over
+three days carried the *what* in detail and the *how* in four of them: the plans passed the gate
+without having read the code they changed. Naming the reference reaches nothing; inline it.
+
 The validator is **fresh eyes at VERIFY_TIER — never a plan/build agent** (a same-context reviewer
 is structurally blind, exactly as for the code gate), and it judges the tick's **plans as a whole**
 so cross-batch conflicts surface before any building. Verdicts **APPROVE / REVISE / REJECT**; the
 plan-validation criteria (covers every acceptance clause, stays in envelope, sequences TDD, is
-concrete) are in `references/executor-discipline.md` § The build plan. Plan and build are **separate
+concrete, shows its trace, names reuse) are in `references/executor-discipline.md` § The build plan. Plan and build are **separate
 fresh spawns** — the approved `build-plan.md` is the builder's brief, and the coordinator carries
 full context into the build spawn (§ Dispatch-prompt quality); the loop does not keep one agent
 alive across the gate. This is the **AI** gate that replaces native plan mode's **human** gate on the

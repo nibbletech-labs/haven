@@ -272,6 +272,10 @@ first. **Every plan starts on one item, in `plan-item`**, whatever its size; onl
 ask whether one build pass could deliver it. Yes → build checklist, `ready`, build. No → hand
 that ref to `orchestrate-plan`, which **requires a plan** and decomposes from it. Several
 leaves built together → `create-context-pack`. Never reach for a work-graph off a bare goal.
+Wherever a plan says *how code changes* — `plan-item`'s approach, `orchestrate-run`'s build
+plan — the reading that precedes it is **`references/code-planning-method.md`**: trace the
+path the behaviour takes, find the similar feature, hunt reuse, read the tests. Its method
+block is written to be forwarded verbatim into a spawned planning agent's brief.
 
 When you're handing an item off to an **external PM/dev system** (Jira/Linear/GitHub) — recording
 where it's executing and reconciling it back into Haven — read **`references/external-handoff.md`**:

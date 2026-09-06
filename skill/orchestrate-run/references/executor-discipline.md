@@ -214,6 +214,14 @@ build, not re-plan — SKILL § tick 0).
    (§ TDD as a gate), is visible in the plan.
 4. **Is concrete** — names the key files / edges and the approach, passing the synthesis test
    (`references/dispatch-policy.md` § Dispatch-prompt quality); a hand-wavy plan is a REVISE.
+5. **Shows its trace.** For the behaviour it changes, the plan names the path from entry point to
+   effect, hop by hop, by file and function — the evidence it read the code rather than grepped
+   for it (the `haven` skill's `references/code-planning-method.md`). No trace → REVISE, with
+   "trace the path for <behaviour>" as the named gap.
+6. **Names reuse targets.** Where the repo already has the function, utility, or pattern, the plan
+   calls it by path instead of proposing new code. A plan that rewrites something that exists is a
+   REVISE naming the existing code — it is the class of plan that passes the gate and then ships a
+   duplicate.
 
 **REVISE** re-spawns a plan agent with the specific gaps + the prior `build-plan.md` to rewrite,
 then re-gates; **REJECT** sends the batch to the change-request / replan path with no code written;
