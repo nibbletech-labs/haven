@@ -168,9 +168,10 @@ new role, verb, or artifact type:
 
 - new work or a loose thread → `haven item add` / `haven_add_item` (floating,
   uncommitted, no acceptance — a bare `discovery` node);
-- an ordering you just learned → `depend` (`haven depend --on` / `haven_add_edge`
+- a prerequisite you just learned → `depend` (`haven depend --on` / `haven_add_edge`
   kind `dependency`);
-- a priority you now know → `rank` (`haven item rank` / `haven_rank`);
+- a priority you now know → set its band (`haven item update --priority` /
+  `haven_update_item {priority, rationale}`);
 - a call a **human** must make → a `decision` artifact, or `haven item handoff` /
   `haven_handoff` to `human` (so it's owned and waited-on, not stranded
   `in_progress` — see the gotcha above).
@@ -207,7 +208,7 @@ a separate item.)
   priority, uncommitted is valid and normal.
 - **Two independent axes:** **maturity** (`status`: `discovery → definition →
   ready → in_progress → done`, + `blocked`/`superseded`/`archived`) and
-  **commitment** (`committed` + `priority` 0–4 + `sort_key`). A spec'd-but-parked
+  **commitment** (`committed` + `priority` 0–4). A spec'd-but-parked
   item is `ready` + uncommitted; a committed-but-fuzzy one is `discovery` +
   committed and needs definition before it can dispatch.
 - **Four edge layers** (don't overload one for another): **decomposition** ("part
@@ -380,9 +381,8 @@ something is the most common way this goes wrong.
   agents; canonical graph/content remains under `~/.haven`.
 - **Always give a real `--rationale`** on evolve/archive/reopen — lineage exists to
   reconstruct intent ("spans two owners, splitting for independent dispatch", not
-  "too big"). The same goes for judgment-driven priority, commitment, or rank
-  moves (`--rationale` on the CLI verbs; `rationale` on `haven_update_item` /
-  `haven_rank`) — Haven records it as lineage so the order explains itself later.
+  "too big"). The same goes for judgment-driven priority or commitment
+  changes (`--rationale` on the CLI verbs; `rationale` on `haven_update_item`) — Haven records it as lineage so the order explains itself later.
 - **Evolve, don't retitle-then-archive.** When two items are the same, or one
   replaces another (grooming, dedup), use **`haven_evolve supersede`** (or `merge`)
   with a rationale — it records a followable lineage edge from old → live. Quietly

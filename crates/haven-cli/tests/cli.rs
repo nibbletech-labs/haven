@@ -142,7 +142,23 @@ fn status_of(report: &Value, name: &str) -> String {
 }
 
 #[test]
-fn cli_priority_and_rank_rationale_round_trip_in_lineage() {
+fn retired_rank_is_absent_from_help_and_rejected() {
+    let h = Haven::new();
+    let help = h.cmd(&["item", "--help"]).output().unwrap();
+    assert!(help.status.success());
+    assert!(!String::from_utf8_lossy(&help.stdout)
+        .lines()
+        .any(|l| l.trim_start().starts_with("rank ")));
+    let removed = h
+        .cmd(&["item", "rank", "HV-1", "--before", "HV-2"])
+        .output()
+        .unwrap();
+    assert!(!removed.status.success());
+    assert!(String::from_utf8_lossy(&removed.stderr).contains("unrecognized subcommand"));
+}
+
+#[test]
+fn cli_priority_rationale_round_trip_in_lineage() {
     let h = Haven::new();
     h.ok(&[
         "project", "add", "--key", "haven", "--title", "Haven", "--prefix", "HV",
@@ -182,16 +198,6 @@ fn cli_priority_and_rank_rationale_round_trip_in_lineage() {
         "--rationale",
         "Needed for the release",
     ]);
-    h.ok(&[
-        "item",
-        "rank",
-        "HV-2",
-        "--before",
-        "HV-1",
-        "--rationale",
-        "Second should lead the band",
-    ]);
-
     let first = h.json(&["item", "get", "HV-1", "--include", "lineage"]);
     assert_eq!(first["lineage"][0]["event_type"], "update");
     assert_eq!(first["lineage"][0]["rationale"], "Needed for the release");
@@ -201,15 +207,6 @@ fn cli_priority_and_rank_rationale_round_trip_in_lineage() {
     );
     assert_eq!(first["lineage"][0]["context"]["old_priority"], 2);
     assert_eq!(first["lineage"][0]["context"]["new_priority"], 1);
-
-    let second = h.json(&["item", "get", "HV-2", "--include", "lineage"]);
-    assert_eq!(second["lineage"][0]["event_type"], "update");
-    assert_eq!(
-        second["lineage"][0]["rationale"],
-        "Second should lead the band"
-    );
-    assert_eq!(second["lineage"][0]["context"]["operation"], "rank");
-    assert_eq!(second["lineage"][0]["context"]["target"], "HV-1");
 
     h.ok(&["item", "add", "Third"]);
     h.ok(&[

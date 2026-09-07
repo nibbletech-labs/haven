@@ -91,7 +91,7 @@ fn collect_push_batch_inner(conn: &Connection) -> Result<PushBatch, SyncError> {
     let nodes = query_rows(
         conn,
         "SELECT n.public_id, p.public_id, n.ref, n.title, n.body, n.type, n.status,
-                n.owner_kind, n.assignee, n.wait_state, n.committed, n.priority, n.sort_key,
+                n.owner_kind, n.assignee, n.wait_state, n.committed, n.priority,
                 n.metadata, n.created_at, n.updated_at, n.archived_at, n.client_id, n.revision,
                 n.done_looks_like, n.why, n.due_at
          FROM nodes n JOIN projects p ON p.id = n.project_id
@@ -110,16 +110,15 @@ fn collect_push_batch_inner(conn: &Connection) -> Result<PushBatch, SyncError> {
                 "wait_state": r.get::<_, Option<String>>(9)?,
                 "committed": r.get::<_, bool>(10)?,
                 "priority": r.get::<_, Option<i64>>(11)?,
-                "sort_key": r.get::<_, Option<String>>(12)?,
-                "metadata": json_col(r.get::<_, String>(13)?),
-                "created_at": r.get::<_, String>(14)?,
-                "updated_at": r.get::<_, String>(15)?,
-                "archived_at": r.get::<_, Option<String>>(16)?,
-                "client_id": r.get::<_, String>(17)?,
-                "revision": r.get::<_, i64>(18)?,
-                "done_looks_like": r.get::<_, Option<String>>(19)?,
-                "why": r.get::<_, Option<String>>(20)?,
-                "due_at": r.get::<_, Option<String>>(21)?,
+                "metadata": json_col(r.get::<_, String>(12)?),
+                "created_at": r.get::<_, String>(13)?,
+                "updated_at": r.get::<_, String>(14)?,
+                "archived_at": r.get::<_, Option<String>>(15)?,
+                "client_id": r.get::<_, String>(16)?,
+                "revision": r.get::<_, i64>(17)?,
+                "done_looks_like": r.get::<_, Option<String>>(18)?,
+                "why": r.get::<_, Option<String>>(19)?,
+                "due_at": r.get::<_, Option<String>>(20)?,
             }))
         },
     )?;
@@ -621,7 +620,6 @@ fn apply_nodes(conn: &Connection, rows: &[Value]) -> Result<usize, SyncError> {
         let wait = vstr(r, "wait_state");
         let committed = vbool(r, "committed") as i64;
         let priority = vint(r, "priority");
-        let sort_key = vstr(r, "sort_key");
         let metadata = vjson(r, "metadata");
         let created = vstr(r, "created_at");
         let updated = vstr(r, "updated_at");
@@ -633,15 +631,15 @@ fn apply_nodes(conn: &Connection, rows: &[Value]) -> Result<usize, SyncError> {
                 conn.execute(
                     "UPDATE nodes SET project_id=?2, ref=?3, title=?4, body=?5, type=?6,
                         status=?7, owner_kind=?8, assignee=?9, wait_state=?10, committed=?11,
-                        priority=?12, sort_key=?13, metadata=?14,
-                        updated_at=COALESCE(?15, datetime('now')), archived_at=?16,
-                        client_id=?17, revision=?18, done_looks_like=?19, why=?20, due_at=?21,
+                        priority=?12, metadata=?13,
+                        updated_at=COALESCE(?14, datetime('now')), archived_at=?15,
+                        client_id=?16, revision=?17, done_looks_like=?18, why=?19, due_at=?20,
                         sync_state='synced', last_synced_at=datetime('now')
                      WHERE public_id=?1",
                     params![
                         pid, project_id, reference, title, body, typ, status, owner, assignee,
-                        wait, committed, priority, sort_key, metadata, updated, archived, cid, rev,
-                        dll, why, due
+                        wait, committed, priority, metadata, updated, archived, cid, rev, dll, why,
+                        due
                     ],
                 )?;
                 n += 1;
@@ -650,16 +648,16 @@ fn apply_nodes(conn: &Connection, rows: &[Value]) -> Result<usize, SyncError> {
                 conn.execute(
                     "INSERT INTO nodes
                         (public_id, project_id, ref, title, body, type, status, owner_kind,
-                         assignee, wait_state, committed, priority, sort_key, metadata,
+                         assignee, wait_state, committed, priority, metadata,
                          created_at, updated_at, archived_at, client_id, revision, sync_state,
                          last_synced_at, done_looks_like, why, due_at)
-                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,
-                             COALESCE(?15, datetime('now')), COALESCE(?16, datetime('now')), ?17,
-                             ?18, ?19, 'synced', datetime('now'), ?20, ?21, ?22)",
+                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,
+                             COALESCE(?14, datetime('now')), COALESCE(?15, datetime('now')), ?16,
+                             ?17, ?18, 'synced', datetime('now'), ?19, ?20, ?21)",
                     params![
                         pid, project_id, reference, title, body, typ, status, owner, assignee,
-                        wait, committed, priority, sort_key, metadata, created, updated, archived,
-                        cid, rev, dll, why, due
+                        wait, committed, priority, metadata, created, updated, archived, cid, rev,
+                        dll, why, due
                     ],
                 )?;
                 n += 1;
@@ -1015,6 +1013,64 @@ mod tests {
     fn count(conn: &Connection, table: &str) -> i64 {
         conn.query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0))
             .unwrap()
+    }
+
+    #[test]
+    fn retired_rank_is_ignored_on_insert_and_update_and_omitted_on_push() {
+        let source = tempfile::tempdir().unwrap();
+        let db = source.path().join("haven.db");
+        let store = Store::open(&db, source.path()).unwrap();
+        store
+            .add_project("haven", Some("HV"), "Haven", None)
+            .unwrap();
+        store
+            .add_item(
+                Some("haven"),
+                NewItem {
+                    title: "Keep my fields".into(),
+                    priority: Some(2),
+                    done_looks_like: Some("acceptance".into()),
+                    why: Some("reason".into()),
+                    due_at: Some("2026-09-30".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let conn = haven_core::db::open(&db).unwrap();
+        let mut snap = snapshot_from_batch(collect_push_batch(&conn).unwrap());
+        assert!(snap.nodes[0].get("sort_key").is_none());
+        // A server/client from before retirement may still send the old field.
+        snap.nodes[0]["sort_key"] = json!("a");
+        let target = tempfile::tempdir().unwrap();
+        let target_db = target.path().join("haven.db");
+        let target_store = Store::open(&target_db, target.path()).unwrap();
+        let target_conn = haven_core::db::open(&target_db).unwrap();
+        apply_snapshot(&target_conn, &snap, target.path()).unwrap();
+        let first = target_store.get_item(Some("haven"), "HV-1", &[]).unwrap();
+        assert_eq!(first.title, "Keep my fields");
+        assert_eq!(first.priority, Some(2));
+        assert_eq!(first.done_looks_like.as_deref(), Some("acceptance"));
+        assert_eq!(first.why.as_deref(), Some("reason"));
+        assert_eq!(first.due_at.as_deref(), Some("2026-09-30"));
+        assert!(serde_json::to_value(&first)
+            .unwrap()
+            .get("sort_key")
+            .is_none());
+        snap.nodes[0]["revision"] = json!(first.revision + 1);
+        snap.nodes[0]["title"] = json!("Updated");
+        snap.nodes[0]["priority"] = json!(1);
+        snap.nodes[0]["sort_key"] = json!("z");
+        apply_snapshot(&target_conn, &snap, target.path()).unwrap();
+        let updated = target_store.get_item(Some("haven"), "HV-1", &[]).unwrap();
+        assert_eq!(updated.title, "Updated");
+        assert_eq!(updated.priority, Some(1));
+        assert_eq!(updated.done_looks_like, first.done_looks_like);
+        assert_eq!(updated.why, first.why);
+        assert_eq!(updated.due_at, first.due_at);
+        assert!(serde_json::to_value(&updated)
+            .unwrap()
+            .get("sort_key")
+            .is_none());
     }
 
     #[test]

@@ -595,8 +595,6 @@ pub struct Item {
     pub committed: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub priority: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub sort_key: Option<String>,
     pub metadata: serde_json::Value,
     pub created_at: String,
     pub updated_at: String,

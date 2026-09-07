@@ -15,7 +15,7 @@ An **item** is one unit of work. It has a stable ref (`MW-1`, `MW-2`, …) and a
 | **status** | how mature / finished it is: `discovery` → `definition` → `ready` → `in_progress` → `done`, plus `blocked` · `superseded` · `archived` (see [Status](#status-the-maturity-axis)) |
 | **owner** | who is doing it: `human`, `ai`, or unassigned |
 | **committed** | whether it's real planned work or just a floating idea (see [Backlog vs inbox](#commitment-backlog-vs-inbox)) |
-| **priority** + rank | where it sits in the queue |
+| **priority** | urgency band (0–4); within a band, oldest first |
 | **done_looks_like** | the acceptance criteria (see [Acceptance](#acceptance-criteria-done_looks_like)) |
 | **why** | a one-line rationale: why this item exists |
 | **due_at** | an optional `YYYY-MM-DD` deadline |

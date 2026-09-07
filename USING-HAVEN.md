@@ -39,7 +39,7 @@ Behind the plain-language asks, the AI works the graph for you. These are the ki
 
 **Give it structure**. Connect the work: mark that one item is blocked by another, break a big item into smaller pieces, or group a set under a release or phase. This is what turns a flat list into a graph the AI can reason over.
 
-**Groom and prioritise**: sharpen what "done" means, commit the work that's real (versus parked ideas), and rank what matters, the line between "someday" and "doing this now".
+**Groom and prioritise**: sharpen what "done" means, commit the work that's real (versus parked ideas), and set priorities, the line between "someday" and "doing this now".
 
 **Find the next thing**: ask "what should I work on?" and get back the items that are ready and not blocked, narrowed to your work or the AI's, or to a single release or phase.
 

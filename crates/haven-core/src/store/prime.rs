@@ -241,7 +241,7 @@ impl Store {
                  WHEN n.wait_state = 'on_external' THEN 3
                  ELSE 4
                END,
-               n.priority IS NULL, n.priority, n.sort_key IS NULL, n.sort_key, n.created_at, n.id
+               n.priority IS NULL, n.priority, n.created_at, n.id
              LIMIT ?2"
         ))?;
         let rows = stmt.query_map(params![project_id, limit as i64], item_from_row)?;

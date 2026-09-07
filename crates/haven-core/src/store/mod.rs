@@ -47,7 +47,7 @@ pub use query::{
 /// against `projects` to resolve the human project key.
 pub(crate) const ITEM_SELECT: &str = "\
     n.id, n.public_id, n.ref, p.key, n.title, n.body, n.type, n.status, \
-    n.owner_kind, n.assignee, n.wait_state, n.committed, n.priority, n.sort_key, \
+    n.owner_kind, n.assignee, n.wait_state, n.committed, n.priority, \
     n.metadata, n.created_at, n.updated_at, n.archived_at, n.revision, n.sync_state, \
     n.done_looks_like, n.why, n.due_at";
 
@@ -82,9 +82,9 @@ pub(crate) fn parse_ref(reference: &str) -> Option<(String, i64)> {
 
 /// Map a row selected via [`ITEM_SELECT`] into an [`Item`] (no includes).
 pub(crate) fn item_from_row(row: &Row<'_>) -> rusqlite::Result<Item> {
-    let metadata_str: String = row.get(14)?;
+    let metadata_str: String = row.get(13)?;
     let metadata = serde_json::from_str(&metadata_str).map_err(|e| {
-        rusqlite::Error::FromSqlConversionFailure(14, rusqlite::types::Type::Text, Box::new(e))
+        rusqlite::Error::FromSqlConversionFailure(13, rusqlite::types::Type::Text, Box::new(e))
     })?;
     Ok(Item {
         id: row.get(0)?,
@@ -93,9 +93,9 @@ pub(crate) fn item_from_row(row: &Row<'_>) -> rusqlite::Result<Item> {
         project: row.get(3)?,
         title: row.get(4)?,
         body: row.get(5)?,
-        done_looks_like: row.get(20)?,
-        why: row.get(21)?,
-        due_at: row.get(22)?,
+        done_looks_like: row.get(19)?,
+        why: row.get(20)?,
+        due_at: row.get(21)?,
         node_type: row.get(6)?,
         status: row.get(7)?,
         owner_kind: row.get(8)?,
@@ -103,13 +103,12 @@ pub(crate) fn item_from_row(row: &Row<'_>) -> rusqlite::Result<Item> {
         wait_state: row.get(10)?,
         committed: row.get(11)?,
         priority: row.get(12)?,
-        sort_key: row.get(13)?,
         metadata,
-        created_at: row.get(15)?,
-        updated_at: row.get(16)?,
-        archived_at: row.get(17)?,
-        revision: row.get(18)?,
-        sync_state: row.get(19)?,
+        created_at: row.get(14)?,
+        updated_at: row.get(15)?,
+        archived_at: row.get(16)?,
+        revision: row.get(17)?,
+        sync_state: row.get(18)?,
         rollup_state: None,
         owner_rollup: None,
         has_uncommitted_descendants: None,

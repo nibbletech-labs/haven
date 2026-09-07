@@ -94,20 +94,19 @@ ordered plan.
 1. Survey: `haven item list --icebox` (floating pool) and `haven item list --committed`.
 2. For each item the user decides to do, **commit** it, optionally with a band:
    `haven item commit HV-12 --priority 1`.
-3. Order *within* a band only where order genuinely matters:
-   `haven item rank HV-12 --before HV-8` (relative, LexoRank-style — not absolute).
-4. Wire **dependencies** for real ordering constraints: `haven depend HV-12 --on HV-9`.
-5. For a release/phase, create the container node and group members:
+3. Wire **dependencies** for prerequisites: `haven depend HV-12 --on HV-9`.
+4. For a release/phase, create the container node and group members:
    `haven item add "v1 launch" --type release` then `haven group HV-30 --add HV-12 --add HV-8`.
-6. If the user is asking to deliver several items as one effort, continue through
+5. If the user is asking to deliver several items as one effort, continue through
    [Multi-item delivery](#5-multi-item-delivery) before dispatching the work.
 
 **Heuristics:**
 - **Commit only what you'll pull soon.** Commitment means "in play." Keep
   speculative work floating.
-- **Priority bands, not a ranked list of 50:** 0 now · 1 next · 2 soon · 3 later ·
-  4 someday. Reserve 0 for genuine urgency. Use `rank` only for fine order within a
-  band.
+- **Priority bands express urgency:** 0 now · 1 next · 2 soon · 3 later ·
+  4 someday. Reserve 0 for genuine urgency. Within a band, older items come first
+  (creation time, then ID); unprioritised items come last. Add a dependency only
+  when work requires a prerequisite, not merely because one item is preferred.
 - **A committed item still won't dispatch unless it's `ready`.** If you commit a
   `discovery` item, tell the user it needs definition first.
 

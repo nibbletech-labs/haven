@@ -1,5 +1,5 @@
 //! Item operations: CRUD, the maturity axis (status/wait), the commitment axis
-//! (commit/uncommit/priority/rank), ownership, and lifecycle (archive/reopen,
+//! (commit/uncommit/priority), ownership, and lifecycle (archive/reopen,
 //! which emit lineage events). All methods on [`Store`].
 
 use rusqlite::{params, Connection, OptionalExtension, Row};
@@ -7,7 +7,6 @@ use serde::Serialize;
 
 use crate::error::{HavenError, Result};
 use crate::model::*;
-use crate::sortkey;
 
 use super::{item_from_row, new_uuid, NewArtifact, StaleRef, Store, ITEM_FROM, ITEM_SELECT};
 
@@ -515,7 +514,7 @@ impl Store {
         let (where_sql, args) = self.item_filter_where(project_id, filter)?;
         let sql = format!(
             "SELECT {ITEM_SELECT} FROM {ITEM_FROM} {where_sql}
-             ORDER BY n.priority IS NULL, n.priority, n.sort_key IS NULL, n.sort_key, n.created_at, n.id"
+             ORDER BY n.priority IS NULL, n.priority, n.created_at, n.id"
         );
 
         let mut stmt = self.conn.prepare(&sql)?;
@@ -544,7 +543,7 @@ impl Store {
 
         let sql = format!(
             "SELECT {ITEM_SELECT} FROM {ITEM_FROM} {where_sql}
-             ORDER BY n.priority IS NULL, n.priority, n.sort_key IS NULL, n.sort_key, n.created_at, n.id
+             ORDER BY n.priority IS NULL, n.priority, n.created_at, n.id
              LIMIT ?{} OFFSET ?{}",
             args.len() + 1,
             args.len() + 2
@@ -1400,133 +1399,6 @@ impl Store {
         let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt.query_map([completed_id], item_from_row)?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
-    }
-
-    /// Set `sort_key` so the item sorts immediately before/after `target`.
-    pub fn rank_item(
-        &self,
-        project: Option<&str>,
-        selector: &str,
-        before: Option<&str>,
-        after: Option<&str>,
-    ) -> Result<Item> {
-        self.rank_item_with_rationale(project, selector, before, after, None)
-    }
-
-    /// Set `sort_key` with an optional decision rationale. When supplied, records
-    /// a lineage `update` event carrying the old/new rank context.
-    pub fn rank_item_with_rationale(
-        &self,
-        project: Option<&str>,
-        selector: &str,
-        before: Option<&str>,
-        after: Option<&str>,
-        rationale: Option<&str>,
-    ) -> Result<Item> {
-        let (project_id, _key) = self.require_project_mut(project)?;
-        let node_id = self.resolve_node_id(project_id, selector)?;
-        let (target_sel, is_before) = match (before, after) {
-            (Some(t), None) => (t, true),
-            (None, Some(t)) => (t, false),
-            _ => {
-                return Err(HavenError::Invalid(
-                    "rank requires exactly one of --before/--after".into(),
-                ))
-            }
-        };
-        let target_id = self.resolve_node_id(project_id, target_sel)?;
-        if target_id == node_id {
-            return Err(HavenError::Invalid(
-                "cannot rank an item relative to itself".into(),
-            ));
-        }
-
-        let (node_type, target_type): (NodeType, NodeType) = self.conn.query_row(
-            "SELECT n.type, t.type FROM nodes n JOIN nodes t ON t.id = ?2 WHERE n.id = ?1",
-            params![node_id, target_id],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )?;
-        if matches!(node_type, NodeType::Anchor) || matches!(target_type, NodeType::Anchor) {
-            return Err(HavenError::Invalid(
-                "anchor nodes cannot be ranked or used as rank targets".into(),
-            ));
-        }
-        let target_ref = self.node_ref(target_id)?;
-
-        // Ensure the target has a key to anchor against. Fetch its priority band
-        // too: `sort_key` is fine ordering *within a band* (SPEC §0 Q2), so the
-        // gap search is scoped to the target's band — a key from another band must
-        // not narrow the gap (it would burn key space without affecting order).
-        let tx = self.conn.unchecked_transaction()?;
-        let (old_key, old_priority): (Option<String>, Option<i64>) = tx.query_row(
-            "SELECT sort_key, priority FROM nodes WHERE id = ?1",
-            [node_id],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )?;
-        let (mut target_key, target_priority): (Option<String>, Option<i64>) = tx.query_row(
-            "SELECT sort_key, priority FROM nodes WHERE id = ?1",
-            [target_id],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )?;
-        if target_key.is_none() {
-            let k = sortkey::between(None, None)?;
-            tx.execute(
-                "UPDATE nodes SET sort_key = ?1, revision = revision + 1,
-                     updated_at = datetime('now'), sync_state = 'local' WHERE id = ?2",
-                params![k, target_id],
-            )?;
-            target_key = Some(k);
-        }
-        let target_key = target_key.unwrap();
-
-        // Find the neighbour on the far side of the target, in the same band,
-        // excluding the moving node; mint a key in the gap. `priority IS ?4` is
-        // SQLite NULL-safe equality, so the unprioritised band matches too.
-        let new_key = if is_before {
-            let lower: Option<String> = tx.query_row(
-                "SELECT max(sort_key) FROM nodes
-                 WHERE project_id = ?1 AND sort_key < ?2 AND id <> ?3 AND priority IS ?4",
-                params![project_id, target_key, node_id, target_priority],
-                |r| r.get(0),
-            )?;
-            sortkey::between(lower.as_deref(), Some(&target_key))?
-        } else {
-            let upper: Option<String> = tx.query_row(
-                "SELECT min(sort_key) FROM nodes
-                 WHERE project_id = ?1 AND sort_key > ?2 AND id <> ?3 AND priority IS ?4",
-                params![project_id, target_key, node_id, target_priority],
-                |r| r.get(0),
-            )?;
-            sortkey::between(Some(&target_key), upper.as_deref())?
-        };
-
-        tx.execute(
-            "UPDATE nodes SET sort_key = ?1, revision = revision + 1,
-                 updated_at = datetime('now'), sync_state = 'local' WHERE id = ?2",
-            params![new_key, node_id],
-        )?;
-        if let Some(rationale) = rationale {
-            self.record_event(
-                &tx,
-                project_id,
-                EventType::Update,
-                Some(rationale),
-                None,
-                &serde_json::json!({
-                    "operation": "rank",
-                    "placement": if is_before { "before" } else { "after" },
-                    "target": target_ref,
-                    "old_priority": old_priority,
-                    "new_priority": old_priority,
-                    "target_priority": target_priority,
-                    "old_sort_key": old_key,
-                    "new_sort_key": new_key,
-                }),
-                &[(node_id, node_id)],
-            )?;
-        }
-        tx.commit()?;
-        self.get_item(project, selector, &[])
     }
 
     /// Archive: status → archived, stamp `archived_at`, emit a lineage `archive`

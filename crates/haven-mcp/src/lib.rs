@@ -102,7 +102,7 @@ fn is_false(b: &bool) -> bool {
 
 /// The MCP projection of an [`Item`] (SPEC §3). Deliberately leaner than the
 /// `Item` the CLI serializes: the machine-only fields (`public_id`, `sync_state`,
-/// `revision`, `sort_key`) are *always* dropped — an agent reasons in `ref`s, not
+/// `revision`) are *always* dropped — an agent reasons in `ref`s, not
 /// storage internals — and the `compact` form (list/next/resolve) further omits
 /// the prose fields, timestamps and includes, which an agent pulls on demand via
 /// `haven_get_item`. The `graph` view (`graph_node`) is compact plus a boolean
@@ -560,7 +560,6 @@ fn is_mutating_tool(name: &str) -> bool {
             | "haven_update_item"
             | "haven_add_edge"
             | "haven_evolve"
-            | "haven_rank"
             | "haven_add_artifact"
             | "haven_rm_artifact"
             | "haven_mv_artifact"
@@ -824,16 +823,6 @@ fn dispatch_tool(store: &Store, name: &str, a: &Value) -> Result<Value> {
             project,
             opt_str(a, "owner").map(OwnerKind::parse).transpose()?,
         ),
-        // Fine ordering within a priority band — exposed over MCP so a remote
-        // client (phone/web) can reorder conversationally ("put X before Y"),
-        // not just shuffle priority bands. Same core op as CLI `item rank`.
-        "haven_rank" => to_value(store.rank_item_with_rationale(
-            project,
-            req_str(a, "ref")?,
-            opt_str(a, "before"),
-            opt_str(a, "after"),
-            opt_str(a, "rationale"),
-        )?),
         "haven_add_item" => {
             let new = NewItem {
                 title: req_str(a, "title")?.to_string(),
@@ -1391,7 +1380,7 @@ fn tools_list() -> Value {
         "required": ["title"]
     });
     json!([
-        { "name": "haven_list_items", "description": "List items in a project under filters. Returns a compact, paginated view {total, count, offset, items[]} — each item carries identity + axes only (ref, title, type, status, committed, owner, priority, wait); fetch prose/detail with haven_get_item or bounded haven_get_items for selected refs. Truncated to `limit` (default 100) from `offset`, in (priority, sort_key, created_at) order; `total` is the full match count. `wait` (on_human|on_dependency|on_external) answers 'what's waiting on me / stuck on X'; `stale` (days) surfaces items untouched for N+ days.",
+        { "name": "haven_list_items", "description": "List items in a project under filters. Returns a compact, paginated view {total, count, offset, items[]} — each item carries identity + axes only (ref, title, type, status, committed, owner, priority, wait); fetch prose/detail with haven_get_item or bounded haven_get_items for selected refs. Truncated to `limit` (default 100) from `offset`, in (priority, created_at, id) order; `total` is the full match count. `wait` (on_human|on_dependency|on_external) answers 'what's waiting on me / stuck on X'; `stale` (days) surfaces items untouched for N+ days.",
           "inputSchema": obj(json!({"project":{"type":"string"},"status":{"type":"string","enum":["discovery","definition","ready","in_progress","blocked","done","superseded","archived"]},"type":{"type":"string","enum":["task","code","research","data","design","admin","release","phase","gate","anchor"]},"owner":{"type":"string","enum":["human","ai"]},"committed":{"type":"boolean"},"icebox":{"type":"boolean"},"group":{"type":"string"},"wait":{"type":"string","enum":["on_human","on_dependency","on_external"]},"stale":{"type":"integer"},"limit":{"type":"integer"},"offset":{"type":"integer"}}), json!([])) },
         { "name": "haven_inbox", "description": "Untriaged floaters: uncommitted, live (not archived/superseded), with no acceptance (done_looks_like) set yet — the triage queue behind capture→triage→next. Same compact, paginated {total, count, offset, items[]} envelope as haven_list_items. To read the prose/detail of several floaters at once, fetch them in one call with bounded haven_get_items rather than looping haven_get_item.",
           "inputSchema": obj(json!({"project":{"type":"string"},"owner":{"type":"string","enum":["human","ai"]},"limit":{"type":"integer"},"offset":{"type":"integer"}}), json!([])) },
@@ -1401,14 +1390,12 @@ fn tools_list() -> Value {
           "inputSchema": obj(json!({"ref":{"type":"string"},"project":{"type":"string"},"include":{"type":"array","items":{"type":"string","enum":["edges","artifacts","lineage"]}}}), json!(["ref"])) },
         { "name": "haven_get_items", "description": "Fetch selected refs in full in one bounded read (same item shape as haven_get_item); preserves input order and duplicate refs. Use after compact navigation when several known refs need prose/detail. Hard-capped at 20 refs to avoid full-prose context blowups. Stale refs ride `stale_ref` on their individual item object; invalid include keys are reported once under `invalid_include` while valid includes still load.",
           "inputSchema": obj(json!({"refs":{"type":"array","items":{"type":"string"},"minItems":1,"maxItems":20},"project":{"type":"string"},"include":{"type":"array","items":{"type":"string","enum":["edges","artifacts","lineage"]}}}), json!(["refs"])) },
-        { "name": "haven_next", "description": "Items ready to dispatch (committed, ready, unblocked), highest priority band first. Returns a compact view per item (identity + axes, no prose — fetch full via haven_get_item or bounded haven_get_items for selected refs). Bounded by default: returns at most the top 50 of the ranked frontier unless `limit` is given — re-poll between batches rather than asking for the whole frontier at once.",
+        { "name": "haven_next", "description": "Items ready to dispatch (committed, ready, unblocked), highest priority band first. Returns a compact view per item (identity + axes, no prose — fetch full via haven_get_item or bounded haven_get_items for selected refs). Bounded by default: returns at most the top 50 of the priority-ordered frontier unless `limit` is given — re-poll between batches rather than asking for the whole frontier at once.",
           "inputSchema": obj(json!({"project":{"type":"string"},"owner":{"type":"string","enum":["human","ai"]},"limit":{"type":"integer"}}), json!([])) },
         { "name": "haven_dispatch", "description": "Lean 'what should I work on?' briefing: bounded haven_next plus targeted per-candidate details (acceptance, parent/group context, blockers, artifact pointers) without pulling the whole graph. Use `scope` with a parent/release/phase ref to restrict candidates to that live subtree. Includes next-explain diagnostics when empty, or when `explain:true` is passed. To pull the full prose/relationships of several candidates at once, fetch them in one call with bounded haven_get_items rather than separate haven_get_item calls.",
           "inputSchema": obj(json!({"project":{"type":"string"},"owner":{"type":"string","enum":["human","ai"]},"limit":{"type":"integer"},"scope":{"type":"string"},"explain":{"type":"boolean"}}), json!([])) },
         { "name": "haven_next_explain", "description": "Diagnose why the dispatch queue is empty: the dispatchable count plus a per-reason breakdown (owner-mismatch, blocked-by-dependency, waiting, committed-not-ready, ready-but-uncommitted) and a hint. Call when haven_next returns nothing — diagnose, don't invent work.",
           "inputSchema": obj(json!({"project":{"type":"string"},"owner":{"type":"string","enum":["human","ai"]}}), json!([])) },
-        { "name": "haven_rank", "description": "Reorder an item within its priority band: place it immediately before or after another item (exactly one of `before`/`after`). Fine ordering for 'do X before Y' — use `haven_update_item {priority}` for coarse band moves. Pass `rationale` when the ordering judgment should be auditable in lineage.",
-          "inputSchema": obj(json!({"ref":{"type":"string"},"project":{"type":"string"},"before":{"type":"string"},"after":{"type":"string"},"rationale":{"type":"string"}}), json!(["ref"])) },
         { "name": "haven_add_item", "description": "Create a work-graph item (node). `done_looks_like` is the acceptance statement output is verified against; `why` is a one-line provenance trace. `due_at` is an optional deadline as a calendar date YYYY-MM-DD (no time/timezone), validated on write. Pass `if_absent: true` to return an existing live item with the same normalized title (marked `existing: true`) instead of creating a duplicate; responses may carry `similar` — up to 3 live items with overlapping titles (advisory).",
           "inputSchema": obj(json!({"title":{"type":"string"},"project":{"type":"string"},"type":{"type":"string","enum":["task","code","research","data","design","admin","release","phase","gate","anchor"],"description":"Node type. Leaves: task (default), code, research, data, design, admin. Containers (the only valid group targets): release, phase, gate. anchor = a long-lived project-docs / overview node."},"body":{"type":"string"},"done_looks_like":{"type":"string"},"why":{"type":"string"},"due_at":{"type":"string"},"status":{"type":"string","enum":["discovery","definition","ready","in_progress","blocked","done","superseded","archived"]},"priority":{"type":"integer","minimum":0,"maximum":4},"commit":{"type":"boolean"},"assign":{"type":"string","enum":["human","ai"]},"parent":{"type":"string"},"depends_on":{"type":["string","array"],"items":{"type":"string"},"description":"A ref, or an array of refs — one dependency edge each, all in the same add."},"group":{"type":"string","description":"Add this new item to a release/phase/gate container (creates a grouping edge from that container to this item)."},"if_absent":{"type":"boolean"}}), json!(["title"])) },
         { "name": "haven_import", "description": "Bulk-add an N-node sub-graph in ONE atomic call — the `haven import` envelope inline. `items` is a JSON array; each element carries the haven_add_item fields (title*, type, body, done_looks_like, why, status, priority, commit, assign) PLUS a temp `id` (file-local, lets siblings reference it) and ref-or-temp-id edge fields `parent` / `depends_on` (array) / `group`. Edge targets may be an existing ref OR a temp id from this batch, including forward references (a target appearing later in the array). All-or-nothing: any failure — a bad edge target, a cycle, a born-engaged item — rolls the WHOLE batch back, ref counter included. `if_absent: true` skips items whose normalized title matches a live item (their temp ids resolve to the match). Like haven_add_item, items cannot be born in an engaged state (status in_progress/blocked/done or commit:true), and a `ready` item needs done_looks_like. Returns one outcome per input item (temp `id` echoed, the created/matched item, and `existing`).",
@@ -1601,7 +1588,7 @@ mod tests {
         assert_eq!(out.len(), 2);
         assert_eq!(out[0]["result"]["serverInfo"]["name"], "haven");
         let tools = out[1]["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 37);
+        assert_eq!(tools.len(), 36);
         assert!(tools.iter().any(|t| t["name"] == "haven_claim"));
         assert!(tools.iter().any(|t| t["name"] == "haven_set_extref"));
         assert!(tools.iter().any(|t| t["name"] == "haven_find_extref"));
@@ -2396,46 +2383,28 @@ mod tests {
     }
 
     #[test]
-    fn rank_via_tool_reorders_within_a_band() {
+    fn retired_rank_is_not_advertised_and_old_calls_are_rejected() {
         let s = store();
         let out = session(
             &s,
             &[
-                // Two committed P1 items; HV-1 sorts first by creation.
-                json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{
-                    "name":"haven_add_item","arguments":{"title":"First","status":"ready","commit":true,"priority":1,"done_looks_like":"it works"}
-                }}),
+                json!({"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}),
                 json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{
-                    "name":"haven_add_item","arguments":{"title":"Second","status":"ready","commit":true,"priority":1,"done_looks_like":"it works"}
-                }}),
-                // Conversational reorder: put Second before First.
-                json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{
-                    "name":"haven_rank","arguments":{"ref":"HV-2","before":"HV-1"}
-                }}),
-                json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{
-                    "name":"haven_next","arguments":{}
-                }}),
-                // Exactly one of before/after is required.
-                json!({"jsonrpc":"2.0","id":5,"method":"tools/call","params":{
-                    "name":"haven_rank","arguments":{"ref":"HV-2"}
+                    "name":"haven_rank","arguments":{"ref":"HV-1","before":"HV-2"}
                 }}),
             ],
         );
-        assert_eq!(out[2]["result"]["isError"], false);
-        let next = tool_payload(&out[3]);
-        let refs: Vec<&str> = next
+        assert!(!out[0]["result"]["tools"]
             .as_array()
             .unwrap()
             .iter()
-            .map(|i| i["ref"].as_str().unwrap())
-            .collect();
-        assert_eq!(refs, ["HV-2", "HV-1"]);
-        // Missing before/after surfaces as a tool error, not a crash.
-        assert_eq!(out[4]["result"]["isError"], true);
+            .any(|t| t["name"] == "haven_rank"));
+        assert_eq!(out[1]["result"]["isError"], true);
+        assert!(out[1]["result"].to_string().contains("unknown tool"));
     }
 
     #[test]
-    fn priority_and_rank_rationale_are_readable_via_lineage() {
+    fn priority_rationale_is_readable_via_lineage() {
         let s = store();
         let out = session(
             &s,
@@ -2449,14 +2418,8 @@ mod tests {
                 json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{
                     "name":"haven_update_item","arguments":{"ref":"HV-1","priority":1,"rationale":"Needed for release sequencing"}
                 }}),
-                json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{
-                    "name":"haven_rank","arguments":{"ref":"HV-2","before":"HV-1","rationale":"Second should be first within P2"}
-                }}),
                 json!({"jsonrpc":"2.0","id":5,"method":"tools/call","params":{
                     "name":"haven_get_item","arguments":{"ref":"HV-1","include":["lineage"]}
-                }}),
-                json!({"jsonrpc":"2.0","id":6,"method":"tools/call","params":{
-                    "name":"haven_get_item","arguments":{"ref":"HV-2","include":["lineage"]}
                 }}),
                 json!({"jsonrpc":"2.0","id":7,"method":"tools/call","params":{
                     "name":"haven_update_item","arguments":{"ref":"HV-1","commit":false,"priority":3,"rationale":"Park and lower priority"}
@@ -2468,8 +2431,7 @@ mod tests {
         );
 
         assert_eq!(out[2]["result"]["isError"], false);
-        assert_eq!(out[3]["result"]["isError"], false);
-        let priority = tool_payload(&out[4]);
+        let priority = tool_payload(&out[3]);
         assert_eq!(priority["lineage"][0]["event_type"], "update");
         assert_eq!(
             priority["lineage"][0]["rationale"],
@@ -2482,18 +2444,8 @@ mod tests {
         assert_eq!(priority["lineage"][0]["context"]["old_priority"], 2);
         assert_eq!(priority["lineage"][0]["context"]["new_priority"], 1);
 
-        let rank = tool_payload(&out[5]);
-        assert_eq!(rank["lineage"][0]["event_type"], "update");
-        assert_eq!(
-            rank["lineage"][0]["rationale"],
-            "Second should be first within P2"
-        );
-        assert_eq!(rank["lineage"][0]["context"]["operation"], "rank");
-        assert_eq!(rank["lineage"][0]["context"]["placement"], "before");
-        assert_eq!(rank["lineage"][0]["context"]["target"], "HV-1");
-
-        assert_eq!(out[6]["result"]["isError"], false);
-        let combined = tool_payload(&out[7]);
+        assert_eq!(out[4]["result"]["isError"], false);
+        let combined = tool_payload(&out[5]);
         assert_eq!(combined["lineage"].as_array().unwrap().len(), 3);
         assert_eq!(
             combined["lineage"][1]["rationale"],

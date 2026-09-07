@@ -81,7 +81,6 @@ haven item claim <ref> [--as ai|human] [--actor <name>]   # atomic: owner + in_p
 haven item assign <ref> --to human|ai [--actor <name>]
 haven item handoff <ref> --to human|ai [--from] [--note "…"] [--status] [--wait <state>|none] [--actor]
 haven item complete <ref> [--evidence "…"] [--role delivery] [--by]   # evidence file: delivery.md, then delivery-2.md… (never collides)
-haven item rank <ref> [--before <ref>] [--after <ref>] [--rationale "…"]
 haven item archive <ref>… [--rationale "…"]  # one or more refs (grooming)
 haven item reopen  <ref> [--rationale "…"]
 # Item-level external references (handoff locator for Jira/Linear/GitHub work)
@@ -153,7 +152,6 @@ haven mcp
 | `haven_next` | `owner?, limit?` — compact items; `owner` filters ASSIGNMENT (`owner_kind = owner`), unassigned (NULL) excluded. On a run-shaped ai frontier (≥5 committed-ready ai leaves) the bare items array is wrapped `{items, advisory}`, the `advisory` pointing at the orchestrate-run skill; absent below the threshold |
 | `haven_dispatch` | `owner?, limit?, scope?, explain?` — lean "what should I work on?" briefing: bounded `next` plus targeted candidate detail (`done_looks_like`, parent/group context, blocked dependents, artifact pointers); `scope` restricts candidates to live descendants of a parent/release/phase ref |
 | `haven_next_explain` | `owner?` — diagnose an empty queue (counts by reason + hint) |
-| `haven_rank` | **`ref`**, `before?` \| `after?` (exactly one), `rationale?` — reorder within a priority band (fine ordering) |
 | `haven_add_item` | **`title`**, `type?, body?, done_looks_like?, why?, status?, priority?, commit?, assign?, due_at?, parent?, depends_on?, group?, if_absent?` — with `if_absent` a normalized-title match returns the existing item (`existing: true`); responses may carry advisory `similar` |
 | `haven_import` | **`items`** (array of `{title*, id?, type?, body?, done_looks_like?, why?, status?, priority?, commit?, assign?, parent?, depends_on?, group?}`), `if_absent?` — the `haven import` envelope inline: bulk-add an N-node sub-graph in ONE atomic call (temp-id / forward-ref resolution, all-or-nothing rollback, `if_absent` dedupe). Inherits the born-state guard (no engaged-born / committed item; `ready` needs `done_looks_like`). Returns one outcome per item (`id` echoed, the item, `existing`) |
 | `haven_update_item` | **`ref`**, `title?, body?, done_looks_like?, why?, status?, priority?, rationale?, type?, wait?, due_at?, commit?, assign?, group?, actor?` (`due_at` accepts `"none"` to clear; `group` adds the item to a release/phase/gate container, mirroring `haven_add_item`; `rationale` is recorded for `priority` or `commit` changes). A dead (superseded/archived) `ref` still updates but rides a `stale_ref` hint |
@@ -186,7 +184,7 @@ haven mcp
 ### Item response shapes (compact vs full)
 
 To keep context lean, item reads come in two shapes, and internal sync fields
-(`public_id`, `sync_state`, `revision`, `sort_key`) are **never** emitted over MCP:
+(`public_id`, `sync_state`, `revision`) are **never** emitted over MCP:
 
 - **Compact** — navigation only: `ref, title, type, status, committed, owner_kind?,
   priority?, wait_state?`. Used by `haven_list_items` (inside the `{total, count,
@@ -220,7 +218,6 @@ The collapses that catch people out:
 | `item complete` | `haven_complete_item` |
 | `next` / `dispatch` / `next --explain` | `haven_next` / `haven_dispatch` / `haven_next_explain` |
 | `prime` | `haven_prime` |
-| `item rank` | `haven_rank` |
 | `search`, `status`, `artifact get`/`add` | `haven_search`, `haven_status`, `haven_get_artifact`/`haven_add_artifact` |
 | `artifact rm` / `mv` | `haven_rm_artifact` / `haven_mv_artifact` |
 | `graph` | `haven_graph` |
@@ -277,7 +274,7 @@ corrective command — you don't have to memorise the table, but here it is.
   `render`, plus lifecycle/admin (`setup`, `status`, …). These are *not* under
   `item`.
 - **Item-nested CLI verbs** (`item <verb>`): `add`, `list`, `get` (alias `show`),
-  `update`, `commit`/`uncommit`, `assign`, `handoff`, `complete`, `rank`,
+  `update`, `commit`/`uncommit`, `assign`, `handoff`, `complete`,
   `archive`, `reopen`. The MCP flattens these (`haven_add_item`,
   `haven_get_item`, `haven_archive`, `haven_handoff`, …).
 - **MCP-only / CLI-only**: see [CLI → MCP mapping](#cli--mcp-mapping) (collapses
@@ -341,8 +338,8 @@ Re-running `haven link` refreshes and upgrades the projection in place. Use
 `haven unlink` to remove only the repo-local projection/binding/git-exclude
 entries; canonical content under `~/.haven` remains intact.
 
-If a remote client genuinely needs to create projects or re-rank, that's a gap to
-raise against the binary — don't fake it through other tools.
+Queue order is priority band, then creation time and ID; unprioritised items come
+last. Use priority for urgency and dependency edges for actual prerequisites.
 
 ## The content channel
 

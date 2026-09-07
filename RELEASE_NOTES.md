@@ -1,3 +1,11 @@
+## Unreleased: fewer ordering choices
+
+Manual fine ranking has been removed. Use priority bands for urgency and dependencies for prerequisites. Within each band, work is ordered by creation time, then item ID; unprioritised items come last.
+
+- `haven item rank` and the `haven_rank` MCP tool are gone. Dispatch candidates no longer include the redundant numeric `rank` field; array order gives their position.
+- Local schema migration 009 removes `sort_key`, preserving items, edges, artifacts and historical decision rationale. Older binaries cannot open the upgraded store. Restart existing MCP sessions after upgrading and run `haven skill install` to refresh agent guidance.
+- Cloud preview deployments have a matching remote migration, `0008_drop_sort_key.sql`. Upgrade clients before applying it. New clients tolerate older inbound payloads carrying `sort_key` and omit it on push.
+
 ## v0.1.8: Agents that read the code, and a CLI that stays quiet
 
 Two weeks of agent transcripts drove this release. Haven's CLI now stays silent on success so agents stop discarding its error output, accepts the flags and verbs agents guess, and lets an item be completed more than once. The planning skills gain the discipline a native plan mode imposes, and the orchestrator's spawn transport is fixed to the one that actually delivers results.

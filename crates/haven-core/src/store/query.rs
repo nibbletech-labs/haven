@@ -166,11 +166,10 @@ pub struct DispatchArtifact {
     pub excerpt: Option<String>,
 }
 
-/// One candidate in a [`DispatchSummary`]: the ranked `next` row plus the
+/// One candidate in a [`DispatchSummary`]: the ordered `next` row plus the
 /// targeted context a human/agent otherwise tends to fetch with several reads.
 #[derive(Debug, Clone, Serialize)]
 pub struct DispatchCandidate {
-    pub rank: usize,
     #[serde(rename = "ref")]
     pub reference: String,
     pub title: String,
@@ -199,7 +198,7 @@ pub struct DispatchCandidate {
     pub eligibility: String,
 }
 
-/// The top-ranked dispatch candidate and why it is the recommendation.
+/// The first dispatch candidate and why it is the recommendation.
 #[derive(Debug, Clone, Serialize)]
 pub struct DispatchRecommendation {
     #[serde(rename = "ref")]
@@ -335,8 +334,7 @@ pub struct LineageGraph {
     pub events: Vec<LineageEvent>,
 }
 
-const ORDER: &str =
-    " ORDER BY n.priority IS NULL, n.priority, n.sort_key IS NULL, n.sort_key, n.created_at, n.id";
+const ORDER: &str = " ORDER BY n.priority IS NULL, n.priority, n.created_at, n.id";
 
 /// Default dispatch-frontier size when a user-facing surface (`haven_next` over
 /// MCP or CLI) passes no explicit `limit`. Core [`Store::next`] itself stays
@@ -345,7 +343,7 @@ const ORDER: &str =
 /// same split as [`crate::store`]'s list reads (`DEFAULT_LIST_LIMIT`). A wide
 /// ready frontier on a mature graph would otherwise return an unbounded list and
 /// blow an agent's context budget; the orchestrator re-polls between batches, so
-/// the top of the ranked frontier is all it needs in one read (HV-194).
+/// the top of the priority-ordered frontier is all it needs in one read (HV-194).
 pub const DEFAULT_NEXT_LIMIT: i64 = 50;
 /// Default candidate count for the richer dispatch summary. This is lower than
 /// `next` because each candidate carries targeted detail.
@@ -432,24 +430,27 @@ fn dispatch_eligibility(owner: Option<OwnerKind>, scope: Option<&DispatchContext
 fn recommendation_reason(owner: Option<OwnerKind>, scope: Option<&DispatchContextItem>) -> String {
     match (owner, scope) {
         (Some(owner), Some(scope)) => format!(
-            "highest-ranked dispatchable item for owner {} under {}",
+            "first eligible item by priority, then creation order for owner {} under {}",
             owner.as_str(),
             scope.reference
         ),
         (Some(owner), None) => format!(
-            "highest-ranked dispatchable item for owner {}",
+            "first eligible item by priority, then creation order for owner {}",
             owner.as_str()
         ),
         (None, Some(scope)) => {
-            format!("highest-ranked dispatchable item under {}", scope.reference)
+            format!(
+                "first eligible item by priority, then creation order under {}",
+                scope.reference
+            )
         }
-        (None, None) => "highest-ranked dispatchable item".into(),
+        (None, None) => "first eligible item by priority, then creation order".into(),
     }
 }
 
 impl Store {
     /// `haven next`: committed, ready, not waiting, with no open dependency.
-    /// Highest priority band first, then `sort_key` (SPEC §1).
+    /// Highest priority band first, then creation time and ID (SPEC §1).
     pub fn next(
         &self,
         project: Option<&str>,
@@ -515,7 +516,7 @@ impl Store {
 
         let items = self.next_for_project(project_id, owner, Some(limit), scope_id)?;
         let mut candidates = Vec::with_capacity(items.len());
-        for (idx, item) in items.into_iter().enumerate() {
+        for item in items {
             let mut full = self.get_item(
                 Some(&key),
                 &item.reference,
@@ -531,7 +532,6 @@ impl Store {
                 .collect();
             let eligibility = dispatch_eligibility(owner, scope_item.as_ref());
             candidates.push(DispatchCandidate {
-                rank: idx + 1,
                 reference: full.reference,
                 title: full.title,
                 node_type: full.node_type,
@@ -1377,7 +1377,7 @@ mod tests {
     fn order_const_is_byte_frozen() {
         assert_eq!(
             ORDER,
-            " ORDER BY n.priority IS NULL, n.priority, n.sort_key IS NULL, n.sort_key, n.created_at, n.id"
+            " ORDER BY n.priority IS NULL, n.priority, n.created_at, n.id"
         );
     }
 }

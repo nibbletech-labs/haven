@@ -630,8 +630,6 @@ enum ItemCmd {
     Handoff(ItemHandoffArgs),
     /// Mark an item done: record evidence, set status, report what it unblocked.
     Complete(ItemCompleteArgs),
-    /// Fine-order an item before or after a sibling in the same priority band.
-    Rank(ItemRankArgs),
     /// Park one or more items without deleting them, emitting lineage.
     Archive {
         #[arg(required = true)]
@@ -955,20 +953,6 @@ struct ItemCompleteArgs {
 }
 
 #[derive(Args)]
-struct ItemRankArgs {
-    reference: String,
-    /// Place this item before the referenced item.
-    #[arg(long)]
-    before: Option<String>,
-    /// Place this item after the referenced item.
-    #[arg(long)]
-    after: Option<String>,
-    /// Why this fine-ordering decision is being made.
-    #[arg(long, alias = "reason")]
-    rationale: Option<String>,
-}
-
-#[derive(Args)]
 struct NextArgs {
     /// Explain why the dispatch queue is empty instead of returning items.
     #[arg(long)]
@@ -977,7 +961,7 @@ struct NextArgs {
     #[arg(long)]
     owner: Option<String>,
     /// Maximum number of dispatchable items to return (defaults to the top 50 of
-    /// the ranked frontier; pass a larger value for more).
+    /// the priority-ordered frontier; pass a larger value for more).
     #[arg(long)]
     limit: Option<i64>,
 }
@@ -1181,7 +1165,6 @@ fn corrective_for_unknown(words: &[String]) -> Option<String> {
         "assign" => with_tail("haven item assign"),
         "commit" => with_tail("haven item commit"),
         "uncommit" => with_tail("haven item uncommit"),
-        "rank" => with_tail("haven item rank"),
         _ => return None,
     };
     Some(tip)
@@ -1246,7 +1229,6 @@ fn guard_kind(cmd: &Command) -> GuardKind {
             | ItemCmd::Assign(_)
             | ItemCmd::Handoff(_)
             | ItemCmd::Complete(_)
-            | ItemCmd::Rank(_)
             | ItemCmd::Archive { .. }
             | ItemCmd::Reopen { .. } => GuardKind::Mutation,
         },
@@ -3000,7 +2982,6 @@ fn item_op_name(cmd: &ItemCmd) -> &'static str {
         ItemCmd::Assign(_) => "item.assign",
         ItemCmd::Handoff(_) => "item.handoff",
         ItemCmd::Complete(_) => "item.complete",
-        ItemCmd::Rank(_) => "item.rank",
         ItemCmd::Archive { .. } => "item.archive",
         ItemCmd::Reopen { .. } => "item.reopen",
         ItemCmd::Extref { cmd } => match cmd {
@@ -3243,13 +3224,6 @@ fn cmd_item(project: Option<&str>, cmd: &ItemCmd) -> Result<Output> {
                 input,
             )?)?))
         }
-        ItemCmd::Rank(a) => Ok(Output::Item(s.rank_item_with_rationale(
-            project,
-            &a.reference,
-            a.before.as_deref(),
-            a.after.as_deref(),
-            a.rationale.as_deref(),
-        )?)),
         ItemCmd::Archive {
             references,
             rationale,

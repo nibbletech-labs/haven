@@ -1,6 +1,6 @@
 //! End-to-end service-layer tests over an in-memory store: item lifecycle, the
 //! two axes, the four edge layers (+ cycle guards), evolve/lineage, `next`,
-//! search, the resolver, and rank ordering.
+//! search, the resolver, and queue ordering.
 
 use super::*;
 use crate::model::*;
@@ -225,13 +225,6 @@ fn anchors_are_living_docs_not_dispatch_work() {
         )
         .unwrap();
     assert!(!stale.iter().any(|i| i.reference == anchor.reference));
-
-    assert!(s
-        .rank_item(None, &anchor.reference, None, Some(&work.reference))
-        .is_err());
-    assert!(s
-        .rank_item(None, &work.reference, None, Some(&anchor.reference))
-        .is_err());
 
     let artifact = s
         .add_artifact(
@@ -1943,173 +1936,99 @@ fn search_sanitizes_ref_and_operator_queries() {
 }
 
 #[test]
-fn rank_orders_relative_to_siblings() {
+fn queues_use_priority_then_age_and_id_while_dependencies_gate_dispatch() {
     let s = store();
-    let a = s
-        .add_item(
-            None,
-            NewItem {
-                title: "A".into(),
-                commit: true,
-                priority: Some(1),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-    let b = s
-        .add_item(
-            None,
-            NewItem {
-                title: "B".into(),
-                commit: true,
-                priority: Some(1),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-    let c = s
-        .add_item(
-            None,
-            NewItem {
-                title: "C".into(),
-                commit: true,
-                priority: Some(1),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-
-    // Establish an order: rank B after A, C after B.
-    s.rank_item(None, &b.reference, None, Some(&a.reference))
-        .unwrap();
-    s.rank_item(None, &c.reference, None, Some(&b.reference))
-        .unwrap();
-    let order = s
-        .list_items(
-            None,
-            &ItemFilter {
-                committed: Some(true),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-    let refs: Vec<&str> = order.iter().map(|i| i.reference.as_str()).collect();
+    let mut items = Vec::new();
+    // Deliberately create the newer P2 item first: ID cannot substitute for age.
+    for (title, priority, date) in [
+        ("Newer", Some(2), "2026-02-01"),
+        ("Older", Some(2), "2026-01-01"),
+        ("Same date", Some(2), "2026-01-01"),
+        ("Urgent", Some(0), "2026-03-01"),
+        ("No band", None, "2025-01-01"),
+    ] {
+        let item = s
+            .add_item(
+                None,
+                NewItem {
+                    title: title.into(),
+                    priority,
+                    commit: true,
+                    status: Some(Status::Ready),
+                    assign: Some(OwnerKind::Ai),
+                    done_looks_like: Some("delivered".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        s.conn
+            .execute(
+                "UPDATE nodes SET created_at=?1 WHERE id=?2",
+                rusqlite::params![date, item.id],
+            )
+            .unwrap();
+        items.push(item);
+    }
+    let expected = vec![
+        items[3].reference.clone(),
+        items[1].reference.clone(),
+        items[2].reference.clone(),
+        items[0].reference.clone(),
+        items[4].reference.clone(),
+    ];
+    let refs = |rows: Vec<Item>| rows.into_iter().map(|i| i.reference).collect::<Vec<_>>();
     assert_eq!(
-        refs,
-        vec![
-            a.reference.as_str(),
-            b.reference.as_str(),
-            c.reference.as_str()
-        ]
+        refs(s.list_items(None, &ItemFilter::default()).unwrap()),
+        expected
     );
-
-    // Move C before A.
-    s.rank_item(None, &c.reference, Some(&a.reference), None)
-        .unwrap();
-    let order = s
-        .list_items(
-            None,
-            &ItemFilter {
-                committed: Some(true),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-    let refs: Vec<&str> = order.iter().map(|i| i.reference.as_str()).collect();
+    assert_eq!(refs(s.project_graph(None, false).unwrap().nodes), expected);
     assert_eq!(
-        refs,
-        vec![
-            c.reference.as_str(),
-            a.reference.as_str(),
-            b.reference.as_str()
-        ]
+        refs(s.next(None, Some(OwnerKind::Ai), None).unwrap()),
+        expected
     );
-}
-
-#[test]
-fn rank_is_scoped_to_the_targets_band() {
-    let s = store();
-    // A band-0 item whose key sits "between" the band-1 items must not interfere.
-    let hi = s
-        .add_item(
-            None,
-            NewItem {
-                title: "urgent".into(),
-                commit: true,
-                priority: Some(0),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-    let a = s
-        .add_item(
-            None,
-            NewItem {
-                title: "A".into(),
-                commit: true,
-                priority: Some(1),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-    let b = s
-        .add_item(
-            None,
-            NewItem {
-                title: "B".into(),
-                commit: true,
-                priority: Some(1),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-    s.rank_item(None, &b.reference, None, Some(&a.reference))
-        .unwrap();
-    // Rank the band-0 item relative to itself-band peers is irrelevant; assert the
-    // band-1 order is purely a/b and the band-0 item leads by priority.
-    let order = s
-        .list_items(
-            None,
-            &ItemFilter {
-                committed: Some(true),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-    let refs: Vec<&str> = order.iter().map(|i| i.reference.as_str()).collect();
+    let prime = s.prime(None).unwrap();
     assert_eq!(
-        refs,
-        vec![
-            hi.reference.as_str(),
-            a.reference.as_str(),
-            b.reference.as_str()
-        ]
+        prime
+            .queue
+            .into_iter()
+            .map(|i| i.reference)
+            .collect::<Vec<_>>(),
+        expected
     );
-
-    // NULL-priority band: ranking among unprioritised items uses NULL-safe IS.
-    let x = add(&s, "X");
-    let y = add(&s, "Y");
-    s.rank_item(None, &y.reference, Some(&x.reference), None)
-        .unwrap(); // y before x
-    let ice = s
-        .list_items(
-            None,
-            &ItemFilter {
-                icebox: true,
-                ..Default::default()
-            },
-        )
+    let dispatch = s
+        .dispatch(None, Some(OwnerKind::Ai), Some(10), None, false)
         .unwrap();
-    let null_refs: Vec<&str> = ice
-        .iter()
-        .filter(|i| i.priority.is_none())
-        .map(|i| i.reference.as_str())
-        .collect();
-    let yi = null_refs.iter().position(|r| *r == y.reference).unwrap();
-    let xi = null_refs.iter().position(|r| *r == x.reference).unwrap();
-    assert!(
-        yi < xi,
-        "y should sort before x within the unprioritised band"
+    assert_eq!(
+        dispatch
+            .candidates
+            .iter()
+            .map(|i| i.reference.clone())
+            .collect::<Vec<_>>(),
+        expected
+    );
+    assert!(serde_json::to_value(dispatch).unwrap()["candidates"][0]
+        .get("rank")
+        .is_none());
+
+    // Highest priority is still ineligible until its prerequisite completes.
+    s.depend(None, &items[3].reference, &items[0].reference, false)
+        .unwrap();
+    assert_eq!(
+        refs(s.next(None, Some(OwnerKind::Ai), None).unwrap()),
+        expected[1..]
+    );
+    s.update_item(
+        None,
+        &items[0].reference,
+        ItemUpdate {
+            status: Some(Status::Done),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        s.next(None, Some(OwnerKind::Ai), None).unwrap()[0].reference,
+        items[3].reference
     );
 }
 
@@ -2154,52 +2073,6 @@ fn priority_rationale_records_update_lineage_context() {
     assert_eq!(lineage[0].context["operation"], "priority_update");
     assert_eq!(lineage[0].context["old_priority"], 2);
     assert_eq!(lineage[0].context["new_priority"], 1);
-}
-
-#[test]
-fn rank_rationale_records_old_and_new_sort_context() {
-    let s = store();
-    let a = s
-        .add_item(
-            None,
-            NewItem {
-                title: "A".into(),
-                commit: true,
-                priority: Some(1),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-    let b = s
-        .add_item(
-            None,
-            NewItem {
-                title: "B".into(),
-                commit: true,
-                priority: Some(1),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-
-    s.rank_item_with_rationale(
-        None,
-        &b.reference,
-        Some(&a.reference),
-        None,
-        Some("B is a release blocker"),
-    )
-    .unwrap();
-
-    let item = s.get_item(None, &b.reference, &[Include::Lineage]).unwrap();
-    let event = &item.lineage.as_ref().unwrap()[0];
-    assert_eq!(event.event_type, EventType::Update);
-    assert_eq!(event.rationale.as_deref(), Some("B is a release blocker"));
-    assert_eq!(event.context["operation"], "rank");
-    assert_eq!(event.context["placement"], "before");
-    assert_eq!(event.context["target"], a.reference);
-    assert_eq!(event.context["new_priority"], 1);
-    assert!(event.context.get("new_sort_key").is_some());
 }
 
 #[test]

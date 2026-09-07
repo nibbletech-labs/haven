@@ -22,6 +22,8 @@ const MIGRATION_006: &str = include_str!("../../../migrations/006_drop_owner_eli
 const MIGRATION_007: &str = include_str!("../../../migrations/007_context_pack_role.sql");
 const MIGRATION_008: &str = include_str!("../../../migrations/008_project_lifecycle.sql");
 
+const MIGRATION_009: &str = include_str!("../../../migrations/009_drop_sort_key.sql");
+
 /// The ordered migration SQL, embedded at compile time. Adding a migration here
 /// is the only edit needed: the supported schema version is this list's length,
 /// so it can never drift from `migrations()` (no hand-bumped constant to forget).
@@ -34,6 +36,7 @@ const MIGRATION_SQL: &[&str] = &[
     MIGRATION_006,
     MIGRATION_007,
     MIGRATION_008,
+    MIGRATION_009,
 ];
 
 /// Highest `user_version` this binary can open, derived from `MIGRATION_SQL`.
@@ -122,7 +125,116 @@ mod tests {
         // adding a migration forces a one-line edit here, a moment to confirm
         // intent (and to bump the release/version if needed).
         assert_eq!(latest_schema_migration(), MIGRATION_SQL.len() as i64);
-        assert_eq!(latest_schema_migration(), 8);
+        assert_eq!(latest_schema_migration(), 9);
+    }
+
+    #[test]
+    fn migration_009_retires_rank_without_losing_graph_or_history() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure(&conn, false).unwrap();
+        Migrations::new(MIGRATION_SQL[..8].iter().copied().map(M::up).collect())
+            .to_latest(&mut conn)
+            .unwrap();
+        conn.execute_batch(
+            r#"
+            INSERT INTO projects (id, public_id, key, ref_prefix, title, client_id)
+            VALUES (1, 'project', 'haven', 'HV', 'Haven', 'project-client');
+            INSERT INTO nodes (id, public_id, project_id, ref, title, body, type,
+                status, owner_kind, assignee, wait_state, committed, priority, sort_key,
+                metadata, created_at, updated_at, archived_at, client_id, revision,
+                sync_state, sync_attempts, last_sync_error, last_synced_at,
+                done_looks_like, why, due_at)
+            VALUES (10, 'node', 1, 'HV-1', 'Needle', 'body', 'phase', 'ready',
+                'ai', 'builder', 'on_human', 1, 2, 'z', '{"keep":true}',
+                '2026-01-01', '2026-02-01', NULL, 'node-client', 7,
+                'failed', 2, 'retry', '2026-01-02', 'acceptance', 'reason', '2026-09-30');
+            INSERT INTO nodes (id, public_id, project_id, ref, title, client_id, sort_key)
+            VALUES (20, 'child', 1, 'HV-2', 'Child', 'child-client', 'a');
+            INSERT INTO decomposition_edges (parent_id, child_id, client_id) VALUES (10, 20, 'd');
+            INSERT INTO dependency_edges (node_id, depends_on_id, client_id) VALUES (20, 10, 'p');
+            INSERT INTO grouping_edges (group_id, member_id, client_id) VALUES (10, 20, 'g');
+            INSERT INTO lineage_events (id, public_id, project_id, event_type, rationale, context, client_id)
+            VALUES (1, 'event', 1, 'update', 'Historical preference', '{"operation":"rank","new_sort_key":"z"}', 'event-client');
+            INSERT INTO lineage_edges (event_id, from_node_id, to_node_id) VALUES (1, 10, 10);
+            INSERT INTO artifacts (public_id, node_id, role, kind, path, client_id)
+            VALUES ('artifact', 10, 'spec', 'file', 'items/HV-1/spec.md', 'artifact-client');
+            "#,
+        ).unwrap();
+
+        // Compare all surviving columns and linked rows, not just record counts.
+        let columns: Vec<String> = conn
+            .prepare("PRAGMA table_info(nodes)")
+            .unwrap()
+            .query_map([], |r| r.get::<_, String>(1))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .filter(|name| name != "sort_key")
+            .collect();
+        let node_query = format!("SELECT {} FROM nodes ORDER BY id", columns.join(","));
+        let snapshot = |conn: &Connection, sql: &str| {
+            let mut stmt = conn.prepare(sql).unwrap();
+            let width = stmt.column_count();
+            stmt.query_map([], |row| {
+                (0..width)
+                    .map(|i| row.get::<_, rusqlite::types::Value>(i))
+                    .collect::<rusqlite::Result<Vec<_>>>()
+            })
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap()
+        };
+        let queries = [
+            node_query.as_str(),
+            "SELECT * FROM projects",
+            "SELECT * FROM decomposition_edges",
+            "SELECT * FROM dependency_edges",
+            "SELECT * FROM grouping_edges",
+            "SELECT * FROM lineage_events",
+            "SELECT * FROM lineage_edges",
+            "SELECT * FROM artifacts",
+        ];
+        let before: Vec<_> = queries.iter().map(|q| snapshot(&conn, q)).collect();
+        migrations().to_latest(&mut conn).unwrap();
+        assert!(conn.prepare("SELECT sort_key FROM nodes").is_err());
+        let after: Vec<_> = queries.iter().map(|q| snapshot(&conn, q)).collect();
+        assert_eq!(before, after);
+        assert_eq!(
+            conn.query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |r| r
+                .get::<_, i64>(
+                0
+            ))
+            .unwrap(),
+            0
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT count(*) FROM node_fts WHERE node_fts MATCH 'Needle'",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+            1
+        );
+        conn.execute("UPDATE nodes SET title='Replacement' WHERE id=10", [])
+            .unwrap();
+        assert_eq!(
+            conn.query_row(
+                "SELECT count(*) FROM node_fts WHERE node_fts MATCH 'Replacement'",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+            1
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT count(*) FROM node_fts WHERE node_fts MATCH 'Needle'",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+            0
+        );
     }
 
     /// HV-112: migration 008 adds the four project-lifecycle columns IN PLACE (no
@@ -163,12 +275,13 @@ mod tests {
         )
         .unwrap();
 
-        // Migrate the SAME connection to latest (runs 008, the in-place ADD COLUMNs).
-        migrations().to_latest(&mut conn).unwrap();
+        // Pin this historical test to migration 008.
+        Migrations::new(MIGRATION_SQL[..8].iter().copied().map(M::up).collect())
+            .to_latest(&mut conn)
+            .unwrap();
         let v8: i64 = conn
             .pragma_query_value(None, "user_version", |r| r.get(0))
             .unwrap();
-        assert_eq!(v8, latest_schema_migration());
         assert_eq!(v8, 8);
 
         // The existing row gained the four columns with the correct defaults.
