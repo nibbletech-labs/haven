@@ -388,6 +388,80 @@ fn anchors_stay_out_of_the_icebox_and_inbox() {
 }
 
 #[test]
+fn completed_floaters_leave_the_icebox_and_inbox() {
+    // HV-324: completing an uncommitted item never flips `committed`, so
+    // without the `done` exclusion finished work stays in the triage queue.
+    let s = store();
+    let floater = s
+        .add_item(
+            None,
+            NewItem {
+                title: "Captured, then finished".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let still_open = s
+        .add_item(
+            None,
+            NewItem {
+                title: "Captured, still open".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    for filter in [
+        ItemFilter {
+            icebox: true,
+            ..Default::default()
+        },
+        ItemFilter {
+            inbox: true,
+            ..Default::default()
+        },
+    ] {
+        let refs: Vec<String> = s
+            .list_items(None, &filter)
+            .unwrap()
+            .into_iter()
+            .map(|i| i.reference)
+            .collect();
+        assert!(refs.contains(&floater.reference), "before: {refs:?}");
+        assert!(refs.contains(&still_open.reference), "before: {refs:?}");
+    }
+
+    s.complete_item(None, &floater.reference, CompleteInput::default())
+        .unwrap();
+
+    for filter in [
+        ItemFilter {
+            icebox: true,
+            ..Default::default()
+        },
+        ItemFilter {
+            inbox: true,
+            ..Default::default()
+        },
+    ] {
+        let refs: Vec<String> = s
+            .list_items(None, &filter)
+            .unwrap()
+            .into_iter()
+            .map(|i| i.reference)
+            .collect();
+        assert!(
+            !refs.contains(&floater.reference),
+            "done item stayed in a triage view: {refs:?}"
+        );
+        assert!(
+            refs.contains(&still_open.reference),
+            "an open floater must still show: {refs:?}"
+        );
+    }
+}
+
+#[test]
 fn batch_commit_uncommit_archive_validate_refs_first() {
     let s = store();
     add(&s, "A"); // HV-1

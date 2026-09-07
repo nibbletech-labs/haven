@@ -231,12 +231,14 @@ pub struct ItemFilter {
     pub node_type: Option<NodeType>,
     pub owner: Option<OwnerKind>,
     pub committed: Option<bool>,
-    /// `icebox` view: committed = 0 and not archived/superseded. Excludes
-    /// anchors — they are living docs, never triage fodder (HV-320).
+    /// `icebox` view: uncommitted work still in play — committed = 0 and not
+    /// archived/superseded/done. Excludes anchors: they are living docs, never
+    /// triage fodder (HV-320). Excludes `done`: finished work is not a floater
+    /// (HV-324).
     pub icebox: bool,
     /// `inbox` view: the icebox AND `done_looks_like IS NULL` — untriaged
     /// floaters with no acceptance yet. A composable subset of `icebox`, and
-    /// anchor-free for the same reason.
+    /// anchor- and done-free for the same reasons.
     pub inbox: bool,
     pub group: Option<String>,
     /// Items parked on a specific wait-state — answers "what's waiting on me?"
@@ -597,14 +599,20 @@ impl Store {
         // predicate — so without this they sit in the triage queue forever and
         // can never be triaged out. Matches the `type <> 'anchor'` exclusions
         // already on `next`, `next --explain`, staleness and `unblocked`.
+        //
+        // HV-324: these two views also drop `done`. Elsewhere "dead" means
+        // archived/superseded and `done` counts as live — right for a status
+        // listing, wrong here: an item completed while still uncommitted is
+        // finished work, not a floater awaiting triage. The wider `dead`
+        // definition is deliberately left alone.
         if filter.icebox {
             sql.push_str(
-                " AND n.type <> 'anchor' AND n.committed = 0 AND n.status NOT IN ('archived','superseded')",
+                " AND n.type <> 'anchor' AND n.committed = 0 AND n.status NOT IN ('archived','superseded','done')",
             );
         }
         if filter.inbox {
             sql.push_str(
-                " AND n.type <> 'anchor' AND n.committed = 0 AND n.status NOT IN ('archived','superseded') AND n.done_looks_like IS NULL",
+                " AND n.type <> 'anchor' AND n.committed = 0 AND n.status NOT IN ('archived','superseded','done') AND n.done_looks_like IS NULL",
             );
         }
         if let Some(wait) = filter.wait {
