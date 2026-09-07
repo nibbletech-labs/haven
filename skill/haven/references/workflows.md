@@ -242,6 +242,10 @@ Y", or similar.
   milestone.
 - `phase` when the group is an internal slice, preparation batch, or sequencing
   step that is not itself a release.
+- **Never `anchor`.** It is also a container type, so it looks available — but it
+  is reserved for living project docs, and the store *refuses* to complete or
+  archive one while artifacts hang off it (workflow 12). A finished programme of
+  work typed `anchor` cannot be closed.
 
 ```bash
 haven -p <P> item add "v1 auth hardening" --type release
@@ -488,7 +492,22 @@ path?*
 
 **Heuristics:**
 - **Anchors are shelving, not work.** Leave them uncommitted and out of the
-  status lifecycle — they never dispatch, never complete.
+  status lifecycle — they never dispatch, never complete. This is **enforced**,
+  not just advised: `item complete` / `item archive` on an anchor that carries
+  artifacts fails with `cannot complete an artifact-bearing anchor; move or
+  remove its artifacts first`.
+- **Hit that error? The item is mistyped, not stuck.** You only try to complete
+  something you think is work — so it was never an anchor. `anchor` is *not* the
+  generic container type; `release`/`phase`/`gate` are (workflow 5). Retype and
+  close; the artifacts stay attached where they are:
+  ```bash
+  haven -p <P> item update HV-50 --type phase
+  haven -p <P> item complete HV-50 --evidence "…"
+  ```
+  Don't move the docs off onto a child to satisfy the rule — that leaves an empty
+  container and a link to follow. Only split artifacts out if some genuinely are
+  living reference that outlives the work, in which case they go to a real anchor
+  and the rest gets retyped.
 - **Grey zone defaults to Haven.** A doc an agent uses mid-task but no script
   reads (a house-style guide, a prompt scrapbook) goes in Haven; repo docs are
   for what a stranger cloning the repo needs to build and understand the code.

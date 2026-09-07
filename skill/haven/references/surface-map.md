@@ -24,7 +24,9 @@ values error.
 
 - **Node type** (`--type`): `task` (default), `code`, `research`, `data`,
   `design`, `admin`, `release`, `phase`, `gate`, `anchor`. `release`/`phase`/
-  `gate` are container nodes (group targets); `anchor` is for living project docs.
+  `gate` are container nodes (group targets); `anchor` is for living project docs
+  — it owns a subtree too, but it is **not** a work container: an anchor carrying
+  artifacts refuses `item complete` and `item archive`.
 - **Status** (`--status`): `discovery` (default) → `definition` → `ready` →
   `in_progress` → `done`, plus `blocked`, `superseded`, `archived`.
 - **Owner — assignment** (`--to` / `--assign`, stored `owner_kind`): `human`, `ai`

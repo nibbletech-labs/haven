@@ -87,7 +87,9 @@ The mistakes that actually bite — internalise these:
   waiting / owner-mismatch). Never fabricate work.
 - **Multi-item delivery needs a container.** "Ship these" / "this release" →
   create or reuse a `release`/`phase` node, group the members, and run the
-  shared-context check before dispatch — the full playbook is workflow 5.
+  shared-context check before dispatch — the full playbook is workflow 5. **Not
+  `anchor`:** it is a container type too, but it is reserved for living docs and
+  the store refuses to complete or archive one while artifacts hang off it.
 - **Handoff and complete are atomic tools, not recipes.** Use `item handoff` /
   `haven_handoff` and `item complete` / `haven_complete_item` — don't hand-assemble
   assign + update + add_artifact (you'll do it inconsistently).
@@ -130,7 +132,10 @@ into `body`/`why` for lack of anywhere else — don't: register an artifact
 **Project-level documents belong in the store too.** Vision, architecture,
 decision, and style docs are artifacts (`--role vision|design|decision|research|source`)
 on long-lived **anchor nodes** (`--type anchor`, e.g. "Project X — vision &
-architecture") — not loose repo markdown. Discover them with `haven docs` /
+architecture") — not loose repo markdown. An anchor is a *shelf*, never a unit of
+work: it is deliberately outside the status lifecycle, and the store refuses to
+complete or archive one while artifacts hang off it. Reach for `release`/`phase`/
+`gate` when you want a container for work. Discover them with `haven docs` /
 `haven_docs`; don't hard-code a magic ref. They then sync, lazy-download, and back
 every item's `why` trace like all other content. **The placement test:** if a
 script, build step, or pipeline reads the file by path, it stays in the repo; if
