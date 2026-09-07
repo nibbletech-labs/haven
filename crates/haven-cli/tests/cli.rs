@@ -1428,8 +1428,7 @@ fn docs_lists_anchor_artifacts_without_dispatching_them() {
     assert_eq!(docs[0]["ref"], "HV-1");
     assert_eq!(docs[0]["type"], "anchor");
     assert_eq!(docs[0]["artifacts"][0]["role"], "vision");
-    assert!(h
-        .json(&["next", "--owner", "ai"])
+    assert!(h.json(&["next", "--owner", "ai"])["items"]
         .as_array()
         .unwrap()
         .is_empty());
@@ -1736,8 +1735,8 @@ fn full_lifecycle() {
 
     // next returns only the dispatchable item.
     let next = h.json(&["next"]);
-    assert_eq!(next.as_array().unwrap().len(), 1);
-    assert_eq!(next[0]["ref"], "HV-1");
+    assert_eq!(next["items"].as_array().unwrap().len(), 1);
+    assert_eq!(next["items"][0]["ref"], "HV-1");
 
     let explain = h.json(&["next", "--explain", "--owner", "human"]);
     assert_eq!(explain["dispatchable"], 0);
@@ -3050,15 +3049,20 @@ fn next_advertises_orchestrate_family_on_run_shaped_frontier() {
         "default JSON must carry the advisory: {json}",
     );
 
-    // Four leaves → bare items array, no advisory, no line.
+    // Four leaves → same envelope, advisory null. The wire shape must NOT depend
+    // on how much work happens to be in the project.
     let h = Haven::new();
     seed(&h, 4);
     assert!(!h.text(&["next", "--pretty"]).contains(ADVISORY));
     let json = h.json(&["next"]);
     assert_eq!(
-        json.as_array().unwrap().len(),
+        json["items"].as_array().unwrap().len(),
         4,
-        "below threshold next stays a bare items array: {json}",
+        "below threshold next keeps the {{items, advisory}} envelope: {json}",
+    );
+    assert!(
+        json["advisory"].is_null(),
+        "below threshold the advisory is null, not absent: {json}",
     );
 }
 

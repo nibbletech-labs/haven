@@ -800,14 +800,13 @@ fn dispatch_tool(store: &Store, name: &str, a: &Value) -> Result<Value> {
                 opt_i64(a, "limit").or(Some(DEFAULT_NEXT_LIMIT)),
             )?;
             let rows = to_value(items.iter().map(McpItem::compact).collect::<Vec<_>>())?;
-            // HV-265: on a run-shaped ai frontier, wrap the (unchanged) items array
-            // with an `advisory` sibling — pointing at the orchestrate family — so
-            // an orchestrator does not hand-roll a dispatch loop. Below the
-            // threshold the wire shape stays the bare items array (HV-153).
-            match store.orchestrate_advisory(project)? {
-                Some(advisory) => Ok(json!({ "items": rows, "advisory": advisory })),
-                None => Ok(rows),
-            }
+            // HV-265: on a run-shaped ai frontier an `advisory` sibling points at
+            // the orchestrate family, so an orchestrator does not hand-roll a
+            // dispatch loop. The envelope is unconditional — `{items, advisory}`
+            // every time, advisory null when there is nothing to say — so the wire
+            // shape never depends on the data in the project being queried.
+            let advisory = store.orchestrate_advisory(project)?;
+            Ok(json!({ "items": rows, "advisory": advisory }))
         }
         "haven_dispatch" => to_value(store.dispatch(
             project,
@@ -1495,15 +1494,12 @@ mod tests {
         serde_json::from_str(text).unwrap()
     }
 
-    /// The `haven_next` items array, read from either wire shape: the bare items
-    /// array below the run-shaped threshold, or the `{ items, advisory }` wrapper
-    /// at/above it (HV-265). Tests about the frontier itself use this so the
-    /// advisory wrapper doesn't perturb them.
+    /// The `haven_next` items array. The wire shape is unconditionally
+    /// `{ items, advisory }`, so this is just the `items` field.
     fn next_items(payload: &Value) -> Vec<Value> {
         payload
             .get("items")
             .and_then(Value::as_array)
-            .or_else(|| payload.as_array())
             .cloned()
             .unwrap_or_default()
     }
@@ -1527,7 +1523,7 @@ mod tests {
     #[test]
     fn telemetry_line_present_and_well_formed_for_a_known_call() {
         let s = store();
-        // A bare-array tool (haven_next) — HV-153 left its wire shape unchanged, so
+        // haven_next returns an object envelope; telemetry must handle it, so
         // the telemetry line is the ONLY place its resolved project surfaces.
         let line = call_with_telemetry(&s, "haven_next", json!({ "project": "haven" }));
         let v = parse_line(&line);
@@ -1744,8 +1740,8 @@ mod tests {
         assert_eq!(out[0]["result"]["isError"], false);
 
         let next = tool_payload(&out[1]);
-        assert_eq!(next.as_array().unwrap().len(), 1);
-        assert_eq!(next[0]["ref"], "HV-1");
+        assert_eq!(next_items(&next).len(), 1);
+        assert_eq!(next_items(&next)[0]["ref"], "HV-1");
 
         let dispatch = tool_payload(&out[2]);
         assert_eq!(dispatch["project"], "haven");
@@ -1796,7 +1792,8 @@ mod tests {
     /// HV-265: on a run-shaped frontier (>= ORCHESTRATE_ADVISORY_THRESHOLD
     /// committed-ready ai leaves) `haven_next` wraps its items array with an
     /// `advisory` field and `haven_prime` advertises the orchestrate family;
-    /// below the threshold `haven_next` stays a bare items array (no advisory).
+    /// below the threshold the same `{ items, advisory }` envelope carries a null
+    /// advisory — the wire shape never varies with the data.
     #[test]
     fn next_and_prime_advertise_orchestrate_family_on_run_shaped_frontier() {
         let s = store();
@@ -1856,13 +1853,13 @@ mod tests {
         let out = session(&s, &calls);
         let next = tool_payload(out.last().unwrap());
         assert_eq!(
-            next.as_array().unwrap().len(),
+            next_items(&next).len(),
             ORCHESTRATE_ADVISORY_THRESHOLD - 1,
-            "below threshold next stays a bare items array",
+            "below threshold next keeps the {{items, advisory}} envelope",
         );
         assert!(
-            next.get("advisory").is_none(),
-            "no advisory below threshold: {next}",
+            next["advisory"].is_null(),
+            "below threshold the advisory is null, not absent: {next}",
         );
     }
 
@@ -1904,7 +1901,7 @@ mod tests {
         assert_eq!(tool_payload(&out[0])["due_at"], "2026-07-01");
 
         // 2: next's compact row omits due_at entirely.
-        let next = tool_payload(&out[1]);
+        let next = next_items(&tool_payload(&out[1]));
         assert_eq!(next[0]["ref"], "HV-1");
         assert!(
             next[0].get("due_at").is_none(),
@@ -1969,12 +1966,12 @@ mod tests {
         //    plan->run contract relies on); the unassigned one is not.
         let ai_next = tool_payload(&out[2]);
         assert_eq!(out[2]["result"]["isError"], false);
-        assert_eq!(ai_next.as_array().unwrap().len(), 1);
-        assert_eq!(ai_next[0]["ref"], "HV-1");
+        assert_eq!(next_items(&ai_next).len(), 1);
+        assert_eq!(next_items(&ai_next)[0]["ref"], "HV-1");
         // 4: never to human.
-        assert!(tool_payload(&out[3]).as_array().unwrap().is_empty());
+        assert!(next_items(&tool_payload(&out[3])).is_empty());
         // 5: bare next ignores ownership — both ready leaves surface.
-        assert_eq!(tool_payload(&out[4]).as_array().unwrap().len(), 2);
+        assert_eq!(next_items(&tool_payload(&out[4])).len(), 2);
         // 6: full get carries owner_kind and has no owner_eligible field at all.
         let full = tool_payload(&out[5]);
         assert_eq!(full["owner_kind"], "ai");
@@ -2342,7 +2339,7 @@ mod tests {
         assert_eq!(docs[0]["ref"], "HV-1");
         assert_eq!(docs[0]["type"], "anchor");
         assert_eq!(docs[0]["artifacts"][0]["role"], "vision");
-        assert!(tool_payload(&out[3]).as_array().unwrap().is_empty());
+        assert!(next_items(&tool_payload(&out[3])).is_empty());
     }
 
     #[test]
@@ -2943,13 +2940,8 @@ mod tests {
         let gleaf = nodes.iter().find(|n| n["ref"] == "HV-2").unwrap();
         assert_eq!(gleaf["context_pack"]["container"], "HV-1");
         // next stays lean — no pointer on the compact dispatch view.
-        let next = tool_payload(&out[8]);
-        let nitem = next
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|n| n["ref"] == "HV-2")
-            .unwrap();
+        let next = next_items(&tool_payload(&out[8]));
+        let nitem = next.iter().find(|n| n["ref"] == "HV-2").unwrap();
         assert!(
             nitem.get("context_pack").is_none(),
             "compact dispatch view (next) must stay lean"
@@ -3163,8 +3155,7 @@ mod tests {
                 }}),
             ],
         );
-        let next = tool_payload(&out[1]);
-        let arr = next.as_array().unwrap();
+        let arr = next_items(&tool_payload(&out[1]));
         assert_eq!(arr.len(), 1);
         assert_eq!(arr[0]["ref"], "HV-1");
         assert!(arr[0].get("body").is_none());

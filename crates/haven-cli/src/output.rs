@@ -15,9 +15,12 @@ pub enum Output {
     AddOutcome(AddOutcome),
     Items(Vec<Item>),
     /// `haven next`: the dispatch frontier plus the optional orchestrate-family
-    /// advisory (HV-265). Default JSON stays a bare items array unless the
-    /// advisory is present, when it becomes `{ items, advisory }` (parity with
-    /// MCP `haven_next`); `--pretty` prints the table then the advisory line.
+    /// advisory (HV-265). Default JSON is ALWAYS `{ items, advisory }`, with a
+    /// null advisory when there is nothing to say (parity with MCP `haven_next`);
+    /// `--pretty` prints the table then the advisory line. The shape is
+    /// unconditional on purpose: it used to collapse to a bare array below the
+    /// advisory threshold, so the same command returned different shapes for
+    /// different projects and a consumer written against one broke on the next.
     NextFrontier {
         items: Vec<Item>,
         advisory: Option<String>,
@@ -57,10 +60,9 @@ impl Output {
             Output::Item(i) => serde_json::to_value(i).unwrap_or(Value::Null),
             Output::AddOutcome(o) => serde_json::to_value(o).unwrap_or(Value::Null),
             Output::Items(v) => serde_json::to_value(v).unwrap_or(Value::Null),
-            Output::NextFrontier { items, advisory } => match advisory {
-                Some(advisory) => serde_json::json!({ "items": items, "advisory": advisory }),
-                None => serde_json::to_value(items).unwrap_or(Value::Null),
-            },
+            Output::NextFrontier { items, advisory } => {
+                serde_json::json!({ "items": items, "advisory": advisory })
+            }
             Output::Project(p) => serde_json::to_value(p).unwrap_or(Value::Null),
             Output::Projects(v) => serde_json::to_value(v).unwrap_or(Value::Null),
             Output::Json(v) => v.clone(),
