@@ -231,10 +231,12 @@ pub struct ItemFilter {
     pub node_type: Option<NodeType>,
     pub owner: Option<OwnerKind>,
     pub committed: Option<bool>,
-    /// `icebox` view: committed = 0 and not archived/superseded.
+    /// `icebox` view: committed = 0 and not archived/superseded. Excludes
+    /// anchors — they are living docs, never triage fodder (HV-320).
     pub icebox: bool,
     /// `inbox` view: the icebox AND `done_looks_like IS NULL` — untriaged
-    /// floaters with no acceptance yet. A composable subset of `icebox`.
+    /// floaters with no acceptance yet. A composable subset of `icebox`, and
+    /// anchor-free for the same reason.
     pub inbox: bool,
     pub group: Option<String>,
     /// Items parked on a specific wait-state — answers "what's waiting on me?"
@@ -590,12 +592,19 @@ impl Store {
             sql.push_str(&format!(" AND n.committed = ?{}", args.len() + 1));
             args.push(Box::new(committed as i64));
         }
+        // HV-320: anchors are shelving, not work. They are uncommitted by
+        // convention and carry no acceptance by nature — exactly the inbox
+        // predicate — so without this they sit in the triage queue forever and
+        // can never be triaged out. Matches the `type <> 'anchor'` exclusions
+        // already on `next`, `next --explain`, staleness and `unblocked`.
         if filter.icebox {
-            sql.push_str(" AND n.committed = 0 AND n.status NOT IN ('archived','superseded')");
+            sql.push_str(
+                " AND n.type <> 'anchor' AND n.committed = 0 AND n.status NOT IN ('archived','superseded')",
+            );
         }
         if filter.inbox {
             sql.push_str(
-                " AND n.committed = 0 AND n.status NOT IN ('archived','superseded') AND n.done_looks_like IS NULL",
+                " AND n.type <> 'anchor' AND n.committed = 0 AND n.status NOT IN ('archived','superseded') AND n.done_looks_like IS NULL",
             );
         }
         if let Some(wait) = filter.wait {
@@ -659,6 +668,19 @@ impl Store {
         // refuse clearing acceptance on an already-`ready` item. The check fires
         // only on those two moves, so unrelated edits to a grandfathered
         // ready-without-acceptance item are left untouched.
+        // HV-321: `complete`/`archive` refuse to close an artifact-bearing
+        // anchor, but `update --status done|archived` reached the same terminal
+        // state unguarded. Mirror exactly those two transitions — `superseded`
+        // stays open, since `evolve` legitimately supersedes a living-doc anchor.
+        if matches!(upd.status, Some(Status::Done) | Some(Status::Archived)) {
+            let op = if matches!(upd.status, Some(Status::Done)) {
+                "complete"
+            } else {
+                "archive"
+            };
+            self.refuse_artifact_bearing_anchor(node_id, op)?;
+        }
+
         let setting_ready = matches!(upd.status, Some(Status::Ready));
         let clearing_done = upd
             .done_looks_like

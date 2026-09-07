@@ -274,6 +274,120 @@ fn anchors_are_living_docs_not_dispatch_work() {
 }
 
 #[test]
+fn artifact_bearing_anchor_cannot_be_closed_via_plain_update() {
+    // HV-321: `complete`/`archive` refuse it, so `update --status done` must
+    // too — otherwise the guard only protects the ergonomic path.
+    let dir = tempfile::tempdir().unwrap();
+    let s = Store::open_in_memory_at(dir.path()).unwrap();
+    s.add_project("haven", Some("HV"), "Haven", None).unwrap();
+    s.use_project("haven").unwrap();
+
+    let anchor = s
+        .add_item(
+            None,
+            NewItem {
+                title: "Haven docs".into(),
+                node_type: Some(NodeType::Anchor),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    s.add_artifact(
+        None,
+        &anchor.reference,
+        NewArtifact {
+            role: ArtifactRole::Vision,
+            kind: ArtifactKind::File,
+            content: Some("Project vision".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    for status in [Status::Done, Status::Archived] {
+        let err = s
+            .update_item(
+                None,
+                &anchor.reference,
+                ItemUpdate {
+                    status: Some(status),
+                    ..Default::default()
+                },
+            )
+            .unwrap_err();
+        assert_eq!(err.code(), "invalid");
+        assert!(err.to_string().contains("artifact-bearing anchor"));
+    }
+
+    // `superseded` stays open — `evolve` legitimately supersedes an anchor.
+    assert_eq!(
+        s.update_item(
+            None,
+            &anchor.reference,
+            ItemUpdate {
+                status: Some(Status::Superseded),
+                ..Default::default()
+            },
+        )
+        .unwrap()
+        .status,
+        Status::Superseded
+    );
+}
+
+#[test]
+fn anchors_stay_out_of_the_icebox_and_inbox() {
+    // HV-320: an anchor is uncommitted with no acceptance — exactly the inbox
+    // predicate — so without the type exclusion it can never be triaged out.
+    let s = store();
+    let anchor = s
+        .add_item(
+            None,
+            NewItem {
+                title: "Project docs".into(),
+                node_type: Some(NodeType::Anchor),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let floater = s
+        .add_item(
+            None,
+            NewItem {
+                title: "Some untriaged idea".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    for filter in [
+        ItemFilter {
+            icebox: true,
+            ..Default::default()
+        },
+        ItemFilter {
+            inbox: true,
+            ..Default::default()
+        },
+    ] {
+        let refs: Vec<String> = s
+            .list_items(None, &filter)
+            .unwrap()
+            .into_iter()
+            .map(|i| i.reference)
+            .collect();
+        assert!(
+            refs.contains(&floater.reference),
+            "a real floater must still show: {refs:?}"
+        );
+        assert!(
+            !refs.contains(&anchor.reference),
+            "anchor leaked into a triage view: {refs:?}"
+        );
+    }
+}
+
+#[test]
 fn batch_commit_uncommit_archive_validate_refs_first() {
     let s = store();
     add(&s, "A"); // HV-1
