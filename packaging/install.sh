@@ -9,7 +9,7 @@
 #   ./packaging/install.sh
 #
 # Env:
-#   HAVEN_VERSION=v0.1.7        install a specific release tag (default: latest)
+#   HAVEN_VERSION=v0.1.8        install a specific release tag (default: latest)
 #   HAVEN_BIN_DIR=/path         install dir (else /usr/local/bin, then ~/.local/bin)
 #   HAVEN_BUILD_FROM_SOURCE=1   skip the prebuilt path and compile (needs cargo)
 #   HAVEN_GRANT_CODEX_STORE_ACCESS=1  opt into Codex write access for ~/.haven

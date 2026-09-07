@@ -1,27 +1,23 @@
-## v0.1.7: Safe concurrent Codex sessions
+## v0.1.8: Agents that read the code, and a CLI that stays quiet
 
-Haven no longer lets one Codex session's sticky project selection silently retarget another session. This release also makes the local Haven store permission an explicit, narrowly scoped part of Codex setup, so agents can update canonical session metadata without requesting broad filesystem access.
+Two weeks of agent transcripts drove this release. Haven's CLI now stays silent on success so agents stop discarding its error output, accepts the flags and verbs agents guess, and lets an item be completed more than once. The planning skills gain the discipline a native plan mode imposes, and the orchestrator's spawn transport is fixed to the one that actually delivers results.
 
-**Concurrent project safety**
+**Quiet CLI, forgiving surface**
 
-- **Repo binding wins over shared sticky state.** Project-scoped CLI commands now resolve in this order: an explicit `-p`, the nearest `.haven-project`, then the sticky selector used as a human-shell fallback outside linked repos. A selector change in another process can no longer move a command running inside a linked project.
-- **Explicit overrides remain explicit.** `-p` and the project-bearing `status`/`prime` forms still win, including the existing warning when they intentionally cross a repo binding. Telemetry distinguishes a caller-supplied project from one injected by the repo link.
-- **Agents carry the project per call.** The shipped Haven skill now requires the MCP `project` argument or CLI `-p <key>` on every project-scoped operation and tells agents never to run `haven project use`.
+- **Stderr is silent on success.** Agents were adding `2>/dev/null` to dodge the per-op telemetry line and then never saw the error envelope, in 43% of calls. Telemetry now appends to `$HAVEN_HOME/telemetry.jsonl` by default. `HAVEN_TELEMETRY=stderr` restores the old line, `HAVEN_TELEMETRY=off` drops it. Truncation notes for `list` and `graph` print only on a terminal. MCP telemetry is unchanged.
+- **The flags and verbs agents guess now work.** Hidden aliases mined from transcripts: global `--json` and `--format`, `item add --title` and a repeatable `--depends-on`, `--owner` on add and claim, `--by` for `--actor`, `--name` for `--path` on artifact ops, `--reason` wherever `--rationale` is, `artifact get REF [ROLE]`, and `item create`. Unknown top-level verbs such as `edge`, `claim`, or `set-extref` get a did-you-mean.
+- **Complete never collides.** `item complete` picks the next free `delivery-N.md` against both the artifact rows and the directory on disk, so a reopened item can be completed again and prior evidence stays as history.
+- **Handoff waits can be cleared.** `handoff --wait none` clears the wait on both CLI and MCP, overriding the to-human default.
 
-**Scoped Codex store access**
+**Planning and orchestration skills**
 
-- **Opt in during setup.** `haven setup --agent codex --grant-store-access` adds write access only for the resolved Haven root. It preserves unrelated Codex configuration, is idempotent, respects `CODEX_HOME`, never introduces Full Access, and reports legacy read-only or malformed configurations without overwriting them.
-- **Both Codex configuration generations are supported safely.** Modern permission profiles get a `haven-local` profile extending the current default; legacy `workspace-write` configurations get only the Haven root appended to `writable_roots`. Haven never mixes the two systems.
-- **Installers can make the same explicit grant.** For the POSIX installer, pass `--grant-store-access` or set `HAVEN_GRANT_CODEX_STORE_ACCESS=1`. For PowerShell, set `HAVEN_GRANT_CODEX_STORE_ACCESS=1`. The default remains permission-neutral.
-- **Doctor verifies the result.** `haven doctor` reports Codex MCP registration, skill freshness, and whether the active Codex configuration grants the resolved store root. Restart Codex after changing the profile so new sessions inherit it.
-
-**Other hardening**
-
-- The Windows install-check workflow now exercises install-then-self-update composition and proves the native installer refuses unsupported Windows ARM64 instead of fetching a nonexistent asset.
-- `orchestrate-plan`'s seal gate now uses the same one-build-pass rule as its planning front door: size alone does not force a coherent item into artificial subtasks.
+- **Plan agents read before they propose.** A new shared reference, `code-planning-method.md`, carries the discipline a native plan mode injects: trace the code path from entry point to effect, find the similar feature, hunt for reuse before writing new code, read the tests, weigh approaches, sequence, name risks. `plan-item` applies it at spec altitude, and `orchestrate-run` forwards it verbatim into every build-plan brief, since a spawned agent inherits no skill. The plan-gate validator now rejects a plan that shows no trace or rewrites code that already exists.
+- **Plain subagents by default.** 58% of named teammates went idle without ever reporting, and none were woken by a finished background job. One-shot reporters (plan agent, validator, verifier, reviewer) now spawn as plain subagents whose final message is the result. A named teammate carries a verbatim contract: load SendMessage first, report through it, never end a turn with a job in flight.
+- **Liveness is foreground-only.** The executor no longer offers background execution as an alternative, and the watchdog checks the log tail.
+- **The post-run audit stops filing into other people's backlogs.** Deltas about the skill itself go to the project that owns the skill's source, repo traps go to that repo's CLAUDE.md, and only a genuine product gap becomes a floating item in the run's project.
 
 **Upgrade notes**
 
 - No database migration is required.
-- Existing Codex users who want Haven to write outside a repository sandbox should rerun `haven setup --agent codex --grant-store-access`, then start a new Codex session.
-- Existing human CLI behavior outside linked repos is unchanged; the sticky selector remains available there.
+- Rerun `haven skill install` so both the Claude Code and Codex skill sets pick up the new reference and the orchestrate-run transport rules.
+- If you relied on the telemetry line on stderr, set `HAVEN_TELEMETRY=stderr`.
