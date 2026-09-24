@@ -58,7 +58,8 @@ inline often the better choice for *small* runs — see the `haven` skill's
 2. **SERIALIZED MERGE QUEUE with a mandatory post-rebase re-gate.** Builds may fan
    out into N worktrees, but merges to `main` fan **in** through one lockfile:
    `lock → rebase onto current main → RE-GATE → fast-forward → complete`. The
-   re-gate is **inviolable**. It is the only thing that catches a semantic conflict
+   re-gate is **inviolable** whenever `main` moved (a no-op rebase has nothing new
+   to check). It is the only thing that catches a semantic conflict
    a clean textual merge hid (why: `references/worktree-merge.md`). Merge **before**
    complete, always — that keeps the one crash window recoverable.
 
@@ -295,10 +296,13 @@ always-read and never routed** — the router trims mechanics, never safety.
      path (§ below).
 8. **MERGE (serialized).** Acquire the single merge lock. `rebase` the batch
    branch onto current `main`. **Re-run the deterministic gate post-rebase**
-   (invariant 2); only a green re-gate **fast-forwards** to `main`. On a rebase
+   (invariant 2) — suite only, and skipped when the rebase was a no-op (`main`
+   hadn't moved); only a green re-gate **fast-forwards** to `main`. On a rebase
    conflict or a red re-gate, do **not** merge — release the lock and send the
    batch to the failure path; `main` and siblings stay clean.
-   (`references/worktree-merge.md`.)
+   (`references/worktree-merge.md`; § Test economy there says which agent runs
+   which tests — builder its own, verifier the full suite once — and how a
+   failure already red on `main` is recognised and filed, not blamed.)
 9. **COMPLETE + REPLAN.** Only after the work is on `main`:
    `haven_complete_item {ref, evidence}` per leaf — each returns `unblocked[]`.
    When a leaf made a non-obvious integration/contract decision, also append a

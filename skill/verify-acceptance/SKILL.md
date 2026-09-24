@@ -36,7 +36,7 @@ with exactly two callers:
 One verifier, one judgment, one independence guarantee. The skill is **the single
 judgment only** — it does **not** own re-invocation, the merge, or strike-counting.
 Inside the executor those stay where they belong: `orchestrate-run` owns *when*, *which
-worktree*, and *how many times* (the mandatory twice-run post-rebase re-gate, the
+worktree*, and *how many times* (the post-rebase suite re-gate, the
 serialized merge lock, the N-strike circuit breaker). `verify-acceptance` just returns a verdict.
 
 ## Where it sits (the executor family — meet only at the graph)
@@ -100,7 +100,8 @@ making each call well, are in `references/evaluation-lens.md`.
    or an explicit diff/branch the caller names. Not the builder's reasoning.
 3. **RUN THE DETERMINISTIC SUITE.** `build + lint + test`, **exit-0 mandatory**.
    Deterministic-only counting: transient noise is **logged, never counted** toward the
-   verdict (`references/verdict-contract.md`).
+   verdict, and a failure that is **already red on the base branch** isn't this diff's
+   (`references/verdict-contract.md`).
 4. **JUDGE ACCEPTANCE.** Independently decide whether the diff actually satisfies the live
    `done_looks_like` (+ any shared requirements), walking **every** clause exhaustively
    through `references/evaluation-lens.md` (5-category code review + confidence filter;
@@ -176,6 +177,6 @@ as prompt-level instructions, not a harness); co-located session / evidence dirs
 checklists (focused acceptance is the gate); and the **persisted per-project trust-ramp
 store** for the auto-complete dial (the dial is a plain input in v1 — the store is a
 follow-on).
-The executor-specific machinery the gate sits inside — the twice-run post-rebase re-gate, the
+The executor-specific machinery the gate sits inside — the post-rebase suite re-gate, the
 serialized merge lock, strike-counting, MAX_PARALLEL, crash recovery — **stays in
 `orchestrate-run`**; this skill is the single judgment, never the loop.

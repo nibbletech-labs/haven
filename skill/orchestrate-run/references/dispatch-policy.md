@@ -116,7 +116,8 @@ code is written** (6b) — catching a wrong approach before it costs a full buil
 Same on/off rule as TDD:
 
 - **On for complex / ultracode batches** (novel, cross-cutting, schema / security / concurrency).
-- **Optional for mechanical batches** — a rename / config edit has no approach worth gating; it
+- **Optional for mechanical / low-risk batches** — a rename, a config edit, a self-contained UI
+  tweak with no schema, backend or launch-path change has no approach worth gating; it
   skips 6a/6b and builds directly (the degenerate path). **But never neither:** a "mechanical"
   batch that skips the plan-gate MUST get an adversarial verifier at § GATE (probe cases the
   builder didn't write). Two runs independently proved the trap — "trivial" widenings and SQL
@@ -188,9 +189,10 @@ autonomous path — the real backstop is still the post-build verifier (§ GATE)
 - **Attended: native plan-mode human approval** per complex batch. Use when a person is driving
   and the batch warrants a human "go".
 
-> The verifier (or the human) runs **twice** for any merged batch: once in-worktree (step 7) and
-> again post-rebase inside the merge lock (step 8). The post-rebase run is non-negotiable — *when*,
-> *which worktree*, and *how many times* the gate runs is the **executor's**, not the skill's.
+> The full judgment (verifier or human) runs **once**, in-worktree (step 7). Inside the merge lock
+> (step 8) the **deterministic suite** re-runs post-rebase — non-negotiable whenever `main` moved,
+> skipped only for a no-op rebase (`worktree-merge.md` § Test economy). *When*, *which worktree*,
+> and *how many times* the gate runs is the **executor's**, not the skill's.
 
 **The verifier fixes minors, not majors.** A *mechanical / deterministic* problem (fmt, lint, a
 missing import) the verifier fixes inline and re-runs the suite — the suite, not its opinion,

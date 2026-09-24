@@ -30,6 +30,36 @@ Haven-Batch: <C> members=<ref,ref,...>
 (or an equivalent marker file the agent always writes). The marker is the only signal that a
 worktree's branch is a complete, gate-passing build versus a half-finished one.
 
+**One warm build directory per batch.** Point every agent that works in this worktree
+(builder, verifier, post-rebase re-gate) at one build-output directory for the batch, e.g.
+`CARGO_TARGET_DIR=.haven-run/<C>/.target` for Rust (the equivalent for other compiled
+toolchains; nothing to do for interpreted ones). They take turns, never overlap, so sharing is
+safe and each one after the first skips the cold compile. Never share one across **parallel**
+batches — they would block on the build lock or thrash each other's artifacts.
+
+## Test economy — each suite run once, where it counts
+
+A heavy suite run three or four times per batch is the main wall-clock cost of a run. One path,
+same in every repo (small repos lose nothing; heavy ones save most):
+
+1. **Builder: only the tests for what it touched.** It iterates on the affected tests (the
+   crate / module / file it changed). The full suite is not its job.
+2. **Verifier: the full suite, once.** This is the gate that matters (step 7).
+3. **Re-gate: only if `main` moved, and suite-only.** A no-op rebase skips it (step 8.3). When
+   `main` did move, re-run the **full** deterministic suite — never narrow it to "files both
+   sides touched"; it exists to catch the conflict nobody predicted (§ Applied-last-wins). It
+   is `build + lint + test` only: no second verifier agent, no second acceptance judgment —
+   the acceptance was judged in step 7 and a rebase changes only what the suite checks.
+4. **Pre-existing failures: checked lazily, recorded once.** Never run a baseline suite on
+   `main` up front. When a gate hits a failure, first read the repo's known-failures note (its
+   `CLAUDE.md` / agent notes). Not listed → run **just that test** on `main`. Fails there
+   too → pre-existing: it does not count against the batch; append it to the repo's
+   known-failures note and file a floating item in the run's project to fix it (a red `main`
+   is an inevitable cost on every future gate, so it gets fixed, not tolerated). Passes on
+   `main` → it's the batch's, normal failure path. Flaky (passes on a re-run) → transient per
+   `verify-acceptance` § Deterministic vs transient; note it in the same list so the next gate
+   doesn't re-investigate.
+
 ## Gate in the worktree (step 7)
 
 The verifier agent runs against `run/<C>` **before any merge**: `build + lint + test` must
@@ -55,6 +85,9 @@ git -C .haven-run/<C> fetch <base> 2>/dev/null; git -C .haven-run/<C> rebase <ba
 # 3. RE-GATE post-rebase — re-run the deterministic gate on the rebased tree.
 #    This is INVIOLABLE: it catches semantic conflicts a clean textual merge hid.
 #    Only a green re-gate proceeds.
+#    ONE exception: if the rebase was a no-op (main has not moved since the in-worktree
+#    gate: `git -C .haven-run/<C> rev-parse HEAD` is unchanged), the tree is byte-identical
+#    to what was just gated — skip straight to step 4. See § Test economy.
 # 4. fast-forward main to the rebased branch
 git -C <base-worktree> merge --ff-only run/<C>
 # 5. release the lock (rmdir .haven-run/.merge-lock), then COMPLETE the leaves (tick step 9)

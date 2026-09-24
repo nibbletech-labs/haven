@@ -54,6 +54,12 @@ the verifier reports the noise rather than blocking on it. (v1 leans on the fact
 build/lint/test are already deterministic; this is the rule, not a retry engine — that's a
 Mode-2 concern, deferred.)
 
+**Pre-existing failures aren't the diff's.** Before counting a deterministic failure, check
+the repo's known-failures note (its `CLAUDE.md` / agent notes). Not listed → run **just that
+test** on the base branch (never the whole suite up front). Red there too → pre-existing: log
+it, don't count it, and report it in the evidence so the caller can record it and file the fix.
+Green there → it's the diff's, and it counts.
+
 ## The yardstick — live, not frozen
 
 Re-read `done_looks_like` on **every** invocation (via `haven_graph {include_acceptance:true}` or `haven_get_item`), so re-grooming the node
