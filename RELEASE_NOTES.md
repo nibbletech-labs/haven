@@ -1,10 +1,26 @@
-## Unreleased: fewer ordering choices
+## v0.2.0: Fewer ordering choices, steadier output, cheaper runs
 
-Manual fine ranking has been removed. Use priority bands for urgency and dependencies for prerequisites. Within each band, work is ordered by creation time, then item ID; unprioritised items come last.
+This release removes manual fine ranking, so priority bands and dependencies are the only ordering tools. `haven next` now returns one output shape everywhere. The triage views stop showing items that can't be triaged, and the orchestrator runs each test suite once where it counts instead of three or four times. It includes two breaking changes, listed first.
 
-- `haven item rank` and the `haven_rank` MCP tool are gone. Dispatch candidates no longer include the redundant numeric `rank` field; array order gives their position.
-- Local schema migration 009 removes `sort_key`, preserving items, edges, artifacts and historical decision rationale. Older binaries cannot open the upgraded store. Restart existing MCP sessions after upgrading and run `haven skill install` to refresh agent guidance.
-- Cloud preview deployments have a matching remote migration, `0008_drop_sort_key.sql`. Upgrade clients before applying it. New clients tolerate older inbound payloads carrying `sort_key` and omit it on push.
+**Breaking changes**
+
+- **Manual ranking is gone.** `haven item rank` and the `haven_rank` MCP tool are removed. Use priority bands for urgency and dependencies for prerequisites. Within each band, work is ordered by creation time, then item ID; unprioritised items come last. Dispatch candidates no longer carry the numeric `rank` field; array order gives their position.
+- **The store upgrades on first open.** Local schema migration 009 removes `sort_key` and keeps items, edges, artifacts and historical decision rationale. Older binaries cannot open the upgraded store. Restart existing MCP sessions after upgrading and run `haven skill install` to refresh agent guidance.
+- **`haven next` always returns `{items, advisory}`.** On both the CLI and MCP (`haven_next`), the default JSON used to be a bare array below the orchestrate-advisory threshold and an object above it. It is now always the object, with `advisory: null` when there is nothing to say. Anything reading it as a bare array must read `.items`.
+- **Cloud preview deployments** have a matching remote migration, `0008_drop_sort_key.sql`. Upgrade clients before applying it. New clients tolerate older inbound payloads carrying `sort_key` and omit it on push.
+
+**Triage views show only what can be triaged**
+
+- **Done items leave the icebox and inbox.** Completing a floating item left it in the untriaged queue for good. Finished items are now excluded from both views; they still appear in status listings.
+- **Anchors leave the icebox and inbox.** An anchor is never committed and never carries acceptance, so it sat in the inbox with no way out. Anchors are now excluded, as they already were from `next` and the staleness sweep.
+- **The never-complete anchor rule holds on every path.** `item update --status done` or `archived` on an artifact-bearing anchor is now refused, the same as `complete` and `archive`. `superseded` stays allowed, since `evolve` supersedes doc anchors.
+- **The `haven` skill warns against using an anchor as a container** and documents the refusal and its fix: the item is mistyped, so retype it to `phase` and its artifacts stay put.
+
+**Cheaper orchestrated runs**
+
+- **Each test suite runs once, where it counts.** In `orchestrate-run`, the builder runs only the tests for what it touched and the verifier runs the full suite once. The post-rebase re-check is suite-only and is skipped when `main` hasn't moved. Each batch keeps one warm build directory shared by its agents.
+- **Failures already red on `main` aren't blamed on the batch.** A gate that hits a failure runs just that test on `main`. If it fails there too, it's recorded in the repo's known-failures note and filed to be fixed, so later gates don't re-investigate it. `verify-acceptance` follows the same rule.
+- **Low-risk UI work can skip the plan review,** alongside renames and config edits, as long as the verifier still probes edge cases the builder didn't write.
 
 ## v0.1.8: Agents that read the code, and a CLI that stays quiet
 
