@@ -298,7 +298,16 @@ not to gesture at it.
 
 ## Transport: plain subagent by default, named teammate only when you must steer it
 
-Two ways to spawn, with different delivery guarantees:
+For **Codex collaboration**, put the assigned Haven ref(s) in `task_name`, for
+example `rs1343_build_devices`, `rs1344_verify`, or `rs1340_rs1344_review` for a
+shared assignment. Use the refs the agent is actually working on, not incidental
+refs in its context. Codezilla can group these names before tool activity arrives;
+Codex task descriptions may be encrypted in local transcripts. Codex’s `task_name`
+is an address, not Claude’s named-teammate transport choice. Use Codex’s own
+completion and messaging tools; the Claude transport rules below do not change
+Codex’s delivery behavior.
+
+Claude has two ways to spawn, with different delivery guarantees:
 
 - **Plain subagent (no `name`)** — its final message *is* the task result, returned to you
   when it completes, and background-job / Monitor completions **do wake it**. This is the

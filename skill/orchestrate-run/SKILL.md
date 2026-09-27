@@ -321,6 +321,10 @@ always-read and never routed** — the router trims mechanics, never safety.
      (re-verified). Cadence, review composition, the severity table, and why
      review ≠ the per-leaf gate: `references/dispatch-policy.md` § CHECKPOINTS.
 
+**Codex task names.** When using Codex collaboration tools, include the assigned
+Haven ref(s) in `task_name`; see `references/dispatch-policy.md` § Transport for
+naming examples and the distinction from Claude’s named-teammate transport.
+
 **Collecting a spawned agent's result (plan § 6a, plan-gate § 6b, build § 6c,
 gate § 7).** Spawn one-shot reporters — plan agent, validator, verifier, reviewer —
 as **plain subagents (no `name`)**: their final message returns to you as the task

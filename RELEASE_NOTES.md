@@ -1,3 +1,8 @@
+## v0.2.1 — Ticket Names for Codex Tasks
+
+- Codex orchestration task names include the assigned Haven ticket refs, so Codezilla can group agents as soon as they appear.
+- Clarify that Codex task names do not select Claude’s named-teammate transport.
+
 ## v0.2.0: Fewer ordering choices, steadier output, cheaper runs
 
 This release removes manual fine ranking, so priority bands and dependencies are the only ordering tools. `haven next` now returns one output shape everywhere. The triage views stop showing items that can't be triaged, and the orchestrator runs each test suite once where it counts instead of three or four times. It includes two breaking changes, listed first.
